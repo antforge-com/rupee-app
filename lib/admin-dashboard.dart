@@ -8,62 +8,32 @@
 // ignore_for_file: use_build_context_synchronously, file_names, library_private_types_in_public_api
 
 import 'dart:async'; // Real-time timers ke liye import
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
-import 'package:finadvise/api_client.dart';
 import 'package:finadvise/app_theme.dart';
-import 'package:finadvise/auth_service.dart';
 import 'package:finadvise/booking_page.dart';
+import 'package:finadvise/email_to_ticket_screen.dart';
 import 'package:finadvise/login_screen.dart';
 import 'package:finadvise/models/models.dart';
 import 'package:finadvise/notifications_screen.dart';
-import 'package:finadvise/services/analytics_service.dart';
-import 'package:finadvise/services/booking_service.dart';
-import 'package:finadvise/services/consultant_service.dart';
-import 'package:finadvise/services/notification_service.dart';
-import 'package:finadvise/services/ticket_service.dart';
+import 'package:finadvise/services/services.dart';
 import 'package:finadvise/shared_widgets.dart';
+import 'package:finadvise/admin_missing_features.dart';
 import 'package:finadvise/ticket_detail_screen.dart' hide EmptyState;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ── 0. DESIGN SYSTEM + SHARED HELPERS
 // ═════════════════════════════════════════════════════════════════════════════
-
-final Dio _dio = _setupAdminDio();
-
-Dio _setupAdminDio() {
-  final dio = ApiClient().dio;
-  // Check if interceptor is already added to prevent duplicates
-  bool hasAuth = dio.interceptors.any((i) => i is _AdminAuthInterceptor);
-  if (!hasAuth) {
-    dio.interceptors.add(_AdminAuthInterceptor());
-  }
-  return dio;
-}
-
-class _AdminAuthInterceptor extends Interceptor {
-  @override
-  void onRequest(RequestOptions options, RequestInterceptorHandler handler) async {
-    if (!options.headers.containsKey('Authorization') && !options.headers.containsKey('authorization')) {
-      final token = await const FlutterSecureStorage().read(key: 'jwt_token');
-      if (token != null && token.isNotEmpty) {
-        options.headers['Authorization'] = 'Bearer $token';
-      }
-    }
-    handler.next(options);
-  }
-}
 
 // ── Snackbar ─────────────────────────────────────────────────────────────────
 
@@ -116,6 +86,62 @@ String _fmtDate(dynamic d) {
   }
 }
 
+String _apiError(Object error, {String fallback = 'Something went wrong.'}) {
+  if (error is DioException) {
+    final data = error.response?.data;
+    if (data is Map) {
+      final direct = data['message'] ?? data['error'];
+      if (direct != null && '$direct'.trim().isNotEmpty) {
+        return '$direct'.trim();
+      }
+
+      final errors = data['errors'];
+      if (errors is List && errors.isNotEmpty) {
+        return errors.first.toString();
+      }
+
+      final validationErrors = data['validationErrors'];
+      if (validationErrors is List && validationErrors.isNotEmpty) {
+        return validationErrors.first.toString();
+      }
+    } else if (data is String && data.trim().isNotEmpty) {
+      return data.trim();
+    }
+  }
+  return fallback;
+}
+
+String _formatClockValue(String value) {
+  try {
+    final parsed = DateFormat('HH:mm').parseStrict(value);
+    return DateFormat('h:mm a').format(parsed);
+  } catch (_) {
+    return value;
+  }
+}
+
+int? _toInt(dynamic value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return int.tryParse('${value ?? ''}');
+}
+
+double _toDouble(dynamic value) {
+  if (value is num) return value.toDouble();
+  return double.tryParse('${value ?? ''}') ?? 0;
+}
+
+String _fmtDateTime(dynamic value) {
+  if (value == null) return '';
+  final raw = value.toString().trim();
+  if (raw.isEmpty) return '';
+  try {
+    return DateFormat('d MMM yyyy, h:mm a').format(DateTime.parse(raw).toLocal());
+  } catch (_) {
+    return raw;
+  }
+}
+
 Widget _sectionLbl(String t) => Padding(
   padding: const EdgeInsets.only(bottom: 10),
   child: Text(t.toUpperCase(),
@@ -146,8 +172,8 @@ _SlaInfo? _calcSla(Ticket t) {
     final label = breached
         ? 'Overdue ${(-minsLeft)}m'
         : minsLeft < 60
-            ? '${minsLeft}m left'
-            : '${(minsLeft / 60).round()}h left';
+        ? '${minsLeft}m left'
+        : '${(minsLeft / 60).round()}h left';
     return _SlaInfo(breached: breached, warning: warning, label: label);
   } catch (_) {
     return null;
@@ -185,8 +211,7 @@ class _StatCard extends StatelessWidget {
     required this.value,
     required this.icon,
     required this.color,
-    this.onTap,
-    this.subtitle,
+    this.onTap, this.subtitle,
   });
 
   @override
@@ -260,6 +285,8 @@ enum AdminSection {
   reports, offers, offerApprovals, skillsQuestions,
   termsConditions, commission, contactMessages,
   addMember, settings, userManagement,
+  supportConfig, subscriptionPlans, masterTimeRanges,
+  emailInbox, cannedResponses, autoResponder,
 }
 
 class AdminDashboard extends StatefulWidget {
@@ -329,23 +356,41 @@ class _AdminDashboardState extends State<AdminDashboard> {
       case AdminSection.termsConditions: return const _TermsTab();
       case AdminSection.commission: return const _CommissionTab();
       case AdminSection.contactMessages: return const _ContactTab();
-      case AdminSection.addMember: return const _AddMemberTab();
-      case AdminSection.settings: return const _SettingsTab();
-      case AdminSection.userManagement: return const _UserManagementTab();
+      case AdminSection.addMember: return const AdminAddMemberScreen();
+      case AdminSection.settings: return const AdminProfileSettingsScreen();
+      case AdminSection.userManagement: return const AdminUserManagementScreen();
+      case AdminSection.supportConfig: return const _CategoriesScreen();
+      case AdminSection.subscriptionPlans: return const _PlansScreen();
+      case AdminSection.masterTimeRanges: return const _MasterTimeRangesScreen();
+      case AdminSection.emailInbox: return const EmailToTicketScreen();
+      case AdminSection.cannedResponses: return const _CannedResponsesScreen();
+      case AdminSection.autoResponder: return const _AutoResponderScreen();
     }
   }
 
   String get _title {
     const m = {
-      AdminSection.overview: 'Overview', AdminSection.tickets: 'Tickets',
-      AdminSection.bookings: 'Bookings', AdminSection.advisors: 'Consultants',
-      AdminSection.analytics: 'Analytics', AdminSection.reports: 'Reports',
-      AdminSection.offers: 'Offers', AdminSection.offerApprovals: 'Offer Approvals',
+      AdminSection.overview: 'Overview',
+      AdminSection.tickets: 'Tickets',
+      AdminSection.bookings: 'Bookings',
+      AdminSection.advisors: 'Consultants',
+      AdminSection.analytics: 'Analytics',
+      AdminSection.reports: 'Reports',
+      AdminSection.offers: 'Offers',
+      AdminSection.offerApprovals: 'Offer Approvals',
       AdminSection.skillsQuestions: 'Skills & Questions',
       AdminSection.termsConditions: 'Terms & Conditions',
-      AdminSection.commission: 'Commission', AdminSection.contactMessages: 'Contact Messages',
-      AdminSection.addMember: 'Add Member', AdminSection.settings: 'Settings',
-      AdminSection.userManagement: 'User Management',
+      AdminSection.commission: 'Commission',
+      AdminSection.contactMessages: 'Contact Messages',
+      AdminSection.addMember: 'Add Member',
+      AdminSection.settings: 'Settings',
+      AdminSection.userManagement: 'Client Management',
+      AdminSection.supportConfig: 'Support Config',
+      AdminSection.subscriptionPlans: 'Subscription Plans',
+      AdminSection.masterTimeRanges: 'Master Time Ranges',
+      AdminSection.emailInbox: 'Email Inbox',
+      AdminSection.cannedResponses: 'Canned Responses',
+      AdminSection.autoResponder: 'Auto Responder',
     };
     return m[_section] ?? '';
   }
@@ -374,11 +419,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
               IconButton(icon: const Icon(Icons.notifications_outlined, color: AppColors.textPrimary, size: 22), onPressed: _showNotifications),
               if (svc.unreadCount > 0)
                 Positioned(right: 8, top: 8,
-                  child: Container(
-                    width: 16, height: 16,
-                    decoration: const BoxDecoration(color: Color(0xFFDC2626), shape: BoxShape.circle),
-                    child: Center(child: Text(svc.unreadCount > 9 ? '9+' : '${svc.unreadCount}', style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold))),
-                  )),
+                    child: Container(
+                      width: 16, height: 16,
+                      decoration: const BoxDecoration(color: Color(0xFFDC2626), shape: BoxShape.circle),
+                      child: Center(child: Text(svc.unreadCount > 9 ? '9+' : '${svc.unreadCount}', style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold))),
+                    )),
             ]),
           ),
         ],
@@ -402,7 +447,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
             BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined), activeIcon: Icon(Icons.dashboard_rounded), label: 'Overview'),
             BottomNavigationBarItem(icon: Icon(Icons.confirmation_number_outlined), activeIcon: Icon(Icons.confirmation_number_rounded), label: 'Tickets'),
             BottomNavigationBarItem(icon: Icon(Icons.calendar_month_outlined), activeIcon: Icon(Icons.calendar_month_rounded), label: 'Bookings'),
-            BottomNavigationBarItem(icon: Icon(Icons.people_outline_rounded), activeIcon: Icon(Icons.people_rounded), label: 'Advisors'),
+            BottomNavigationBarItem(icon: Icon(Icons.people_outline_rounded), activeIcon: Icon(Icons.people_rounded), label: 'Consultants'),
             BottomNavigationBarItem(icon: Icon(Icons.analytics_outlined), activeIcon: Icon(Icons.analytics_rounded), label: 'Analytics'),
           ],
         ),
@@ -433,7 +478,7 @@ class _AdminDrawer extends StatelessWidget {
           padding: EdgeInsets.fromLTRB(20, MediaQuery.of(context).padding.top + 24, 20, 24),
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              colors: [AppColors.primary, Color(0xFF1E40AF)],
+              colors: [AppColors.primary, AppColors.primaryDark],
               begin: Alignment.topLeft, end: Alignment.bottomRight,
             ),
           ),
@@ -470,14 +515,19 @@ class _AdminDrawer extends StatelessWidget {
               _group(context, 'Management', [
                 _item(context, Icons.local_offer_rounded, 'Offers', AdminSection.offers),
                 _item(context, Icons.task_alt_rounded, 'Offer Approvals', AdminSection.offerApprovals),
-                _item(context, Icons.psychology_rounded, 'Skills & Q&A', AdminSection.skillsQuestions),
+                _item(context, Icons.manage_accounts_rounded, 'Client Management', AdminSection.userManagement),
                 _item(context, Icons.person_add_rounded, 'Add Member', AdminSection.addMember),
-                _item(context, Icons.manage_accounts_rounded, 'User Management', AdminSection.userManagement),
+                _item(context, Icons.card_membership_rounded, 'Subscription Plans', AdminSection.subscriptionPlans),
+                _item(context, Icons.mark_email_unread_rounded, 'Email Inbox', AdminSection.emailInbox),
                 _item(context, Icons.mail_rounded, 'Contact Messages', AdminSection.contactMessages),
               ]),
               _group(context, 'Configuration', [
                 _item(context, Icons.gavel_rounded, 'Terms & Conditions', AdminSection.termsConditions),
                 _item(context, Icons.currency_rupee_rounded, 'Commission', AdminSection.commission),
+                _item(context, Icons.chat_bubble_outline_rounded, 'Canned Responses', AdminSection.cannedResponses),
+                _item(context, Icons.auto_mode_rounded, 'Auto Responder', AdminSection.autoResponder),
+                _item(context, Icons.support_agent_rounded, 'Support Config', AdminSection.supportConfig),
+                _item(context, Icons.schedule_rounded, 'Master Time Ranges', AdminSection.masterTimeRanges),
                 _item(context, Icons.settings_rounded, 'Settings', AdminSection.settings),
               ]),
             ]),
@@ -557,10 +607,13 @@ class _OverviewTabState extends State<_OverviewTab> {
   bool _loading = true;
   Timer? _pollTimer;
 
+  int get _slaBreachedCount => _tickets.where((t) => _calcSla(t)?.breached ?? false).length;
+  int get _escalatedCount => _tickets.where((t) => t.escalated == true).length;
+
   @override
-  void initState() { 
-    super.initState(); 
-    _load(); 
+  void initState() {
+    super.initState();
+    _load();
     // Har 15 seconds mein silent refresh karega (real-time look)
     _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) => _load(silent: true));
   }
@@ -618,7 +671,7 @@ class _OverviewTabState extends State<_OverviewTab> {
             padding: const EdgeInsets.all(18),
             margin: const EdgeInsets.only(bottom: 16),
             decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [AppColors.primary, Color(0xFF1D4ED8)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+              gradient: const LinearGradient(colors: [AppColors.primary, AppColors.primaryLight], begin: Alignment.topLeft, end: Alignment.bottomRight),
               borderRadius: BorderRadius.circular(18),
               boxShadow: [BoxShadow(color: AppColors.primary.withValues(alpha: 0.3), blurRadius: 16, offset: const Offset(0, 6))],
             ),
@@ -644,9 +697,9 @@ class _OverviewTabState extends State<_OverviewTab> {
             crossAxisSpacing: 12, mainAxisSpacing: 12, childAspectRatio: 1.55,
             children: [
               _StatCard(title: 'Total Bookings', value: '${_bookings.length}', icon: Icons.calendar_month_rounded, color: AppColors.primaryLight, onTap: () => widget.onSwitch(2)),
-              _StatCard(title: 'Consultants', value: '${_consultants.length}', icon: Icons.people_rounded, color: const Color(0xFF7C3AED), onTap: () => widget.onSwitch(3)),
-              _StatCard(title: 'Revenue', value: '₹${NumberFormat.compact().format(_revenue)}', icon: Icons.currency_rupee_rounded, color: const Color(0xFF059669)),
-              _StatCard(title: 'Open Tickets', value: '$_openTickets', icon: Icons.confirmation_number_rounded, color: const Color(0xFFDC2626), onTap: () => widget.onSwitch(1)),
+              _StatCard(title: 'Consultants', value: '${_consultants.length}', icon: Icons.people_rounded, color: AppColors.primary, onTap: () => widget.onSwitch(3)),
+              _StatCard(title: 'Revenue', value: '₹${NumberFormat.compact().format(_revenue)}', icon: Icons.currency_rupee_rounded, color: AppColors.success),
+              _StatCard(title: 'Open Tickets', value: '$_openTickets', icon: Icons.confirmation_number_rounded, color: AppColors.danger, onTap: () => widget.onSwitch(1)),
             ],
           ),
           const SizedBox(height: 14),
@@ -674,9 +727,9 @@ class _OverviewTabState extends State<_OverviewTab> {
 
           // SLA + Escalated quick cards
           Row(children: [
-            Expanded(child: _quickAlertCard(context, Icons.timer_off_rounded, 'SLA Breached', const Color(0xFFF97316), () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SlaBreachedScreen())))),
+            Expanded(child: _quickAlertCard(context, Icons.timer_off_rounded, '$_slaBreachedCount SLA Breached', const Color(0xFFF97316), () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SlaBreachedScreen())))),
             const SizedBox(width: 10),
-            Expanded(child: _quickAlertCard(context, Icons.escalator_warning_rounded, 'Escalated', const Color(0xFFDC2626), () => Navigator.push(context, MaterialPageRoute(builder: (_) => const EscalatedTicketsScreen())))),
+            Expanded(child: _quickAlertCard(context, Icons.escalator_warning_rounded, '$_escalatedCount Escalated', const Color(0xFFDC2626), () => Navigator.push(context, MaterialPageRoute(builder: (_) => const EscalatedTicketsScreen())))),
           ]),
           const SizedBox(height: 14),
 
@@ -691,34 +744,34 @@ class _OverviewTabState extends State<_OverviewTab> {
               ]),
               const SizedBox(height: 8),
               Row(children: [
-                _legendDot(const Color(0xFF7C3AED), 'Bookings'),
+                _legendDot(AppColors.primaryLight, 'Bookings'),
                 const SizedBox(width: 16),
-                _legendDot(const Color(0xFFF59E0B), 'Revenue'),
+                _legendDot(AppColors.gold, 'Revenue'),
               ]),
               const SizedBox(height: 16),
               SizedBox(height: 170,
                 child: stats.every((s) => s.bookings == 0 && s.revenue == 0)
                     ? const Center(child: Text('No booking data yet', style: TextStyle(color: AppColors.textMuted)))
                     : BarChart(BarChartData(
-                        borderData: FlBorderData(show: false),
-                        gridData: FlGridData(show: true, drawVerticalLine: false, getDrawingHorizontalLine: (_) => const FlLine(color: AppColors.border, strokeWidth: 0.5)),
-                        titlesData: FlTitlesData(
-                          bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 22, getTitlesWidget: (v, _) {
-                            final i = v.toInt(); if (i < 0 || i >= stats.length) return const SizedBox.shrink();
-                            return Text(stats[i].label, style: const TextStyle(fontSize: 10, color: AppColors.textMuted));
-                          })),
-                          leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        ),
-                        barGroups: stats.asMap().entries.map((e) => BarChartGroupData(
-                          x: e.key, barsSpace: 4,
-                          barRods: [
-                            BarChartRodData(toY: e.value.bookings.toDouble(), color: const Color(0xFF7C3AED), width: 11, borderRadius: const BorderRadius.vertical(top: Radius.circular(5))),
-                            BarChartRodData(toY: maxRev > 0 ? (e.value.revenue / maxRev) * maxBks : 0, color: const Color(0xFFF59E0B), width: 11, borderRadius: const BorderRadius.vertical(top: Radius.circular(5))),
-                          ],
-                        )).toList(),
-                      )),
+                  borderData: FlBorderData(show: false),
+                  gridData: FlGridData(show: true, drawVerticalLine: false, getDrawingHorizontalLine: (_) => const FlLine(color: AppColors.border, strokeWidth: 0.5)),
+                  titlesData: FlTitlesData(
+                    bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 22, getTitlesWidget: (v, _) {
+                      final i = v.toInt(); if (i < 0 || i >= stats.length) return const SizedBox.shrink();
+                      return Text(stats[i].label, style: const TextStyle(fontSize: 10, color: AppColors.textMuted));
+                    })),
+                    leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  ),
+                  barGroups: stats.asMap().entries.map((e) => BarChartGroupData(
+                    x: e.key, barsSpace: 4,
+                    barRods: [
+                      BarChartRodData(toY: e.value.bookings.toDouble(), color: AppColors.primaryLight, width: 11, borderRadius: const BorderRadius.vertical(top: Radius.circular(5))),
+                      BarChartRodData(toY: maxRev > 0 ? (e.value.revenue / maxRev) * maxBks : 0, color: AppColors.gold, width: 11, borderRadius: const BorderRadius.vertical(top: Radius.circular(5))),
+                    ],
+                  )).toList(),
+                )),
               ),
             ]),
           ),
@@ -733,7 +786,7 @@ class _OverviewTabState extends State<_OverviewTab> {
             children: [
               _quickAction(context, Icons.local_offer_rounded, 'Offers', const Color(0xFFDC2626), AdminSection.offers),
               _quickAction(context, Icons.task_alt_rounded, 'Approvals', const Color(0xFFF97316), AdminSection.offerApprovals),
-              _quickAction(context, Icons.psychology_rounded, 'Q & A', const Color(0xFF7C3AED), AdminSection.skillsQuestions),
+              _quickAction(context, Icons.add_circle_outline_rounded, 'New Ticket', const Color(0xFF7C3AED), AdminSection.tickets),
               _quickAction(context, Icons.person_add_rounded, 'Add Member', const Color(0xFF059669), AdminSection.addMember),
               _quickAction(context, Icons.currency_rupee_rounded, 'Commission', AppColors.primaryLight, AdminSection.commission),
               _quickAction(context, Icons.mail_rounded, 'Messages', const Color(0xFF0891B2), AdminSection.contactMessages),
@@ -808,17 +861,17 @@ class _SubScaffold extends StatelessWidget {
     AdminSection.offers: 'Offers', AdminSection.offerApprovals: 'Offer Approvals',
     AdminSection.skillsQuestions: 'Skills & Questions', AdminSection.addMember: 'Add Member',
     AdminSection.commission: 'Commission', AdminSection.contactMessages: 'Contact Messages',
-    AdminSection.userManagement: 'User Management',
+    AdminSection.userManagement: 'Client Management',
   }[section] ?? '';
 
   Widget get _body {
     if (section == AdminSection.offers) return const _OffersTab();
     if (section == AdminSection.offerApprovals) return const _OfferApprovalsTab();
     if (section == AdminSection.skillsQuestions) return const _SkillsQuestionsTab();
-    if (section == AdminSection.addMember) return const _AddMemberTab();
+    if (section == AdminSection.addMember) return const AdminAddMemberScreen();
     if (section == AdminSection.commission) return const _CommissionTab();
     if (section == AdminSection.contactMessages) return const _ContactTab();
-    if (section == AdminSection.userManagement) return const _UserManagementTab();
+    if (section == AdminSection.userManagement) return const AdminUserManagementScreen();
     return const SizedBox.shrink();
   }
 
@@ -931,19 +984,19 @@ class _TicketsTabState extends State<_TicketsTab> {
   Timer? _pollTimer;
 
   @override
-  void initState() { 
-    super.initState(); 
-    _scroll.addListener(_onScroll); 
-    _loadData(reset: true); 
+  void initState() {
+    super.initState();
+    _scroll.addListener(_onScroll);
+    _loadData(reset: true);
     // Tickets list background real-time sync har 15 seconds me
     _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) => _loadData(reset: true, silent: true));
   }
 
   @override
-  void dispose() { 
+  void dispose() {
     _pollTimer?.cancel();
-    _scroll.dispose(); 
-    super.dispose(); 
+    _scroll.dispose();
+    super.dispose();
   }
 
   void _onScroll() {
@@ -954,40 +1007,27 @@ class _TicketsTabState extends State<_TicketsTab> {
     if (reset) {
       if (!silent) setState(() { _loading = true; _page = 0; _hasMore = true; _all = []; });
       else { _page = 0; _hasMore = true; } // silent mein existing list clear nahi karte taaki UI flicker na kare
-    } else { 
-      if (_loadingMore) return; 
-      setState(() => _loadingMore = true); 
+    } else {
+      if (_loadingMore) return;
+      setState(() => _loadingMore = true);
     }
 
     try {
       final results = await Future.wait([
-        _dio.get('/api/tickets', queryParameters: {'page': reset ? 0 : _page, 'size': _pageSize}),
+        TicketService().getAllTickets(page: reset ? 0 : _page, size: _pageSize, useAnalytics: true),
         if (reset) _cs.getAllConsultants() else Future.value(_consultants),
       ]);
-      final raw = (results[0] as Response).data;
-      List<dynamic> items; bool hasMore = true;
-      if (raw is Map && raw.containsKey('content')) {
-        items = raw['content'] as List; final tp = raw['totalPages'] ?? 1; final cp = raw['number'] ?? 0;
-        hasMore = cp < tp - 1; _page = cp + 1;
-      } else if (raw is List) { items = raw; hasMore = items.length == _pageSize; _page = reset ? 1 : _page + 1; }
-      else { items = []; hasMore = false; }
+      final tickets = results[0] as List<Ticket>;
+      final hasMore = tickets.length == _pageSize;
+      if (!reset) _page++; else _page = 1;
 
-      final tickets = items.map((e) => Ticket.fromJson(e as Map<String, dynamic>)).toList();
       if (mounted) setState(() {
         if (reset) { _all = tickets; _consultants = results[1] as List<ConsultantModel>; }
         else { _all.addAll(tickets); }
         _hasMore = hasMore; _loading = false; _loadingMore = false; _applyFilters();
       });
     } catch (_) {
-      try { 
-        final t = await _ts.getAllTickets(); 
-        if (reset) { 
-          final c = await _cs.getAllConsultants(); 
-          if (mounted) setState(() { _all = t; _consultants = c; _hasMore = false; _loading = false; _loadingMore = false; _applyFilters(); }); 
-        } 
-      } catch (_) { 
-        if (mounted && !silent) setState(() { _loading = false; _loadingMore = false; }); 
-      }
+      if (mounted && !silent) setState(() { _loading = false; _loadingMore = false; });
     }
   }
 
@@ -1014,66 +1054,169 @@ class _TicketsTabState extends State<_TicketsTab> {
     } catch (e) { if (mounted) _snack(context, 'Export failed: $e', error: true); }
   }
 
+  Future<void> _openCreateTicketSheet() async {
+    List<UserModel> users = [];
+    final categories = <String>{};
+    try {
+      users = await UserService().getAllUsers();
+    } catch (_) {}
+    try {
+      final rawCats = await AdminService().getCategories();
+      for (final cat in rawCats) {
+        final name = (cat['name'] ?? '').toString().trim();
+        if (name.isNotEmpty) categories.add(name);
+      }
+    } catch (_) {}
+    categories.addAll(await _ts.getUniqueCategories());
+    if (!mounted) return;
+
+    final descCtrl = TextEditingController();
+    final customCategoryCtrl = TextEditingController();
+    int? userId;
+    String? category = categories.isNotEmpty ? categories.first : null;
+    int? consultantId;
+    String priority = 'MEDIUM';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, ss) => Padding(
+          padding: EdgeInsets.only(left: 20, right: 20, top: 20, bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Create Ticket', style: AppTextStyles.h3),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<int>(
+                value: userId,
+                decoration: _inp('User *', icon: Icons.person_outline_rounded),
+                items: users.map((user) => DropdownMenuItem<int>(value: user.id, child: Text((user.identifier ?? 'User').toString(), overflow: TextOverflow.ellipsis))).toList(),
+                onChanged: (value) => ss(() => userId = value),
+              ),
+              const SizedBox(height: 10),
+              if (categories.isNotEmpty)
+                DropdownButtonFormField<String>(
+                  initialValue: category,
+                  decoration: _inp('Category', icon: Icons.label_outline_rounded),
+                  items: categories.map((item) => DropdownMenuItem<String>(value: item, child: Text(item))).toList(),
+                  onChanged: (value) => ss(() => category = value),
+                ),
+              const SizedBox(height: 10),
+              TextField(controller: customCategoryCtrl, decoration: _inp('Custom category (optional)', icon: Icons.edit_outlined)),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<String>(
+                initialValue: priority,
+                decoration: _inp('Priority', icon: Icons.flag_outlined),
+                items: _priorities.where((item) => item != 'ALL').map((item) => DropdownMenuItem<String>(value: item, child: Text(item))).toList(),
+                onChanged: (value) => ss(() => priority = value ?? 'MEDIUM'),
+              ),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<int?>(
+                initialValue: consultantId,
+                decoration: _inp('Assign consultant (optional)', icon: Icons.support_agent_outlined),
+                items: [const DropdownMenuItem<int?>(value: null, child: Text('Unassigned')), ..._consultants.map((consultant) => DropdownMenuItem<int?>(value: consultant.id, child: Text(consultant.name)))],
+                onChanged: (value) => ss(() => consultantId = value),
+              ),
+              const SizedBox(height: 10),
+              TextField(controller: descCtrl, maxLines: 4, decoration: _inp('Description *', icon: Icons.description_outlined)),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: FilledButton(
+                  onPressed: () async {
+                    final resolvedCategory = customCategoryCtrl.text.trim().isNotEmpty ? customCategoryCtrl.text.trim() : (category ?? '').trim();
+                    if (userId == null) { _snack(ctx, 'Select a user', error: true); return; }
+                    if (resolvedCategory.isEmpty) { _snack(ctx, 'Select or enter a category', error: true); return; }
+                    if (descCtrl.text.trim().isEmpty) { _snack(ctx, 'Description is required', error: true); return; }
+                    final created = await _ts.createTicket(userId: userId!, category: resolvedCategory, description: descCtrl.text.trim(), priority: priority, consultantId: consultantId);
+                    if (created == null) { if (mounted) _snack(ctx, 'Ticket creation failed', error: true); return; }
+                    if (!mounted) return;
+                    Navigator.pop(ctx);
+                    _snack(context, 'Ticket #${created.id} created', icon: Icons.confirmation_number_outlined);
+                    _loadData(reset: true);
+                  },
+                  child: const Text('Create Ticket'),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Column(children: [
-      // Search + filter bar
-      Container(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-        color: AppColors.surface,
-        child: Column(children: [
-          Row(children: [
-            Expanded(child: TextField(
-              onChanged: (v) { _search = v; _applyFilters(); },
-              decoration: _inp('Search tickets...', icon: Icons.search_rounded),
-            )),
-            const SizedBox(width: 8),
-            _iconBtn(Icons.download_rounded, const Color(0xFF059669), _exportCsv, tooltip: 'Export CSV'),
-            const SizedBox(width: 6),
-            _iconBtn(Icons.refresh_rounded, AppColors.primaryLight, () => _loadData(reset: true), tooltip: 'Refresh'),
-          ]),
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(child: _dropDown(_statuses, _statusF, (v) { setState(() => _statusF = v!); _loadData(reset: true); })),
-            const SizedBox(width: 10),
-            Expanded(child: _dropDown(_priorities, _priorityF, (v) { setState(() => _priorityF = v!); _loadData(reset: true); })),
-          ]),
-        ]),
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openCreateTicketSheet,
+        backgroundColor: AppColors.primaryLight,
+        icon: const Icon(Icons.add, color: Colors.white),
+        label: const Text('New Ticket', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
       ),
-
-      // Count bar
-      if (!_loading)
+      body: Column(children: [
+        // Search + filter bar
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-          color: AppColors.surfaceVariant,
-          child: Row(children: [
-            Text('${_filtered.length} ticket${_filtered.length != 1 ? 's' : ''}', style: AppTextStyles.caption.copyWith(fontWeight: FontWeight.w700)),
-            if (_hasMore) const Text(' · scroll for more', style: TextStyle(fontSize: 10, color: AppColors.textMuted)),
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+          color: AppColors.surface,
+          child: Column(children: [
+            Row(children: [
+              Expanded(child: TextField(
+                onChanged: (v) { _search = v; _applyFilters(); },
+                decoration: _inp('Search tickets...', icon: Icons.search_rounded),
+              )),
+              const SizedBox(width: 8),
+              _iconBtn(Icons.download_rounded, const Color(0xFF059669), _exportCsv, tooltip: 'Export CSV'),
+              const SizedBox(width: 6),
+              _iconBtn(Icons.refresh_rounded, AppColors.primaryLight, () => _loadData(reset: true), tooltip: 'Refresh'),
+            ]),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: _dropDown(_statuses, _statusF, (v) { setState(() => _statusF = v!); _loadData(reset: true); })),
+              const SizedBox(width: 10),
+              Expanded(child: _dropDown(_priorities, _priorityF, (v) { setState(() => _priorityF = v!); _loadData(reset: true); })),
+            ]),
           ]),
         ),
 
-      // List
-      Expanded(child: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _filtered.isEmpty
-              ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  const Icon(Icons.inbox_outlined, size: 56, color: AppColors.textMuted),
-                  const SizedBox(height: 12),
-                  const Text('No tickets found', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textSecondary)),
-                  const Text('Adjust filters or search terms', style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
-                ]))
-              : RefreshIndicator(
-                  onRefresh: () => _loadData(reset: true),
-                  child: ListView.builder(
-                    controller: _scroll, padding: const EdgeInsets.all(12),
-                    itemCount: _filtered.length + (_loadingMore ? 1 : 0),
-                    itemBuilder: (_, i) {
-                      if (i == _filtered.length) return const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator()));
-                      return _TicketCard(ticket: _filtered[i], consultants: _consultants, onRefresh: () => _loadData(reset: true));
-                    },
-                  ),
-                )),
-    ]);
+        // Count bar
+        if (!_loading)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+            color: AppColors.surfaceVariant,
+            child: Row(children: [
+              Text('${_filtered.length} ticket${_filtered.length != 1 ? 's' : ''}', style: AppTextStyles.caption.copyWith(fontWeight: FontWeight.w700)),
+              if (_hasMore) const Text(' · scroll for more', style: TextStyle(fontSize: 10, color: AppColors.textMuted)),
+            ]),
+          ),
+
+        // List
+        Expanded(child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _filtered.isEmpty
+            ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          const Icon(Icons.inbox_outlined, size: 56, color: AppColors.textMuted),
+          const SizedBox(height: 12),
+          const Text('No tickets found', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textSecondary)),
+          const Text('Adjust filters or search terms', style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+        ]))
+            : RefreshIndicator(
+          onRefresh: () => _loadData(reset: true),
+          child: ListView.builder(
+            controller: _scroll, padding: const EdgeInsets.all(12),
+            itemCount: _filtered.length + (_loadingMore ? 1 : 0),
+            itemBuilder: (_, i) {
+              if (i == _filtered.length) return const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator()));
+              return _TicketCard(ticket: _filtered[i], consultants: _consultants, onRefresh: () => _loadData(reset: true));
+            },
+          ),
+        )),
+      ]),
+    );
   }
 
   Widget _dropDown(List<String> items, String val, ValueChanged<String?> onC) => Container(
@@ -1193,10 +1336,10 @@ class _AdvisorsTabState extends State<_AdvisorsTab> {
   Timer? _pollTimer;
 
   @override
-  void initState() { 
-    super.initState(); 
-    _load(); 
-    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) => _load(silent: true)); 
+  void initState() {
+    super.initState();
+    _load();
+    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) => _load(silent: true));
   }
 
   @override
@@ -1215,12 +1358,9 @@ class _AdvisorsTabState extends State<_AdvisorsTab> {
 
   Future<bool> _hasActiveBookings(int id) async {
     try {
-      final res = await _dio.get('/api/bookings/consultant/$id', queryParameters: {'size': 5});
-      final raw = res.data;
-      final total = (raw is Map) ? (raw['totalElements'] ?? 0) : (raw is List ? raw.length : 0);
-      if (total > 0) {
-        final items = raw is Map ? (raw['content'] ?? []) : raw;
-        return (items as List).any((b) => ['CONFIRMED','PENDING'].contains((b['bookingStatus'] ?? b['status'] ?? '').toString().toUpperCase()));
+      final res = await BookingService().getBookingsByConsultantPaginated(id, size: 5);
+      if (res.totalElements > 0) {
+        return res.content.any((b) => ['CONFIRMED','PENDING'].contains(b.status.toUpperCase()));
       }
       return false;
     } catch (_) { return false; }
@@ -1270,29 +1410,29 @@ class _AdvisorsTabState extends State<_AdvisorsTab> {
         onPressed: () => showModalBottomSheet(context: context, isScrollControlled: true, backgroundColor: AppColors.surface, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))), builder: (_) => _AdvisorForm(onSaved: () { Navigator.pop(context); _load(); })),
         backgroundColor: AppColors.primaryLight,
         icon: const Icon(Icons.add, color: Colors.white),
-        label: const Text('Add Advisor', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+        label: const Text('Add Consultant', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
       ),
       body: Column(children: [
         Padding(padding: const EdgeInsets.all(14), child: TextField(
           onChanged: (v) => setState(() => _search = v),
-          decoration: _inp('Search advisors...', icon: Icons.search_rounded),
+          decoration: _inp('Search consultants...', icon: Icons.search_rounded),
         )),
         Expanded(child: _loading
             ? const Center(child: CircularProgressIndicator())
             : filtered.isEmpty
-                ? const EmptyState(icon: Icons.people_outline, title: 'No advisors found')
-                : RefreshIndicator(
-                    onRefresh: _load,
-                    child: ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(14, 0, 14, 100),
-                      itemCount: filtered.length,
-                      itemBuilder: (_, i) => _AdvisorCard(
-                        advisor: filtered[i],
-                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => _AdvisorDetail(advisor: filtered[i], onChanged: _load))),
-                        onDelete: () => _delete(filtered[i]),
-                      ),
-                    ),
-                  )),
+            ? const EmptyState(icon: Icons.people_outline, title: 'No consultants found')
+            : RefreshIndicator(
+          onRefresh: _load,
+          child: ListView.builder(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 100),
+            itemCount: filtered.length,
+            itemBuilder: (_, i) => _AdvisorCard(
+              advisor: filtered[i],
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => _AdvisorDetail(advisor: filtered[i], onChanged: _load))),
+              onDelete: () => _delete(filtered[i]),
+            ),
+          ),
+        )),
       ]),
     );
   }
@@ -1372,12 +1512,6 @@ class _AdvisorDetailState extends State<_AdvisorDetail> with SingleTickerProvide
       backgroundColor: AppColors.background,
       appBar: AppBar(
         title: Text(a.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_outlined),
-            onPressed: () => showModalBottomSheet(context: context, isScrollControlled: true, backgroundColor: AppColors.surface, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))), builder: (_) => _AdvisorForm(advisor: a, onSaved: () { Navigator.pop(context); widget.onChanged(); Navigator.pop(context); })),
-          ),
-        ],
         bottom: TabBar(controller: _tabs, labelColor: AppColors.primaryLight, unselectedLabelColor: AppColors.textMuted, indicatorColor: AppColors.primaryLight, tabs: const [Tab(text: 'Profile'), Tab(text: 'Timeslots')]),
       ),
       body: TabBarView(controller: _tabs, children: [
@@ -1385,7 +1519,10 @@ class _AdvisorDetailState extends State<_AdvisorDetail> with SingleTickerProvide
         SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [
           Container(
             width: double.infinity, padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(gradient: const LinearGradient(colors: [AppColors.primary, Color(0xFF1D4ED8)]), borderRadius: BorderRadius.circular(20)),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [AppColors.primary, AppColors.primaryLight]),
+              borderRadius: BorderRadius.circular(20),
+            ),
             child: Column(children: [
               CircleAvatar(radius: 44, backgroundColor: Colors.white24, backgroundImage: a.photoUrl != null ? NetworkImage(a.photoUrl!) : null, child: a.photoUrl == null ? Text(a.name[0].toUpperCase(), style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w800, color: Colors.white)) : null),
               const SizedBox(height: 12),
@@ -1397,6 +1534,8 @@ class _AdvisorDetailState extends State<_AdvisorDetail> with SingleTickerProvide
           const SizedBox(height: 14),
           Container(padding: const EdgeInsets.all(16), decoration: _cardDeco(), child: Column(children: [
             _infoRow(Icons.email_outlined, 'Email', a.email),
+            if (a.yearsOfExperience != null) _infoRow(Icons.workspace_premium_outlined, 'Experience', '${a.yearsOfExperience!.toStringAsFixed(1)} years'),
+            if (a.slotsDuration != null) _infoRow(Icons.timer_outlined, 'Slot Duration', '${a.slotsDuration} mins'),
             if (a.charges != null) _infoRow(Icons.currency_rupee_rounded, 'Session Fee', '₹${a.charges!.toStringAsFixed(0)}'),
             if (a.shiftDisplay.isNotEmpty) _infoRow(Icons.access_time_rounded, 'Working Hours', a.shiftDisplay),
             _infoRow(Icons.circle_rounded, 'Status', a.isActive ? 'Active' : 'Inactive', valueColor: a.isActive ? const Color(0xFF059669) : AppColors.textMuted),
@@ -1414,23 +1553,23 @@ class _AdvisorDetailState extends State<_AdvisorDetail> with SingleTickerProvide
         _loadingSlots ? const Center(child: CircularProgressIndicator()) : _slots.isEmpty
             ? const EmptyState(icon: Icons.schedule_outlined, title: 'No timeslots configured')
             : GridView.builder(
-                padding: const EdgeInsets.all(12),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 8, mainAxisSpacing: 8, childAspectRatio: 1.6),
-                itemCount: _slots.length,
-                itemBuilder: (_, i) {
-                  final s = _slots[i];
-                  final color = s.status == 'AVAILABLE' ? const Color(0xFF059669) : s.status == 'BOOKED' ? AppColors.primaryLight : AppColors.textMuted;
-                  return Container(
-                    decoration: BoxDecoration(color: color.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: color.withValues(alpha: 0.3))),
-                    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                      Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-                      const SizedBox(height: 4),
-                      Text(s.timeRange, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color)),
-                      Text(s.slotDate, style: TextStyle(fontSize: 9, color: color.withValues(alpha: 0.7))),
-                    ]),
-                  );
-                },
-              ),
+          padding: const EdgeInsets.all(12),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 8, mainAxisSpacing: 8, childAspectRatio: 1.6),
+          itemCount: _slots.length,
+          itemBuilder: (_, i) {
+            final s = _slots[i];
+            final color = s.status == 'AVAILABLE' ? const Color(0xFF059669) : s.status == 'BOOKED' ? AppColors.primaryLight : AppColors.textMuted;
+            return Container(
+              decoration: BoxDecoration(color: color.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: color.withValues(alpha: 0.3))),
+              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+                const SizedBox(height: 4),
+                Text(s.timeRange, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color)),
+                Text(s.slotDate, style: TextStyle(fontSize: 9, color: color.withValues(alpha: 0.7))),
+              ]),
+            );
+          },
+        ),
       ]),
     );
   }
@@ -1450,17 +1589,22 @@ class _AdvisorDetailState extends State<_AdvisorDetail> with SingleTickerProvide
 class _AdvisorForm extends StatefulWidget {
   final ConsultantModel? advisor;
   final VoidCallback onSaved;
-  const _AdvisorForm({this.advisor, required this.onSaved});
+  const _AdvisorForm({required this.onSaved, this.advisor});
   @override State<_AdvisorForm> createState() => _AdvisorFormState();
 }
 
 class _AdvisorFormState extends State<_AdvisorForm> {
   final _nameC = TextEditingController(), _emailC = TextEditingController(),
-      _desigC = TextEditingController(), _chargesC = TextEditingController(), _descC = TextEditingController();
+      _desigC = TextEditingController(), _chargesC = TextEditingController(), _descC = TextEditingController(),
+      _experienceC = TextEditingController(), _customSkillC = TextEditingController();
   TimeOfDay _start = const TimeOfDay(hour: 9, minute: 0), _end = const TimeOfDay(hour: 18, minute: 0);
+  int _slotDuration = 60;
+  final List<String> _selectedSkills = [];
   bool _saving = false;
+  String? _errorText;
   final _formKey = GlobalKey<FormState>();
-  final _svc = ConsultantService();
+  static const _designationExamples = ['Certified Financial Planner', 'Investment Consultant', 'Tax Consultant', 'Insurance Planner', 'Wealth Advisor'];
+  static const _skillSuggestions = ['Tax Planning', 'Retirement Planning', 'Mutual Funds', 'Insurance', 'Wealth Management', 'Investment Planning', 'Estate Planning', 'Financial Goal Planning'];
 
   @override
   void initState() {
@@ -1469,24 +1613,110 @@ class _AdvisorFormState extends State<_AdvisorForm> {
       final a = widget.advisor!;
       _nameC.text = a.name; _emailC.text = a.email; _desigC.text = a.designation ?? '';
       _chargesC.text = a.charges?.toStringAsFixed(0) ?? ''; _descC.text = a.description ?? '';
+      _experienceC.text = a.yearsOfExperience?.toStringAsFixed(1) ?? '';
+      _slotDuration = a.slotsDuration ?? 60;
+      _selectedSkills.addAll(a.skills);
       if (a.shiftStartTime != null) _start = TimeOfDay(hour: a.shiftStartTime!['hour'] ?? 9, minute: a.shiftStartTime!['minute'] ?? 0);
       if (a.shiftEndTime != null) _end = TimeOfDay(hour: a.shiftEndTime!['hour'] ?? 18, minute: a.shiftEndTime!['minute'] ?? 0);
     }
   }
 
   @override
-  void dispose() { _nameC.dispose(); _emailC.dispose(); _desigC.dispose(); _chargesC.dispose(); _descC.dispose(); super.dispose(); }
+  void dispose() {
+    _nameC.dispose();
+    _emailC.dispose();
+    _desigC.dispose();
+    _chargesC.dispose();
+    _descC.dispose();
+    _experienceC.dispose();
+    _customSkillC.dispose();
+    super.dispose();
+  }
 
   String _fmt(TimeOfDay t) => '${t.hourOfPeriod == 0 ? 12 : t.hourOfPeriod}:${t.minute.toString().padLeft(2, '0')} ${t.period == DayPeriod.am ? 'AM' : 'PM'}';
+  String _toApiTime(TimeOfDay t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:00';
+
+  String _messageFromError(Object error) =>
+      _apiError(error, fallback: 'Failed to save consultant details.');
+
+  void _toggleSkill(String skill) {
+    setState(() {
+      if (_selectedSkills.contains(skill)) {
+        _selectedSkills.remove(skill);
+      } else {
+        _selectedSkills.add(skill);
+      }
+      _errorText = null;
+    });
+  }
+
+  void _addCustomSkill() {
+    final raw = _customSkillC.text.trim();
+    if (raw.isEmpty) return;
+    final normalized = raw
+        .split(' ')
+        .where((word) => word.trim().isNotEmpty)
+        .map((word) => '${word[0].toUpperCase()}${word.substring(1).toLowerCase()}')
+        .join(' ');
+    if (!_selectedSkills.contains(normalized)) {
+      setState(() => _selectedSkills.add(normalized));
+    }
+    _customSkillC.clear();
+  }
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-    setState(() => _saving = true);
-    final data = {'name': _nameC.text.trim(), 'email': _emailC.text.trim(), 'designation': _desigC.text.trim(), 'charges': double.tryParse(_chargesC.text) ?? 0, 'description': _descC.text.trim(), 'shiftStartTime': {'hour': _start.hour, 'minute': _start.minute, 'second': 0, 'nano': 0}, 'shiftEndTime': {'hour': _end.hour, 'minute': _end.minute, 'second': 0, 'nano': 0}, 'skills': [], 'yearsOfExperience': 0.0};
-    bool ok = widget.advisor != null ? await _svc.updateProfile(widget.advisor!.id, data) : await _svc.createConsultant(data);
-    if (mounted) setState(() => _saving = false);
-    if (ok) widget.onSaved();
-    else if (mounted) _snack(context, 'Save failed', error: true);
+    if (_selectedSkills.isEmpty) {
+      setState(() => _errorText = 'Please add at least one skill set.');
+      return;
+    }
+    final startMinutes = (_start.hour * 60) + _start.minute;
+    final endMinutes = (_end.hour * 60) + _end.minute;
+    if (endMinutes <= startMinutes) {
+      setState(() => _errorText = 'End time must be after the start time.');
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _errorText = null;
+    });
+
+    final data = {
+      'name': _nameC.text.trim(),
+      'email': _emailC.text.trim().toLowerCase(),
+      'designation': _desigC.text.trim(),
+      'charges': double.tryParse(_chargesC.text.trim()) ?? 0,
+      'description': _descC.text.trim(),
+      'shiftStartTime': _toApiTime(_start),
+      'shiftEndTime': _toApiTime(_end),
+      'skills': _selectedSkills,
+      'yearsOfExperience': double.tryParse(_experienceC.text.trim()) ?? 0,
+      'slotsDuration': _slotDuration,
+    };
+
+    try {
+      bool ok;
+      if (widget.advisor != null) {
+        ok = await ConsultantService().updateProfile(
+          widget.advisor!.id,
+          data,
+        );
+      } else {
+        ok = await ConsultantService().createConsultant(data);
+      }
+
+      if (!mounted) return;
+      if (ok) {
+        widget.onSaved();
+      } else {
+        setState(() => _errorText = 'Operation failed. Please try again.');
+      }
+    } catch (error) {
+      if (mounted) setState(() => _errorText = _messageFromError(error));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   @override
@@ -1495,7 +1725,7 @@ class _AdvisorFormState extends State<_AdvisorForm> {
       padding: EdgeInsets.only(left: 20, right: 20, top: 20, bottom: MediaQuery.of(context).viewInsets.bottom + 20),
       child: Form(key: _formKey, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Expanded(child: Text(widget.advisor != null ? 'Edit Advisor' : 'Add New Advisor', style: AppTextStyles.h3)),
+          Expanded(child: Text(widget.advisor != null ? 'Edit Consultant' : 'Add New Consultant', style: AppTextStyles.h3)),
           IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.pop(context)),
         ]),
         const SizedBox(height: 16),
@@ -1504,8 +1734,44 @@ class _AdvisorFormState extends State<_AdvisorForm> {
         TextFormField(controller: _emailC, keyboardType: TextInputType.emailAddress, decoration: _inp('Email *', icon: Icons.email_outlined), validator: (v) => v?.contains('@') == false ? 'Valid email required' : null),
         const SizedBox(height: 10),
         TextFormField(controller: _desigC, decoration: _inp('Designation *', icon: Icons.work_outline_rounded), validator: (v) => v?.isEmpty == true ? 'Required' : null),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: _designationExamples.map((example) => ActionChip(
+            label: Text(example, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+            backgroundColor: AppColors.surfaceVariant,
+            side: const BorderSide(color: AppColors.border),
+            onPressed: () => setState(() => _desigC.text = example),
+          )).toList(),
+        ),
         const SizedBox(height: 10),
         TextFormField(controller: _chargesC, keyboardType: TextInputType.number, decoration: _inp('Session Fee (₹) *', icon: Icons.currency_rupee_rounded), validator: (v) => v?.isEmpty == true ? 'Required' : null),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(
+            child: TextFormField(
+              controller: _experienceC,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: _inp('Experience (years) *', icon: Icons.workspace_premium_outlined),
+              validator: (value) {
+                if ((value ?? '').trim().isEmpty) return 'Required';
+                return double.tryParse(value!.trim()) == null ? 'Invalid years' : null;
+              },
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: DropdownButtonFormField<int>(
+              initialValue: _slotDuration,
+              decoration: _inp('Slot Duration *', icon: Icons.timer_outlined),
+              items: const [30, 45, 60, 90]
+                  .map((value) => DropdownMenuItem<int>(value: value, child: Text('$value mins')))
+                  .toList(),
+              onChanged: (value) => setState(() => _slotDuration = value ?? 60),
+            ),
+          ),
+        ]),
         const SizedBox(height: 10),
         TextFormField(controller: _descC, maxLines: 2, decoration: _inp('Description (optional)', icon: Icons.description_outlined)),
         const SizedBox(height: 14),
@@ -1516,8 +1782,71 @@ class _AdvisorFormState extends State<_AdvisorForm> {
           const Padding(padding: EdgeInsets.symmetric(horizontal: 10), child: Text('—', style: TextStyle(color: AppColors.textMuted))),
           Expanded(child: GestureDetector(onTap: () async { final p = await showTimePicker(context: context, initialTime: _end); if (p != null) setState(() => _end = p); }, child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppColors.surfaceVariant, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.border)), child: Column(children: [Text('End', style: AppTextStyles.caption), Text(_fmt(_end), style: AppTextStyles.label.copyWith(color: AppColors.primaryLight))])))),
         ]),
+        const SizedBox(height: 16),
+        Text('Skill Set', style: AppTextStyles.label),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: _skillSuggestions.map((skill) => FilterChip(
+            label: Text(skill),
+            selected: _selectedSkills.contains(skill),
+            selectedColor: AppColors.primaryLight.withValues(alpha: 0.12),
+            checkmarkColor: AppColors.primaryLight,
+            side: BorderSide(color: _selectedSkills.contains(skill) ? AppColors.primaryLight.withValues(alpha: 0.35) : AppColors.border),
+            labelStyle: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: _selectedSkills.contains(skill) ? AppColors.primaryLight : AppColors.textSecondary,
+            ),
+            onSelected: (_) => _toggleSkill(skill),
+          )).toList(),
+        ),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(
+            child: TextField(
+              controller: _customSkillC,
+              decoration: _inp('Add custom skill', icon: Icons.add_task_outlined),
+              onSubmitted: (_) => _addCustomSkill(),
+            ),
+          ),
+          const SizedBox(width: 10),
+          FilledButton(
+            onPressed: _addCustomSkill,
+            style: FilledButton.styleFrom(backgroundColor: AppColors.primaryLight),
+            child: const Text('Add'),
+          ),
+        ]),
+        if (_selectedSkills.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _selectedSkills.map((skill) => Chip(
+              label: Text(skill),
+              backgroundColor: AppColors.primaryLight.withValues(alpha: 0.1),
+              side: BorderSide(color: AppColors.primaryLight.withValues(alpha: 0.15)),
+              deleteIcon: const Icon(Icons.close_rounded, size: 16),
+              onDeleted: () => _toggleSkill(skill),
+            )).toList(),
+          ),
+        ],
+        if (_errorText != null) ...[
+          const SizedBox(height: 14),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.danger.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.danger.withValues(alpha: 0.2)),
+            ),
+            child: Text(_errorText!, style: const TextStyle(color: AppColors.danger, fontSize: 12, fontWeight: FontWeight.w600)),
+          ),
+        ],
         const SizedBox(height: 20),
-        SizedBox(width: double.infinity, height: 52, child: FilledButton(onPressed: _saving ? null : _submit, style: FilledButton.styleFrom(backgroundColor: AppColors.primaryLight, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))), child: _saving ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : Text(widget.advisor != null ? 'Save Changes' : 'Add Advisor', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)))),
+        SizedBox(width: double.infinity, height: 52, child: FilledButton(onPressed: _saving ? null : _submit, style: FilledButton.styleFrom(backgroundColor: AppColors.primaryLight, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))), child: _saving ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : Text(widget.advisor != null ? 'Save Changes' : 'Add Consultant', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)))),
       ]))),
     );
   }
@@ -1540,10 +1869,10 @@ class _AnalyticsTabState extends State<_AnalyticsTab> {
   Timer? _pollTimer;
 
   @override
-  void initState() { 
-    super.initState(); 
-    _load(); 
-    _pollTimer = Timer.periodic(const Duration(seconds: 20), (_) => _load(silent: true)); 
+  void initState() {
+    super.initState();
+    _load();
+    _pollTimer = Timer.periodic(const Duration(seconds: 20), (_) => _load(silent: true));
   }
 
   @override
@@ -1555,16 +1884,9 @@ class _AnalyticsTabState extends State<_AnalyticsTab> {
   Future<void> _load({bool silent = false}) async {
     if (!silent) setState(() => _loading = true);
     try {
-      final dynamic result = await _svc.getFullDashboard(period: _range);
-      if (result is DashboardAnalytics) {
-        _data = result;
-      } else {
-        // Automatically unpacks Record tuple into Map if the service returns a Record
-        final Map<String, dynamic> json = (result.analytics as Map<String, dynamic>?) ?? {};
-        _data = DashboardAnalytics.fromJson(json);
-      }
-    } catch (e) {
-      debugPrint('Analytics load error: $e');
+      _data = await _svc.getAnalyticsLegacy(period: _range);
+    } catch (error) {
+      debugPrint('Analytics load error: $error');
     }
     if (mounted) setState(() => _loading = false);
   }
@@ -1680,9 +2002,8 @@ class _AgentPerformanceState extends State<_AgentPerformance> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final res = await _dio.get('/api/tickets', queryParameters: {'size': 200});
-      final raw = res.data;
-      final items = raw is Map ? (raw['content'] ?? []) : (raw is List ? raw : []);
+      final res = await TicketService().getAllTickets(size: 200);
+      final items = res.map((t) => t.toJson()).toList();
       final map = <String, _AgentStat>{};
       for (final t in items) {
         final name = t['agentName']?.toString() ?? t['consultantName']?.toString();
@@ -1713,29 +2034,29 @@ class _AgentPerformanceState extends State<_AgentPerformance> {
       if (_loading) const Center(child: CircularProgressIndicator())
       else if (_stats.isEmpty) const Center(child: Text('No agent data', style: TextStyle(color: AppColors.textMuted)))
       else Column(children: [
-        Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7), decoration: BoxDecoration(color: AppColors.surfaceVariant, borderRadius: BorderRadius.circular(8)), child: const Row(children: [
-          Expanded(flex: 3, child: Text('AGENT', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.textSecondary, letterSpacing: 0.5))),
-          Expanded(flex: 1, child: Text('TOTAL', textAlign: TextAlign.center, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.textSecondary, letterSpacing: 0.5))),
-          Expanded(flex: 1, child: Text('SOLVED', textAlign: TextAlign.center, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.textSecondary, letterSpacing: 0.5))),
-          Expanded(flex: 2, child: Text('AVG TIME', textAlign: TextAlign.right, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.textSecondary, letterSpacing: 0.5))),
-        ])),
-        const SizedBox(height: 8),
-        ..._stats.map((s) {
-          final rate = s.assigned > 0 ? (s.resolved * 100 / s.assigned).round() : 0;
-          final avgMin = s.resCount > 0 ? (s.totalMins / s.resCount).round() : 0;
-          final avgStr = avgMin > 0 ? (avgMin >= 60 ? '${(avgMin / 60).toStringAsFixed(1)}h' : '${avgMin}m') : '—';
-          final rateColor = rate >= 80 ? const Color(0xFF059669) : rate >= 50 ? const Color(0xFFF97316) : const Color(0xFFDC2626);
-          return Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: Row(children: [
-            Expanded(flex: 3, child: Row(children: [
-              CircleAvatar(radius: 13, backgroundColor: AppColors.primaryLight.withValues(alpha: 0.1), child: Text(s.name[0].toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.primaryLight))),
-              const SizedBox(width: 8), Expanded(child: Text(s.name, style: AppTextStyles.label, overflow: TextOverflow.ellipsis)),
-            ])),
-            Expanded(flex: 1, child: Text('${s.assigned}', textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w700))),
-            Expanded(flex: 1, child: Text('${s.resolved}', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w700, color: rateColor))),
-            Expanded(flex: 2, child: Text(avgStr, textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary))),
-          ]));
-        }),
-      ]),
+          Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7), decoration: BoxDecoration(color: AppColors.surfaceVariant, borderRadius: BorderRadius.circular(8)), child: const Row(children: [
+            Expanded(flex: 3, child: Text('AGENT', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.textSecondary, letterSpacing: 0.5))),
+            Expanded(flex: 1, child: Text('TOTAL', textAlign: TextAlign.center, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.textSecondary, letterSpacing: 0.5))),
+            Expanded(flex: 1, child: Text('SOLVED', textAlign: TextAlign.center, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.textSecondary, letterSpacing: 0.5))),
+            Expanded(flex: 2, child: Text('AVG TIME', textAlign: TextAlign.right, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.textSecondary, letterSpacing: 0.5))),
+          ])),
+          const SizedBox(height: 8),
+          ..._stats.map((s) {
+            final rate = s.assigned > 0 ? (s.resolved * 100 / s.assigned).round() : 0;
+            final avgMin = s.resCount > 0 ? (s.totalMins / s.resCount).round() : 0;
+            final avgStr = avgMin > 0 ? (avgMin >= 60 ? '${(avgMin / 60).toStringAsFixed(1)}h' : '${avgMin}m') : '—';
+            final rateColor = rate >= 80 ? const Color(0xFF059669) : rate >= 50 ? const Color(0xFFF97316) : const Color(0xFFDC2626);
+            return Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: Row(children: [
+              Expanded(flex: 3, child: Row(children: [
+                CircleAvatar(radius: 13, backgroundColor: AppColors.primaryLight.withValues(alpha: 0.1), child: Text(s.name[0].toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.primaryLight))),
+                const SizedBox(width: 8), Expanded(child: Text(s.name, style: AppTextStyles.label, overflow: TextOverflow.ellipsis)),
+              ])),
+              Expanded(flex: 1, child: Text('${s.assigned}', textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w700))),
+              Expanded(flex: 1, child: Text('${s.resolved}', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w700, color: rateColor))),
+              Expanded(flex: 2, child: Text(avgStr, textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary))),
+            ]));
+          }),
+        ]),
     ]),
   );
 }
@@ -1754,14 +2075,14 @@ class _ReportsTabState extends State<_ReportsTab> {
   List<Ticket> _tickets = [];
   bool _loading = true;
   String _view = 'daily', _groupBy = 'status';
-  final _palette = const [Color(0xFF2563EB), Color(0xFF7C3AED), Color(0xFF059669), Color(0xFFF97316), Color(0xFFDC2626), Color(0xFF0891B2)];
+  final _palette = const [AppColors.primary, Color(0xFF7C3AED), Color(0xFF059669), Color(0xFFF97316), Color(0xFFDC2626), Color(0xFF0891B2)];
   Timer? _pollTimer;
 
   @override
-  void initState() { 
-    super.initState(); 
-    _load(); 
-    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) => _load(silent: true)); 
+  void initState() {
+    super.initState();
+    _load();
+    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) => _load(silent: true));
   }
 
   @override
@@ -1868,10 +2189,10 @@ class _OffersTabState extends State<_OffersTab> {
   Timer? _pollTimer;
 
   @override
-  void initState() { 
-    super.initState(); 
-    _load(); 
-    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) => _load(silent: true)); 
+  void initState() {
+    super.initState();
+    _load();
+    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) => _load(silent: true));
   }
 
   @override
@@ -1882,7 +2203,9 @@ class _OffersTabState extends State<_OffersTab> {
 
   Future<void> _load({bool silent = false}) async {
     if (!silent) setState(() => _loading = true);
-    try { final res = await _dio.get('/api/offers/admin'); final raw = res.data; _offers = List<Map<String, dynamic>>.from(raw is List ? raw : (raw['content'] ?? [])); }
+    try {
+      _offers = await OfferService().getAllOffersAdmin();
+    }
     catch (_) { _offers = []; }
     if (mounted) setState(() => _loading = false);
   }
@@ -1894,7 +2217,15 @@ class _OffersTabState extends State<_OffersTab> {
       actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)), onPressed: () => Navigator.pop(context, true), child: const Text('Delete'))],
     ));
     if (ok != true) return;
-    try { await _dio.delete('/api/offers/$id'); _snack(context, 'Offer deleted'); _load(); }
+    try {
+      final success = await OfferService().deleteOffer(id);
+      if (success) {
+        _snack(context, 'Offer deleted');
+        _load();
+      } else {
+        _snack(context, 'Delete failed', error: true);
+      }
+    }
     catch (_) { _snack(context, 'Delete failed', error: true); }
   }
 
@@ -1905,32 +2236,32 @@ class _OffersTabState extends State<_OffersTab> {
     body: _loading ? const Center(child: CircularProgressIndicator())
         : _offers.isEmpty ? const EmptyState(icon: Icons.local_offer_outlined, title: 'No offers yet', subtitle: 'Tap + to create the first offer')
         : RefreshIndicator(onRefresh: () => _load(), child: ListView.builder(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-            itemCount: _offers.length,
-            itemBuilder: (_, i) {
-              final o = _offers[i];
-              final status = (o['status'] ?? 'PENDING').toString().toUpperCase();
-              final statusColor = status == 'APPROVED' ? const Color(0xFF059669) : status == 'REJECTED' ? const Color(0xFFDC2626) : const Color(0xFFF97316);
-              final isActive = o['isActive'] == true || o['active'] == true;
-              return Container(margin: const EdgeInsets.only(bottom: 12), decoration: _cardDeco(), child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(o['title'] ?? '', style: AppTextStyles.h4), if (o['description'] != null) Text(o['description'], style: AppTextStyles.caption, maxLines: 2, overflow: TextOverflow.ellipsis)])),
-                  if (o['discount'] != null) Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: const Color(0xFFDC2626), borderRadius: BorderRadius.circular(20)), child: Text(o['discount'].toString(), style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800))),
-                ]),
-                const SizedBox(height: 10),
-                Wrap(spacing: 8, runSpacing: 6, children: [
-                  _chip(status, statusColor),
-                  _chip(isActive ? 'Active' : 'Inactive', isActive ? const Color(0xFF059669) : AppColors.textMuted),
-                  if (o['validFrom'] != null) _chip('From ${_fmtDate(o['validFrom'])}', AppColors.info),
-                  if (o['validTo'] != null) _chip('Until ${_fmtDate(o['validTo'])}', const Color(0xFFF97316)),
-                ]),
-                const SizedBox(height: 10),
-                Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                  TextButton.icon(onPressed: () => _openForm(o), icon: const Icon(Icons.edit_outlined, size: 15), label: const Text('Edit'), style: TextButton.styleFrom(foregroundColor: AppColors.primaryLight, padding: const EdgeInsets.symmetric(horizontal: 10))),
-                  TextButton.icon(onPressed: () => _delete(o['id']), icon: const Icon(Icons.delete_outline_rounded, size: 15), label: const Text('Delete'), style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626), padding: const EdgeInsets.symmetric(horizontal: 10))),
-                ]),
-              ])));
-            })),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+        itemCount: _offers.length,
+        itemBuilder: (_, i) {
+          final o = _offers[i];
+          final status = (o['status'] ?? 'PENDING').toString().toUpperCase();
+          final statusColor = status == 'APPROVED' ? const Color(0xFF059669) : status == 'REJECTED' ? const Color(0xFFDC2626) : const Color(0xFFF97316);
+          final isActive = o['isActive'] == true || o['active'] == true;
+          return Container(margin: const EdgeInsets.only(bottom: 12), decoration: _cardDeco(), child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(o['title'] ?? '', style: AppTextStyles.h4), if (o['description'] != null) Text(o['description'], style: AppTextStyles.caption, maxLines: 2, overflow: TextOverflow.ellipsis)])),
+              if (o['discount'] != null) Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: const Color(0xFFDC2626), borderRadius: BorderRadius.circular(20)), child: Text(o['discount'].toString(), style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800))),
+            ]),
+            const SizedBox(height: 10),
+            Wrap(spacing: 8, runSpacing: 6, children: [
+              _chip(status, statusColor),
+              _chip(isActive ? 'Active' : 'Inactive', isActive ? const Color(0xFF059669) : AppColors.textMuted),
+              if (o['validFrom'] != null) _chip('From ${_fmtDate(o['validFrom'])}', AppColors.info),
+              if (o['validTo'] != null) _chip('Until ${_fmtDate(o['validTo'])}', const Color(0xFFF97316)),
+            ]),
+            const SizedBox(height: 10),
+            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              TextButton.icon(onPressed: () => _openForm(o), icon: const Icon(Icons.edit_outlined, size: 15), label: const Text('Edit'), style: TextButton.styleFrom(foregroundColor: AppColors.primaryLight, padding: const EdgeInsets.symmetric(horizontal: 10))),
+              TextButton.icon(onPressed: () => _delete(o['id']), icon: const Icon(Icons.delete_outline_rounded, size: 15), label: const Text('Delete'), style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626), padding: const EdgeInsets.symmetric(horizontal: 10))),
+            ]),
+          ])));
+        })),
   );
 
   void _openForm([Map<String, dynamic>? o]) => showModalBottomSheet(context: context, isScrollControlled: true, backgroundColor: AppColors.surface, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))), builder: (_) => _OfferForm(offer: o, onSaved: () { Navigator.pop(context); _load(); }));
@@ -1970,8 +2301,12 @@ class _OfferFormState extends State<_OfferForm> {
     final payload = {'title': _titleC.text.trim(), 'description': _descC.text.trim(), 'discount': _discC.text.trim(), 'active': _isActive, 'validFrom': '${_validFrom}T00:00:00', 'validTo': '${_validTo}T23:59:59', if (_cIdC.text.isNotEmpty) 'consultantId': int.tryParse(_cIdC.text)};
     try {
       final id = widget.offer?['id'];
-      if (id != null) await _dio.put('/api/offers/$id', data: payload); else await _dio.post('/api/offers', data: payload);
-      widget.onSaved();
+      bool success;
+      if (id != null) success = await OfferService().updateOffer(id, payload);
+      else success = await OfferService().createOffer(payload);
+
+      if (success) widget.onSaved();
+      else _snack(context, 'Save failed', error: true);
     } catch (_) { if (mounted) _snack(context, 'Save failed', error: true); }
     finally { if (mounted) setState(() => _saving = false); }
   }
@@ -2021,10 +2356,10 @@ class _OfferApprovalsTabState extends State<_OfferApprovalsTab> {
   Timer? _pollTimer;
 
   @override
-  void initState() { 
-    super.initState(); 
-    _load(); 
-    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) => _load(silent: true)); 
+  void initState() {
+    super.initState();
+    _load();
+    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) => _load(silent: true));
   }
 
   @override
@@ -2035,17 +2370,19 @@ class _OfferApprovalsTabState extends State<_OfferApprovalsTab> {
 
   Future<void> _load({bool silent = false}) async {
     if (!silent) setState(() => _loading = true);
-    try { final res = await _dio.get('/api/offers/admin'); final raw = res.data; _offers = (List<Map<String, dynamic>>.from(raw is List ? raw : (raw['content'] ?? []))).where((o) => (o['status'] ?? 'PENDING').toString().toUpperCase() == 'PENDING').toList(); }
+    try {
+      final all = await OfferService().getAllOffersAdmin();
+      _offers = all.where((o) => (o['status'] ?? 'PENDING').toString().toUpperCase() == 'PENDING').toList();
+    }
     catch (_) { _offers = []; }
     if (mounted) setState(() => _loading = false);
   }
 
   Future<void> _action(int id, String action) async {
     setState(() => _processing = id);
-    // CORRECT endpoint: PUT /api/offers/{id}/status?status=APPROVED
     final status = action == 'approve' ? 'APPROVED' : 'REJECTED';
     try {
-      await _dio.put('/api/offers/$id/status', queryParameters: {'status': status});
+      await OfferService().updateStatus(id, status);
       _snack(context, 'Offer ${status.toLowerCase()}', icon: action == 'approve' ? Icons.check_circle_outline_rounded : Icons.cancel_outlined);
       _load();
     } catch (_) { _snack(context, 'Action failed', error: true); }
@@ -2059,37 +2396,37 @@ class _OfferApprovalsTabState extends State<_OfferApprovalsTab> {
     body: _loading ? const Center(child: CircularProgressIndicator())
         : _offers.isEmpty ? const EmptyState(icon: Icons.task_alt_rounded, title: 'No pending approvals', subtitle: 'All offers have been reviewed')
         : RefreshIndicator(onRefresh: () => _load(), child: ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: _offers.length,
-            itemBuilder: (_, i) {
-              final o = _offers[i]; final id = o['id'] as int;
-              final busy = _processing == id;
-              return Container(margin: const EdgeInsets.only(bottom: 12), decoration: _cardDeco(border: const Color(0xFFFDE68A)), child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: const Color(0xFFF97316).withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.pending_outlined, color: Color(0xFFF97316), size: 18)),
-                  const SizedBox(width: 12),
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(o['title'] ?? '', style: AppTextStyles.h4), if (o['discount'] != null) Text('Discount: ${o['discount']}', style: AppTextStyles.caption)])),
-                  _chip('PENDING', const Color(0xFFF97316)),
-                ]),
-                if (o['description'] != null && (o['description'] as String).isNotEmpty) ...[const SizedBox(height: 8), Text(o['description'], style: AppTextStyles.bodySmall)],
-                const SizedBox(height: 14),
-                Row(children: [
-                  Expanded(child: OutlinedButton.icon(
-                    onPressed: busy ? null : () => _action(id, 'reject'),
-                    icon: const Icon(Icons.close_rounded, size: 16),
-                    label: const Text('Reject'),
-                    style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFFDC2626), side: const BorderSide(color: Color(0xFFDC2626)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(vertical: 10)),
-                  )),
-                  const SizedBox(width: 10),
-                  Expanded(child: FilledButton.icon(
-                    onPressed: busy ? null : () => _action(id, 'approve'),
-                    icon: busy ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.check_rounded, size: 16),
-                    label: Text(busy ? 'Processing...' : 'Approve'),
-                    style: FilledButton.styleFrom(backgroundColor: const Color(0xFF059669), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(vertical: 10)),
-                  )),
-                ]),
-              ])));
-            })),
+        padding: const EdgeInsets.all(16),
+        itemCount: _offers.length,
+        itemBuilder: (_, i) {
+          final o = _offers[i]; final id = o['id'] as int;
+          final busy = _processing == id;
+          return Container(margin: const EdgeInsets.only(bottom: 12), decoration: _cardDeco(border: const Color(0xFFFDE68A)), child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: const Color(0xFFF97316).withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.pending_outlined, color: Color(0xFFF97316), size: 18)),
+              const SizedBox(width: 12),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(o['title'] ?? '', style: AppTextStyles.h4), if (o['discount'] != null) Text('Discount: ${o['discount']}', style: AppTextStyles.caption)])),
+              _chip('PENDING', const Color(0xFFF97316)),
+            ]),
+            if (o['description'] != null && (o['description'] as String).isNotEmpty) ...[const SizedBox(height: 8), Text(o['description'], style: AppTextStyles.bodySmall)],
+            const SizedBox(height: 14),
+            Row(children: [
+              Expanded(child: OutlinedButton.icon(
+                onPressed: busy ? null : () => _action(id, 'reject'),
+                icon: const Icon(Icons.close_rounded, size: 16),
+                label: const Text('Reject'),
+                style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFFDC2626), side: const BorderSide(color: Color(0xFFDC2626)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(vertical: 10)),
+              )),
+              const SizedBox(width: 10),
+              Expanded(child: FilledButton.icon(
+                onPressed: busy ? null : () => _action(id, 'approve'),
+                icon: busy ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.check_rounded, size: 16),
+                label: Text(busy ? 'Processing...' : 'Approve'),
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF059669), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(vertical: 10)),
+              )),
+            ]),
+          ])));
+        })),
   );
 }
 
@@ -2109,11 +2446,11 @@ class _SkillsQuestionsTabState extends State<_SkillsQuestionsTab> with SingleTic
   Timer? _pollTimer;
 
   @override
-  void initState() { 
-    super.initState(); 
-    _tabs = TabController(length: 2, vsync: this); 
-    _loadSkills(); 
-    _loadQuestions(); 
+  void initState() {
+    super.initState();
+    _tabs = TabController(length: 2, vsync: this);
+    _loadSkills();
+    _loadQuestions();
     _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _loadSkills(silent: true);
       _loadQuestions(silent: true);
@@ -2121,15 +2458,15 @@ class _SkillsQuestionsTabState extends State<_SkillsQuestionsTab> with SingleTic
   }
 
   @override
-  void dispose() { 
+  void dispose() {
     _pollTimer?.cancel();
-    _tabs.dispose(); 
-    super.dispose(); 
+    _tabs.dispose();
+    super.dispose();
   }
 
   Future<void> _loadSkills({bool silent = false}) async {
     if (!silent) setState(() => _loadingSkills = true);
-    try { final res = await _dio.get('/api/skills'); _skills = List<Map<String, dynamic>>.from(res.data is List ? res.data : []); }
+    try { _skills = await QuestionService().getAllSkills(); }
     catch (_) { _skills = []; }
     if (mounted) setState(() => _loadingSkills = false);
   }
@@ -2137,11 +2474,7 @@ class _SkillsQuestionsTabState extends State<_SkillsQuestionsTab> with SingleTic
   Future<void> _loadQuestions({bool silent = false}) async {
     if (!silent) setState(() => _loadingQuestions = true);
     try {
-      // Need at least one skillId — try getting all skills first then questions
-      if (_skills.isNotEmpty) {
-        final res = await _dio.get('/api/questions', queryParameters: {'skillIds': _skills.take(3).map((s) => s['id']).toList()});
-        _questions = List<Map<String, dynamic>>.from(res.data is List ? res.data : []);
-      }
+      _questions = await QuestionService().getAllQuestions();
     } catch (_) { _questions = []; }
     if (mounted) setState(() => _loadingQuestions = false);
   }
@@ -2157,9 +2490,12 @@ class _SkillsQuestionsTabState extends State<_SkillsQuestionsTab> with SingleTic
         SizedBox(width: double.infinity, height: 48, child: FilledButton(
           onPressed: () async {
             if (ctrl.text.trim().isEmpty) return;
-            // Correct field: 'skillName' per SkillRequest schema
-            try { await _dio.post('/api/skills', data: {'skillName': ctrl.text.trim()}); if (mounted) { Navigator.pop(context); _loadSkills(); } }
-            catch (_) { if (mounted) _snack(context, 'Save failed', error: true); }
+            try {
+              final success = await QuestionService().createSkill(ctrl.text.trim());
+              if (success && mounted) { Navigator.pop(context); _loadSkills(); }
+              else if (mounted) { _snack(context, 'Save failed', error: true); }
+            }
+            catch (error) { if (mounted) _snack(context, _apiError(error, fallback: 'Save failed'), error: true); }
           },
           child: const Text('Add Skill'),
         )),
@@ -2168,8 +2504,14 @@ class _SkillsQuestionsTabState extends State<_SkillsQuestionsTab> with SingleTic
   }
 
   void _deleteSkill(int id) async {
-    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: const Text('Delete Skill?'), content: const Text('All associated questions will also be deleted.'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)), onPressed: () => Navigator.pop(context, true), child: const Text('Delete'))]));
-    if (ok == true) { try { await _dio.delete('/api/skills/$id'); _loadSkills(); } catch (_) { if (mounted) _snack(context, 'Delete failed', error: true); } }
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: const Text('Delete Skill?'), content: const Text('Questions are managed separately and will stay available.'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)), onPressed: () => Navigator.pop(context, true), child: const Text('Delete'))]));
+    if (ok == true) {
+      try {
+        final success = await QuestionService().deleteSkill(id);
+        if (success) _loadSkills();
+        else if (mounted) _snack(context, 'Delete failed', error: true);
+      } catch (error) { if (mounted) _snack(context, _apiError(error, fallback: 'Delete failed'), error: true); }
+    }
   }
 
   @override
@@ -2184,54 +2526,98 @@ class _SkillsQuestionsTabState extends State<_SkillsQuestionsTab> with SingleTic
       _loadingSkills ? const Center(child: CircularProgressIndicator())
           : _skills.isEmpty ? const EmptyState(icon: Icons.psychology_outlined, title: 'No skills added')
           : RefreshIndicator(onRefresh: () => _loadSkills(), child: ListView.builder(padding: const EdgeInsets.all(14), itemCount: _skills.length, itemBuilder: (_, i) {
-              final s = _skills[i];
-              return Container(margin: const EdgeInsets.only(bottom: 8), decoration: _cardDeco(), child: ListTile(
-                leading: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: AppColors.primaryLight.withValues(alpha: 0.1), shape: BoxShape.circle), child: const Icon(Icons.psychology_rounded, color: AppColors.primaryLight, size: 18)),
-                title: Text(s['skillName'] ?? s['name'] ?? '', style: AppTextStyles.h4),
-                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                  if (s['active'] == true) Container(width: 7, height: 7, decoration: const BoxDecoration(color: Color(0xFF059669), shape: BoxShape.circle)),
-                  const SizedBox(width: 8),
-                  IconButton(icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626), size: 18), onPressed: () => _deleteSkill(s['id'])),
-                ]),
-              ));
-            })),
+        final s = _skills[i];
+        return Container(margin: const EdgeInsets.only(bottom: 8), decoration: _cardDeco(), child: ListTile(
+          leading: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: AppColors.primaryLight.withValues(alpha: 0.1), shape: BoxShape.circle), child: const Icon(Icons.psychology_rounded, color: AppColors.primaryLight, size: 18)),
+          title: Text(s['skillName'] ?? s['name'] ?? '', style: AppTextStyles.h4),
+          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+            if (s['active'] == true) Container(width: 7, height: 7, decoration: const BoxDecoration(color: Color(0xFF059669), shape: BoxShape.circle)),
+            const SizedBox(width: 8),
+            IconButton(icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626), size: 18), onPressed: () => _deleteSkill(s['id'])),
+          ]),
+        ));
+      })),
 
       // Questions
       _loadingQuestions ? const Center(child: CircularProgressIndicator())
-          : _questions.isEmpty ? const EmptyState(icon: Icons.quiz_outlined, title: 'No questions', subtitle: 'Add questions linked to skills')
+          : _questions.isEmpty ? const EmptyState(icon: Icons.quiz_outlined, title: 'No questions', subtitle: 'Add dynamic questions for members')
           : RefreshIndicator(onRefresh: () => _loadQuestions(), child: ListView.builder(padding: const EdgeInsets.all(14), itemCount: _questions.length, itemBuilder: (_, i) {
-              final q = _questions[i];
-              return Container(margin: const EdgeInsets.only(bottom: 8), decoration: _cardDeco(), child: ListTile(
-                leading: Container(width: 30, height: 30, decoration: BoxDecoration(color: const Color(0xFF7C3AED).withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)), child: Center(child: Text('Q${i + 1}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF7C3AED))))),
-                title: Text(q['text'] ?? '', style: AppTextStyles.label),
-                subtitle: Text('Skill ID: ${q['skillId']}', style: AppTextStyles.caption),
-                trailing: IconButton(icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626), size: 18), onPressed: () async { try { await _dio.delete('/api/questions/${q['id']}'); _loadQuestions(); } catch (_) { if (mounted) _snack(context, 'Delete failed', error: true); } }),
-              ));
-            })),
+        final q = _questions[i];
+        final rawType = (q['type'] ?? 'TEXT').toString();
+        final prettyType = rawType.replaceAll('_', ' ').split(' ').map((part) => part.isEmpty ? '' : '${part[0].toUpperCase()}${part.substring(1).toLowerCase()}').join(' ');
+        final placeholder = (q['placeholder'] ?? '').toString().trim();
+        final options = (q['options'] ?? '').toString().split(RegExp(r'[\n,]')).map((item) => item.trim()).where((item) => item.isNotEmpty).toList();
+        return Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(14), decoration: _cardDeco(), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(width: 36, height: 36, decoration: BoxDecoration(color: const Color(0xFF7C3AED).withValues(alpha: 0.1), borderRadius: BorderRadius.circular(12)), child: Center(child: Text('Q${i + 1}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFF7C3AED))))),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text((q['text'] ?? '').toString(), style: AppTextStyles.h4.copyWith(height: 1.35)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                _chip(prettyType.isEmpty ? 'Text' : prettyType, const Color(0xFF7C3AED)),
+                if (placeholder.isNotEmpty) _chip('Placeholder: $placeholder', AppColors.info),
+                if (options.isNotEmpty) _chip('${options.length} options', const Color(0xFFF59E0B)),
+              ]),
+            ])),
+            IconButton(icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626), size: 18), onPressed: () async {
+              final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: const Text('Delete Question?'), content: Text('"${q['text'] ?? 'This question'}" will be deleted permanently.'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)), onPressed: () => Navigator.pop(context, true), child: const Text('Delete'))]));
+              if (ok != true) return;
+              try {
+                final success = await QuestionService().deleteQuestion(q['id']);
+                if (success) _loadQuestions();
+                else if (mounted) _snack(context, 'Delete failed', error: true);
+              } catch (error) { if (mounted) _snack(context, _apiError(error, fallback: 'Delete failed'), error: true); }
+            }),
+          ]),
+          if (options.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Wrap(spacing: 8, runSpacing: 8, children: options.map((item) => Chip(label: Text(item), backgroundColor: AppColors.surfaceVariant, side: const BorderSide(color: AppColors.border))).toList()),
+          ],
+        ]));
+      })),
     ]),
   );
 
   void _addQuestion() {
-    if (_skills.isEmpty) { _snack(context, 'Add a skill first', error: true); return; }
     final ctrl = TextEditingController();
-    int? skillId = _skills.first['id'];
+    final placeholderCtrl = TextEditingController();
+    final optionsCtrl = TextEditingController();
+    String type = 'TEXT';
     showModalBottomSheet(context: context, isScrollControlled: true, backgroundColor: AppColors.surface, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))), builder: (ctx) => StatefulBuilder(builder: (ctx, ss) => Padding(
       padding: EdgeInsets.only(left: 20, right: 20, top: 20, bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
-      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('Add Question', style: AppTextStyles.h3), const SizedBox(height: 16),
-        DropdownButtonFormField<int>(value: skillId, decoration: _inp('Skill *', icon: Icons.psychology_rounded), items: _skills.map((s) => DropdownMenuItem<int>(value: s['id'], child: Text(s['skillName'] ?? s['name'] ?? ''))).toList(), onChanged: (v) => ss(() => skillId = v)),
+        DropdownButtonFormField<String>(initialValue: type, decoration: _inp('Question type *', icon: Icons.tune_rounded), items: const [DropdownMenuItem(value: 'TEXT', child: Text('Short Text')), DropdownMenuItem(value: 'TEXTAREA', child: Text('Paragraph')), DropdownMenuItem(value: 'MULTIPLE_CHOICE', child: Text('Multiple Choice'))], onChanged: (v) => ss(() => type = v ?? 'TEXT')),
         const SizedBox(height: 10),
         TextField(controller: ctrl, maxLines: 2, decoration: _inp('Question text *', icon: Icons.quiz_outlined)),
+        const SizedBox(height: 10),
+        TextField(controller: placeholderCtrl, decoration: _inp(type == 'MULTIPLE_CHOICE' ? 'Helper text (optional)' : 'Placeholder (optional)', icon: Icons.short_text_rounded)),
+        if (type == 'MULTIPLE_CHOICE') ...[
+          const SizedBox(height: 10),
+          TextField(controller: optionsCtrl, maxLines: 4, decoration: _inp('Options *', icon: Icons.list_alt_rounded, hint: 'One per line or comma separated')),
+        ],
         const SizedBox(height: 16),
         SizedBox(width: double.infinity, height: 48, child: FilledButton(
           onPressed: () async {
-            if (ctrl.text.trim().isEmpty || skillId == null) return;
-            try { await _dio.post('/api/questions', data: {'skillId': skillId, 'text': ctrl.text.trim()}); if (mounted) { Navigator.pop(ctx); _loadQuestions(); } }
-            catch (_) { if (mounted) _snack(ctx, 'Save failed', error: true); }
+            final options = optionsCtrl.text.split(RegExp(r'[\n,]')).map((item) => item.trim()).where((item) => item.isNotEmpty).toList();
+            if (ctrl.text.trim().isEmpty) return;
+            if (type == 'MULTIPLE_CHOICE' && options.isEmpty) { _snack(ctx, 'Add at least one option', error: true); return; }
+            try {
+              final success = await QuestionService().createQuestion({
+                'text': ctrl.text.trim(),
+                'type': type,
+                if (placeholderCtrl.text.trim().isNotEmpty) 'placeholder': placeholderCtrl.text.trim(),
+                if (options.isNotEmpty) 'options': options.join(', ')
+              });
+              if (success && mounted) { Navigator.pop(ctx); _loadQuestions(); }
+              else if (mounted) { _snack(ctx, 'Save failed', error: true); }
+            }
+            catch (error) { if (mounted) _snack(ctx, _apiError(error, fallback: 'Save failed'), error: true); }
           },
           child: const Text('Add Question'),
         )),
-      ]),
+      ])),
     )));
   }
 }
@@ -2278,7 +2664,10 @@ These Terms are governed by the laws of India, jurisdiction: Hyderabad, Telangan
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    try { final r = await _dio.get('/api/static-content/TERMS_AND_CONDITIONS'); final d = r.data; _content = d['content'] ?? d['text'] ?? _default; }
+    try {
+      final content = await StaticContentService().getContent('TERMS_AND_CONDITIONS');
+      _content = content.isNotEmpty ? content : _default;
+    }
     catch (_) { _content = _default; }
     _ctrl.text = _content ?? _default;
     if (mounted) setState(() => _loading = false);
@@ -2286,8 +2675,23 @@ These Terms are governed by the laws of India, jurisdiction: Hyderabad, Telangan
 
   Future<void> _save() async {
     setState(() => _saving = true);
-    try { await _dio.post('/api/static-content', data: {'contentType': 'TERMS_AND_CONDITIONS', 'content': _ctrl.text, 'lastUpdatedBy': 'Admin'}); setState(() { _content = _ctrl.text; _editing = false; }); _snack(context, 'Terms published successfully'); }
-    catch (_) { setState(() { _content = _ctrl.text; _editing = false; }); _snack(context, 'Saved locally'); }
+    try {
+      final success = await StaticContentService().saveContent({
+        'contentType': 'TERMS_AND_CONDITIONS',
+        'content': _ctrl.text,
+        'lastUpdatedBy': 'Admin'
+      });
+      if (success) {
+        setState(() { _content = _ctrl.text; _editing = false; });
+        _snack(context, 'Terms published successfully');
+      } else {
+        _snack(context, 'Save failed', error: true);
+      }
+    }
+    catch (_) {
+      setState(() { _content = _ctrl.text; _editing = false; });
+      _snack(context, 'Saved locally');
+    }
     finally { if (mounted) setState(() => _saving = false); }
   }
 
@@ -2446,6 +2850,7 @@ class _CommissionTabState extends State<_CommissionTab> {
   bool _loading = true, _saving = false;
   String _feeType = 'FLAT';
   final _valCtrl = TextEditingController(), _previewCtrl = TextEditingController(text: '1000');
+  final _api = AdminService();
 
   @override
   void initState() { super.initState(); _previewCtrl.addListener(() => setState(() {})); _valCtrl.addListener(() => setState(() {})); _load(); }
@@ -2454,8 +2859,11 @@ class _CommissionTabState extends State<_CommissionTab> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    try { final r = await _dio.get('/api/admin/settings/additional-charges'); final d = r.data; _feeType = (d['feeType'] ?? 'FLAT').toString(); _valCtrl.text = (d['feeValue'] ?? '0').toString(); }
-    catch (_) {}
+    final d = await _api.getAdditionalCharges();
+    if (d != null) {
+      _feeType = (d['feeType'] ?? 'FLAT').toString();
+      _valCtrl.text = (d['feeValue'] ?? '0').toString();
+    }
     if (mounted) setState(() => _loading = false);
   }
 
@@ -2464,9 +2872,11 @@ class _CommissionTabState extends State<_CommissionTab> {
     if (val == null || val < 0) { _snack(context, 'Enter a valid value', error: true); return; }
     if (_feeType == 'PERCENTAGE' && val > 100) { _snack(context, 'Cannot exceed 100%', error: true); return; }
     setState(() => _saving = true);
-    try { await _dio.post('/api/admin/settings/additional-charges', data: {'feeType': _feeType, 'feeValue': _valCtrl.text}); _snack(context, 'Commission settings saved'); }
-    catch (_) { _snack(context, 'Save failed', error: true); }
-    finally { if (mounted) setState(() => _saving = false); }
+    final ok = await _api.setAdditionalCharges(_feeType, val);
+    if (mounted) {
+      setState(() => _saving = false);
+      _snack(context, ok ? 'Commission settings saved' : 'Save failed', error: !ok);
+    }
   }
 
   double get _base => double.tryParse(_previewCtrl.text) ?? 1000;
@@ -2540,18 +2950,18 @@ class _ContactTabState extends State<_ContactTab> {
   Timer? _pollTimer;
 
   @override
-  void initState() { 
-    super.initState(); 
-    _searchCtrl.addListener(() => setState(() {})); 
-    _load(reset: true); 
+  void initState() {
+    super.initState();
+    _searchCtrl.addListener(() => setState(() {}));
+    _load(reset: true);
     _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) => _load(reset: true, silent: true));
   }
 
   @override
-  void dispose() { 
+  void dispose() {
     _pollTimer?.cancel();
-    _searchCtrl.dispose(); 
-    super.dispose(); 
+    _searchCtrl.dispose();
+    super.dispose();
   }
 
   bool _isRead(Map m) => m['isRead'] == true || m['read'] == true;
@@ -2561,43 +2971,58 @@ class _ContactTabState extends State<_ContactTab> {
     if (reset) {
       if (!silent) setState(() { _loading = true; _page = 0; _msgs = []; _hasMore = true; });
       else { _page = 0; _hasMore = true; }
-    } else { 
-      if (_loadingMore) return; 
-      setState(() => _loadingMore = true); 
+    } else {
+      if (_loadingMore) return;
+      setState(() => _loadingMore = true);
     }
     try {
-      final res = await _dio.get('/api/contact/admin/messages', queryParameters: {'page': reset ? 0 : _page, 'size': _pageSize});
-      final raw = res.data;
-      List<Map<String, dynamic>> items; bool hasMore = false;
-      if (raw is Map && raw.containsKey('content')) { items = List<Map<String, dynamic>>.from(raw['content']); final tp = raw['totalPages'] ?? 1; final cp = raw['number'] ?? 0; hasMore = cp < tp - 1; _page = cp + 1; }
-      else if (raw is List) { items = List<Map<String, dynamic>>.from(raw); hasMore = items.length == _pageSize; _page = reset ? 1 : _page + 1; }
-      else { items = []; }
+      final res = await StaticContentService().getContactMessages(page: reset ? 0 : _page, size: _pageSize);
+
+      List<Map<String, dynamic>> items = List<Map<String, dynamic>>.from(res['content'] ?? []);
+      bool hasMore = false;
+      if (res.containsKey('totalPages')) {
+        final tp = res['totalPages'] ?? 1;
+        final cp = res['number'] ?? 0;
+        hasMore = cp < tp - 1;
+        _page = cp + 1;
+      } else {
+        hasMore = items.length == _pageSize;
+        _page = reset ? 1 : _page + 1;
+      }
+
       if (mounted) setState(() { if (reset) _msgs = items; else _msgs.addAll(items); _hasMore = hasMore; _loading = false; _loadingMore = false; });
     } catch (_) { if (mounted && !silent) setState(() { _loading = false; _loadingMore = false; }); }
   }
 
   Future<void> _markRead(int id) async {
     setState(() => _msgs = _msgs.map((m) => m['id'] == id ? {...m, 'isRead': true, 'read': true} : m).toList());
-    try { await _dio.patch('/api/contact/admin/messages/$id/read'); } catch (_) {}
+    try { await StaticContentService().markAsRead(id); } catch (_) {}
   }
 
   Future<void> _markAllRead() async {
+    final unread = _msgs.where((m) => !_isRead(m)).map((m) => Map<String, dynamic>.from(m)).toList();
     setState(() => _msgs = _msgs.map((m) => {...m, 'isRead': true, 'read': true}).toList());
-    for (final m in _msgs.where((m) => !_isRead(m)).toList()) { try { await _dio.patch('/api/contact/admin/messages/${m['id']}/read'); } catch (_) {} }
+    for (final m in unread) { try { await StaticContentService().markAsRead(m['id']); } catch (_) {} }
     _snack(context, 'All marked as read');
   }
 
-  Future<void> _delete(int id) async {
-    try { await _dio.delete('/api/contact/admin/messages/$id'); } catch (_) {}
-    setState(() { _msgs.removeWhere((m) => m['id'] == id); if (_selected?['id'] == id) _selected = null; });
-  }
-
-  Future<void> _clearAll() async {
-    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)), title: const Text('Clear All Messages?'), content: const Text('All contact messages will be permanently deleted.'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)), onPressed: () => Navigator.pop(context, true), child: const Text('Delete All'))]));
-    if (ok != true) return;
-    try { await _dio.delete('/api/contact/admin/messages'); } catch (_) {}
-    setState(() { _msgs = []; _selected = null; });
-    _snack(context, 'All messages cleared');
+  Future<void> _replyToMessage(Map<String, dynamic> message) async {
+    final email = (message['email'] ?? '').toString().trim();
+    if (email.isEmpty) {
+      _snack(context, 'Email address is missing for this message.', error: true);
+      return;
+    }
+    final subject = Uri.encodeComponent('Re: Your Rupee Admin query');
+    final body = Uri.encodeComponent('Hi ${(message['name'] ?? 'there').toString().trim().isEmpty ? 'there' : message['name']},\n\n');
+    final mailToUri = Uri.parse('mailto:$email?subject=$subject&body=$body');
+    final mailToOpened = await launchUrl(mailToUri, mode: LaunchMode.externalApplication);
+    if (mailToOpened) return;
+    final gmailUri = Uri.parse('https://mail.google.com/mail/?view=cm&to=$email&su=$subject&body=$body');
+    final gmailOpened = await launchUrl(gmailUri, mode: LaunchMode.externalApplication);
+    if (gmailOpened) return;
+    await Clipboard.setData(ClipboardData(text: email));
+    if (!mounted) return;
+    _snack(context, 'Could not open email app. Address copied: $email', icon: Icons.copy_rounded);
   }
 
   List<Map<String, dynamic>> get _visible {
@@ -2617,7 +3042,6 @@ class _ContactTabState extends State<_ContactTab> {
         backgroundColor: AppColors.surface, iconTheme: const IconThemeData(color: AppColors.textPrimary),
         actions: [
           if (_unread > 0) TextButton(onPressed: _markAllRead, child: const Text('Mark all read', style: TextStyle(fontSize: 12))),
-          if (_msgs.isNotEmpty) IconButton(icon: const Icon(Icons.delete_sweep_rounded, color: Color(0xFFDC2626)), onPressed: _clearAll, tooltip: 'Clear All'),
           IconButton(icon: const Icon(Icons.refresh_rounded), onPressed: () => _load(reset: true)),
         ],
       ),
@@ -2639,43 +3063,44 @@ class _ContactTabState extends State<_ContactTab> {
         Expanded(child: _loading ? const Center(child: CircularProgressIndicator())
             : _msgs.isEmpty ? const EmptyState(icon: Icons.mail_outline_rounded, title: 'No messages', subtitle: 'Contact form submissions appear here')
             : RefreshIndicator(onRefresh: () => _load(reset: true), child: ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                itemCount: visible.length + (_loadingMore ? 1 : 0) + (_hasMore && !_loadingMore ? 1 : 0),
-                itemBuilder: (_, i) {
-                  if (i == visible.length && _loadingMore) return const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator()));
-                  if (i == visible.length && _hasMore) return TextButton(onPressed: () => _load(), child: const Text('Load more'));
-                  if (i >= visible.length) return const SizedBox.shrink();
-                  final m = visible[i]; final read = _isRead(m); final isSel = _selected?['id'] == m['id'];
-                  return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    GestureDetector(
-                      onTap: () { setState(() => _selected = isSel ? null : m); if (!read) _markRead(m['id']); },
-                      child: AnimatedContainer(duration: const Duration(milliseconds: 150), margin: const EdgeInsets.only(bottom: 6), padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(color: isSel ? AppColors.primaryLight.withValues(alpha: 0.05) : AppColors.surface, borderRadius: BorderRadius.circular(14), border: Border(left: BorderSide(color: isSel ? AppColors.primaryLight : !read ? AppColors.primaryLight : Colors.transparent, width: 3), top: const BorderSide(color: AppColors.border), right: const BorderSide(color: AppColors.border), bottom: const BorderSide(color: AppColors.border))),
-                        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          CircleAvatar(radius: 18, backgroundColor: AppColors.primary, child: Text((m['name'] ?? '?')[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13))),
-                          const SizedBox(width: 12),
-                          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Row(children: [Expanded(child: Text(m['name'] ?? 'Unknown', style: AppTextStyles.label.copyWith(fontWeight: FontWeight.w700))), if (!read) Container(width: 7, height: 7, decoration: const BoxDecoration(color: AppColors.primaryLight, shape: BoxShape.circle))]),
-                            Text(m['email'] ?? '', style: AppTextStyles.caption),
-                            const SizedBox(height: 3),
-                            Text(m['message'] ?? '', style: AppTextStyles.bodySmall, maxLines: 2, overflow: TextOverflow.ellipsis),
-                          ])),
-                          IconButton(icon: const Icon(Icons.delete_outline_rounded, size: 17, color: Color(0xFFDC2626)), onPressed: () => _delete(m['id']), splashRadius: 16, padding: EdgeInsets.zero, constraints: const BoxConstraints()),
-                        ]),
-                      ),
-                    ),
-                    if (isSel) AnimatedSize(duration: const Duration(milliseconds: 200), child: Container(
-                      margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(16),
-                      decoration: _cardDeco(),
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text('Full Message', style: AppTextStyles.label), const SizedBox(height: 8),
-                        Container(width: double.infinity, padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppColors.surfaceVariant, borderRadius: BorderRadius.circular(10), border: const Border(left: BorderSide(color: AppColors.primaryLight, width: 3))), child: Text(m['message'] ?? '', style: AppTextStyles.body.copyWith(height: 1.7))),
-                        const SizedBox(height: 12),
-                        SizedBox(width: double.infinity, child: OutlinedButton.icon(onPressed: () => _snack(context, 'Email: ${m['email'] ?? ''}', icon: Icons.email_outlined), icon: const Icon(Icons.reply_rounded, size: 16), label: Text('Reply to ${m['email'] ?? ''}'), style: OutlinedButton.styleFrom(foregroundColor: AppColors.primaryLight, side: const BorderSide(color: AppColors.primaryLight), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))))),
-                      ]),
-                    )),
-                  ]);
-                })),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            itemCount: visible.length + (_loadingMore ? 1 : 0) + (_hasMore && !_loadingMore ? 1 : 0),
+            itemBuilder: (_, i) {
+              if (i == visible.length && _loadingMore) return const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator()));
+              if (i == visible.length && _hasMore) return TextButton(onPressed: () => _load(), child: const Text('Load more'));
+              if (i >= visible.length) return const SizedBox.shrink();
+              final m = visible[i]; final read = _isRead(m); final isSel = _selected?['id'] == m['id'];
+              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                GestureDetector(
+                  onTap: () { setState(() => _selected = isSel ? null : m); if (!read) _markRead(m['id']); },
+                  child: AnimatedContainer(duration: const Duration(milliseconds: 150), margin: const EdgeInsets.only(bottom: 6), padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(color: isSel ? AppColors.primaryLight.withValues(alpha: 0.05) : AppColors.surface, borderRadius: BorderRadius.circular(14), border: Border(left: BorderSide(color: isSel ? AppColors.primaryLight : !read ? AppColors.primaryLight : Colors.transparent, width: 3), top: const BorderSide(color: AppColors.border), right: const BorderSide(color: AppColors.border), bottom: const BorderSide(color: AppColors.border))),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      CircleAvatar(radius: 18, backgroundColor: AppColors.primary, child: Text((m['name'] ?? '?')[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13))),
+                      const SizedBox(width: 12),
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [Expanded(child: Text(m['name'] ?? 'Unknown', style: AppTextStyles.label.copyWith(fontWeight: FontWeight.w700))), if (!read) Container(width: 7, height: 7, decoration: const BoxDecoration(color: AppColors.primaryLight, shape: BoxShape.circle))]),
+                        Text(m['email'] ?? '', style: AppTextStyles.caption),
+                        const SizedBox(height: 2),
+                        if ((m['createdAt'] ?? '').toString().isNotEmpty) Text(_fmtDateTime(m['createdAt']), style: AppTextStyles.caption.copyWith(color: AppColors.textMuted)),
+                        const SizedBox(height: 3),
+                        Text(m['message'] ?? '', style: AppTextStyles.bodySmall, maxLines: 2, overflow: TextOverflow.ellipsis),
+                      ])),
+                    ]),
+                  ),
+                ),
+                if (isSel) AnimatedSize(duration: const Duration(milliseconds: 200), child: Container(
+                  margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(16),
+                  decoration: _cardDeco(),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [Text('Full Message', style: AppTextStyles.label), const Spacer(), if ((m['createdAt'] ?? '').toString().isNotEmpty) Text(_fmtDateTime(m['createdAt']), style: AppTextStyles.caption)]), const SizedBox(height: 8),
+                    Container(width: double.infinity, padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppColors.surfaceVariant, borderRadius: BorderRadius.circular(10), border: const Border(left: BorderSide(color: AppColors.primaryLight, width: 3))), child: Text(m['message'] ?? '', style: AppTextStyles.body.copyWith(height: 1.7))),
+                    const SizedBox(height: 12),
+                    SizedBox(width: double.infinity, child: OutlinedButton.icon(onPressed: () => _replyToMessage(m), icon: const Icon(Icons.reply_rounded, size: 16), label: Text('Reply to ${m['email'] ?? ''}'), style: OutlinedButton.styleFrom(foregroundColor: AppColors.primaryLight, side: const BorderSide(color: AppColors.primaryLight), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))))),
+                  ]),
+                )),
+              ]);
+            })),
         ),
       ]),
     );
@@ -2704,17 +3129,31 @@ class _AddMemberTabState extends State<_AddMemberTab> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
     try {
-      final fd = FormData();
-      fd.fields.add(MapEntry('data', jsonEncode({'name': _nameC.text.trim(), 'email': _emailC.text.trim().toLowerCase(), 'phoneNumber': _phoneC.text.trim(), 'location': _locC.text.trim()})));
-      await ApiClient().dio.post('/api/onboarding/admin/member', data: fd, options: Options(headers: {'Content-Type': 'multipart/form-data'}));
-      setState(() { _added.insert(0, {'name': _nameC.text.trim(), 'email': _emailC.text.trim().toLowerCase(), 'at': DateFormat('d MMM yyyy').format(DateTime.now())}); });
-      _nameC.clear(); _emailC.clear(); _phoneC.clear(); _locC.clear();
-      _snack(context, 'Member added! Credentials sent via email', icon: Icons.person_add_rounded);
-    } catch (e) {
-      final msg = e.toString();
-      if (msg.contains('409') || msg.contains('already')) _snack(context, 'Email or phone already registered', error: true);
+      final result = await OnboardingService().createMemberByAdmin(
+        name: _nameC.text.trim(),
+        email: _emailC.text.trim().toLowerCase(),
+        phoneNumber: _phoneC.text.trim(),
+        location: _locC.text.trim().isNotEmpty ? _locC.text.trim() : null,
+      );
+
+      if (result != null) {
+        setState(() {
+          _added.insert(0, {
+            'name': _nameC.text.trim(),
+            'email': _emailC.text.trim().toLowerCase(),
+            'at': DateFormat('d MMM yyyy').format(DateTime.now())
+          });
+        });
+        _nameC.clear(); _emailC.clear(); _phoneC.clear(); _locC.clear();
+        _snack(context, 'Member added! Credentials sent via email', icon: Icons.person_add_rounded);
+      } else {
+        _snack(context, 'Failed to add member. Please try again.', error: true);
+      }
+    } catch (error) {
+      final msg = _apiError(error, fallback: 'Failed to add member');
+      if (msg.toLowerCase().contains('already')) _snack(context, 'Email or phone already registered', error: true);
       else if (msg.contains('403')) _snack(context, 'Access denied — admin role required', error: true);
-      else _snack(context, 'Failed to add member', error: true);
+      else _snack(context, msg, error: true);
     } finally { if (mounted) setState(() => _saving = false); }
   }
 
@@ -2790,25 +3229,851 @@ class _SettingsTab extends StatelessWidget {
 
 // ─── Settings API helper ──────────────────────────────────────────────────────
 
-class _SA {
-  final _d = _dio;
-  String _pt(dynamic t) { if (t is Map) return '${(t['hour'] ?? 0).toString().padLeft(2, '0')}:${(t['minute'] ?? 0).toString().padLeft(2, '0')}'; return '09:00'; }
-  Future<List<Map<String,dynamic>>> getHours() async { try { final r = await _d.get('/api/admin/settings/business-hours'); return List<Map<String,dynamic>>.from(r.data is List ? r.data : []); } catch (_) { return []; } }
-  Future<bool> saveHours(List<Map<String,dynamic>> p) async { try { await _d.post('/api/admin/settings/business-hours', data: p); return true; } catch (_) { return false; } }
-  Future<List<Map<String,dynamic>>> getHolidays() async { try { final r = await _d.get('/api/admin/settings/holidays'); return List<Map<String,dynamic>>.from(r.data is List ? r.data : []); } catch (_) { return []; } }
-  Future<bool> addHoliday(String name, String date) async { try { await _d.post('/api/admin/settings/holidays', data: {'name': name, 'holidayDate': date}); return true; } catch (_) { return false; } }
-  Future<bool> delHoliday(int id) async { try { await _d.delete('/api/admin/settings/holidays/$id'); return true; } catch (_) { return false; } }
-  Future<Map<String,dynamic>?> getAR() async { try { final r = await _d.get('/api/admin/settings/auto-responder'); return r.data; } catch (_) { return null; } }
-  Future<bool> setAR(bool en, String msg) async { try { await _d.post('/api/admin/settings/auto-responder', data: {'enabled': en, 'message': msg}); return true; } catch (_) { return false; } }
-  Future<List<Map<String,dynamic>>> getCanned({String? cat}) async { try { final r = await _d.get('/api/admin/config/canned-responses', queryParameters: {if (cat != null) 'category': cat}); return List<Map<String,dynamic>>.from(r.data is List ? r.data : []); } catch (_) { return []; } }
-  Future<bool> addCanned(String title, String content, String? cat) async { try { await _d.post('/api/admin/config/canned-responses', data: {'title': title, 'content': content, if (cat != null) 'category': cat}); return true; } catch (_) { return false; } }
-  Future<bool> delCanned(int id) async { try { await _d.delete('/api/admin/config/canned-responses/$id'); return true; } catch (_) { return false; } }
-  Future<List<Map<String,dynamic>>> getCats() async { try { final r = await _d.get('/api/admin/config/categories'); return List<Map<String,dynamic>>.from(r.data is List ? r.data : []); } catch (_) { return []; } }
-  Future<bool> addCat(String name, String? desc) async { try { await _d.post('/api/admin/config/categories', data: {'name': name, if (desc != null) 'description': desc}); return true; } catch (_) { return false; } }
-  Future<bool> toggleCat(int id) async { try { await _d.patch('/api/admin/config/categories/$id/toggle'); return true; } catch (_) { return false; } }
-  Future<List<Map<String,dynamic>>> getPlans() async { try { final r = await _d.get('/api/subscription-plans'); return List<Map<String,dynamic>>.from(r.data is List ? r.data : []); } catch (_) { return []; } }
-  Future<bool> addPlan(Map<String,dynamic> data) async { try { await _d.post('/api/subscription-plans', data: data); return true; } catch (_) { return false; } }
-  Future<bool> delPlan(int id) async { try { await _d.delete('/api/subscription-plans/$id'); return true; } catch (_) { return false; } }
+// ─── Master Time Ranges ───────────────────────────────────────────────────────
+
+class _MasterTimeRangesScreen extends StatefulWidget {
+  const _MasterTimeRangesScreen();
+  @override
+  State<_MasterTimeRangesScreen> createState() => _MasterTimeRangesScreenState();
+}
+
+class _MasterTimeRangesScreenState extends State<_MasterTimeRangesScreen> {
+  final _svc = ConsultantService();
+  final _slotCtrl = TextEditingController();
+  final List<int> _durations = const [60, 120, 180];
+
+  List<Map<String, dynamic>> _slots = [];
+  int _duration = 60;
+  bool _loading = true;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _slotCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    final raw = await _svc.getAllMasterSlots();
+    final items = raw
+        .map<Map<String, dynamic>>((row) => {
+              'id': _toInt(row['id']) ?? 0,
+              'timeRange': _normalizeTimeRange(
+                row['timeRange'] ?? row['slotTime'],
+                durationMinutes:
+                    _toInt(row['durationMinutes']) ?? _toInt(row['duration']),
+              ),
+              'durationMinutes':
+                  _slotDuration(row, fallback: _toInt(row['duration']) ?? 60),
+            })
+        .where((row) => (row['timeRange'] as String).trim().isNotEmpty)
+        .toList()
+      ..sort((a, b) => _startMinutes(a['timeRange'] as String)
+          .compareTo(_startMinutes(b['timeRange'] as String)));
+
+    if (!mounted) return;
+    setState(() {
+      _slots = items;
+      _loading = false;
+    });
+  }
+
+  int _slotDuration(Map<String, dynamic> row, {int fallback = 60}) {
+    final durationMinutes = _toInt(row['durationMinutes']);
+    if (durationMinutes != null && durationMinutes > 0) return durationMinutes;
+    final duration = _toInt(row['duration']);
+    if (duration != null) {
+      if (duration >= 60) return duration;
+      if (duration >= 1 && duration <= 3) return duration * 60;
+    }
+    return fallback;
+  }
+
+  String _normalizeTimeRange(dynamic raw, {dynamic durationMinutes}) {
+    final value = (raw ?? '').toString().trim();
+    if (value.isEmpty) return '';
+    final parts = value.split('-').map((e) => e.trim()).toList();
+    if (parts.length == 2 && parts.first.isNotEmpty && parts.last.isNotEmpty) {
+      return '${_normalizeDisplayTime(parts.first)} - ${_normalizeDisplayTime(parts.last)}';
+    }
+    final start = _parseClockMinutes(value);
+    final duration = _toInt(durationMinutes) ?? 60;
+    if (start == null) return value;
+    return '${_formatMinutes(start)} - ${_formatMinutes(start + duration)}';
+  }
+
+  String _normalizeDisplayTime(String value) {
+    final mins = _parseClockMinutes(value);
+    return mins == null ? value : _formatMinutes(mins);
+  }
+
+  int? _parseClockMinutes(String value) {
+    final clean = value.trim().toUpperCase();
+    if (clean.isEmpty) return null;
+    try {
+      return DateFormat('h:mm a').parseStrict(clean).hour * 60 +
+          DateFormat('h:mm a').parseStrict(clean).minute;
+    } catch (_) {}
+    try {
+      final parsed = DateFormat('H:mm').parseStrict(clean);
+      return parsed.hour * 60 + parsed.minute;
+    } catch (_) {}
+    return null;
+  }
+
+  int _startMinutes(String range) {
+    final start = range.split('-').first.trim();
+    return _parseClockMinutes(start) ?? 0;
+  }
+
+  String _formatMinutes(int minutes) {
+    final normalized = ((minutes % (24 * 60)) + (24 * 60)) % (24 * 60);
+    final hour = normalized ~/ 60;
+    final minute = normalized % 60;
+    final period = hour >= 12 ? 'PM' : 'AM';
+    final displayHour = hour % 12 == 0 ? 12 : hour % 12;
+    return '$displayHour:${minute.toString().padLeft(2, '0')} $period';
+  }
+
+  String _durationLabel(int minutes) {
+    final hours = minutes ~/ 60;
+    return '$hours hr';
+  }
+
+  Future<void> _pickStartSlot() async {
+    final picked = await showDialog<Map<String, int>>(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => _MasterTimeRangePickerDialog(
+        initialHour: _parseInitialHour(),
+        initialDuration: _duration,
+      ),
+    );
+    if (picked == null) return;
+    final start = picked['start'] ?? _parseInitialHour();
+    final duration = picked['duration'] ?? _duration;
+    final end = start + duration;
+    if (end > 24 * 60) {
+      _snack(context, 'Selected duration must end on the same day.', error: true);
+      return;
+    }
+
+    setState(() {
+      _duration = duration;
+      _slotCtrl.text = _formatMinutes(start);
+    });
+  }
+
+  int _parseInitialHour() {
+    final existing = _parseClockMinutes(_slotCtrl.text.trim());
+    if (existing != null) return existing;
+    return 12 * 60;
+  }
+
+  Future<void> _addRange() async {
+    final startLabel = _slotCtrl.text.trim();
+    final start = _parseClockMinutes(startLabel);
+    if (start == null) {
+      _snack(context, 'Pick a valid slot start time.', error: true);
+      return;
+    }
+
+    final end = start + _duration;
+    if (end > 24 * 60) {
+      _snack(context, 'Selected duration must end on the same day.', error: true);
+      return;
+    }
+
+    final range = '${_formatMinutes(start)} - ${_formatMinutes(end)}';
+    final exists = _slots.any((slot) =>
+        (slot['timeRange'] as String).toUpperCase() == range.toUpperCase());
+    if (exists) {
+      _snack(context, 'That master time range already exists.', error: true);
+      return;
+    }
+
+    setState(() => _saving = true);
+    final ok = await _svc.createMasterSlot(range, duration: _duration);
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (!ok) {
+      _snack(context, 'Failed to add time range.', error: true);
+      return;
+    }
+    _slotCtrl.clear();
+    _snack(context, 'Master time range added');
+    await _load();
+  }
+
+  Future<void> _deleteRange(Map<String, dynamic> slot) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Delete time range?'),
+        content: Text('Delete ${slot['timeRange']}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    final deleted = await _svc.deleteMasterSlot((_toInt(slot['id']) ?? 0));
+    if (!mounted) return;
+    _snack(
+      context,
+      deleted ? 'Time range deleted' : 'Delete failed',
+      error: !deleted,
+    );
+    if (deleted) await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text(
+          'Master Time Slots',
+          style: TextStyle(
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        backgroundColor: AppColors.surface,
+        iconTheme: const IconThemeData(color: AppColors.textPrimary),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: _cardDeco(
+                      bg: const Color(0xFFF8FCFF),
+                      border: const Color(0xFFD8E7F8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Master Time Slots', style: AppTextStyles.h2),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Only admin can create, edit, or delete the master list of bookable time ranges. Duration is stored in backend minutes and used to build consultant-specific slot windows.',
+                          style: AppTextStyles.bodySmall.copyWith(
+                            color: AppColors.textSecondary,
+                            height: 1.55,
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        Row(
+                          children: _durations
+                              .map(
+                                (minutes) => Expanded(
+                                  child: Padding(
+                                    padding: EdgeInsets.only(
+                                      right: minutes == _durations.last ? 0 : 8,
+                                    ),
+                                    child: _durationOption(minutes),
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                        const SizedBox(height: 14),
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final stacked = constraints.maxWidth < 700;
+                            final field = Expanded(
+                              child: TextField(
+                                controller: _slotCtrl,
+                                readOnly: true,
+                                onTap: _pickStartSlot,
+                                decoration: _inp(
+                                  'Start time',
+                                  hint:
+                                      'Pick a ${_durationLabel(_duration).toLowerCase()} slot',
+                                  suffix: IconButton(
+                                    icon: const Icon(Icons.schedule_rounded),
+                                    onPressed: _pickStartSlot,
+                                  ),
+                                ),
+                              ),
+                            );
+                            final button = SizedBox(
+                              height: 52,
+                              child: FilledButton(
+                                onPressed: _saving ? null : _addRange,
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: AppColors.primaryDark,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                child: _saving
+                                    ? const SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : const Text(
+                                        'Add Time Range',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                              ),
+                            );
+                            if (stacked) {
+                              return Column(
+                                children: [
+                                  Row(children: [field]),
+                                  const SizedBox(height: 12),
+                                  SizedBox(width: double.infinity, child: button),
+                                ],
+                              );
+                            }
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                field,
+                                const SizedBox(width: 12),
+                                button,
+                              ],
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    decoration: _cardDeco(),
+                    clipBehavior: Clip.antiAlias,
+                    child: _slots.isEmpty
+                        ? const Padding(
+                            padding: EdgeInsets.all(28),
+                            child: EmptyState(
+                              icon: Icons.schedule_outlined,
+                              title: 'No master time ranges yet',
+                              subtitle:
+                                  'Create a slot duration and add the first time range.',
+                            ),
+                          )
+                        : SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                minWidth:
+                                    MediaQuery.of(context).size.width - 32,
+                              ),
+                              child: DataTable(
+                                headingRowColor: MaterialStateProperty.all(
+                                  const Color(0xFFF6F8FC),
+                                ),
+                                columnSpacing: 28,
+                                columns: const [
+                                  DataColumn(
+                                    label: Text(
+                                      'ID',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'TIME RANGE',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'DURATION',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'ACTIONS',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                                rows: _slots
+                                    .map(
+                                      (slot) => DataRow(
+                                        cells: [
+                                          DataCell(
+                                            Text(
+                                              '#${slot['id']}',
+                                              style: const TextStyle(
+                                                color: AppColors.primaryDark,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ),
+                                          DataCell(
+                                            Text(
+                                              slot['timeRange'] as String,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w700,
+                                                color: AppColors.textPrimary,
+                                              ),
+                                            ),
+                                          ),
+                                          DataCell(
+                                            Text(
+                                              _durationLabel(
+                                                _toInt(
+                                                      slot['durationMinutes'],
+                                                    ) ??
+                                                    60,
+                                              ),
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ),
+                                          DataCell(
+                                            OutlinedButton(
+                                              onPressed: () => _deleteRange(slot),
+                                              style: OutlinedButton.styleFrom(
+                                                foregroundColor:
+                                                    const Color(0xFFDC2626),
+                                                side: const BorderSide(
+                                                  color: Color(0xFFF8B4B4),
+                                                ),
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(10),
+                                                ),
+                                              ),
+                                              child: const Text('Delete'),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    )
+                                    .toList(),
+                              ),
+                            ),
+                          ),
+                  ),
+                ],
+              ),
+            ),
+    );
+  }
+
+  Widget _durationOption(int minutes) {
+    final selected = _duration == minutes;
+    return InkWell(
+      onTap: () => setState(() => _duration = minutes),
+      borderRadius: BorderRadius.circular(12),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFFEAF8F7) : AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? AppColors.primaryDark : AppColors.border,
+          ),
+        ),
+        child: Text(
+          _durationLabel(minutes),
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w800,
+            color:
+                selected ? AppColors.primaryDark : AppColors.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MasterTimeRangePickerDialog extends StatefulWidget {
+  final int initialHour;
+  final int initialDuration;
+
+  const _MasterTimeRangePickerDialog({
+    required this.initialHour,
+    required this.initialDuration,
+  });
+
+  @override
+  State<_MasterTimeRangePickerDialog> createState() =>
+      _MasterTimeRangePickerDialogState();
+}
+
+class _MasterTimeRangePickerDialogState
+    extends State<_MasterTimeRangePickerDialog> {
+  late int _selectedStartMinutes;
+  late int _duration;
+
+  final List<int> _durations = const [60, 120, 180];
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedStartMinutes = widget.initialHour;
+    _duration = widget.initialDuration;
+    if (_selectedStartMinutes + _duration > 24 * 60) {
+      _selectedStartMinutes = (24 * 60) - _duration;
+    }
+  }
+
+  bool get _isAm => _selectedStartMinutes < 12 * 60;
+
+  List<int> get _hoursForPeriod {
+    final base = _isAm ? 0 : 12;
+    return List<int>.generate(12, (index) => (base + index) * 60)
+        .where((minutes) => minutes + _duration <= 24 * 60)
+        .toList();
+  }
+
+  String _formatMinutes(int minutes) {
+    final normalized = ((minutes % (24 * 60)) + (24 * 60)) % (24 * 60);
+    final hour = normalized ~/ 60;
+    final minute = normalized % 60;
+    final period = hour >= 12 ? 'PM' : 'AM';
+    final displayHour = hour % 12 == 0 ? 12 : hour % 12;
+    return '$displayHour:${minute.toString().padLeft(2, '0')} $period';
+  }
+
+  String get _rangeLabel =>
+      '${_formatMinutes(_selectedStartMinutes)} - ${_formatMinutes(_selectedStartMinutes + _duration)}';
+
+  void _changePeriod(bool am) {
+    final currentHour = (_selectedStartMinutes ~/ 60) % 12;
+    final mappedHour = am ? currentHour : currentHour + 12;
+    final next = mappedHour * 60;
+    setState(() {
+      _selectedStartMinutes = next + _duration > 24 * 60
+          ? ((am ? 11 : 8) * 60)
+          : next;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hours = _hoursForPeriod;
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(28),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.18),
+                blurRadius: 40,
+                offset: const Offset(0, 18),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+                decoration: const BoxDecoration(
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+                  gradient: LinearGradient(
+                    colors: [Color(0xFF2854C5), Color(0xFF24C2A5)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.18),
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.circle, size: 8, color: Color(0xFFFDE68A)),
+                          SizedBox(width: 8),
+                          Text(
+                            'SELECT START TIME',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.4,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      _rangeLabel,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 28,
+                        height: 1.15,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Pick the starting hour. End time is added automatically.',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        height: 1.5,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        ..._durations.map(
+                          (minutes) => Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: _pillOption(
+                              label: '${minutes ~/ 60} hr',
+                              selected: _duration == minutes,
+                              onTap: () {
+                                setState(() {
+                                  _duration = minutes;
+                                  if (_selectedStartMinutes + _duration >
+                                      24 * 60) {
+                                    _selectedStartMinutes =
+                                        (24 * 60) - _duration;
+                                  }
+                                });
+                              },
+                            ),
+                          ),
+                        ),
+                        const Spacer(),
+                        Column(
+                          children: [
+                            _periodChip('AM', _isAm, () => _changePeriod(true)),
+                            const SizedBox(height: 8),
+                            _periodChip('PM', !_isAm, () => _changePeriod(false)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+                child: Column(
+                  children: [
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: hours
+                          .map(
+                            (minutes) => _hourCell(
+                              label:
+                                  '${((minutes ~/ 60) % 12 == 0) ? 12 : ((minutes ~/ 60) % 12)}',
+                              selected: _selectedStartMinutes == minutes,
+                              onTap: () => setState(
+                                () => _selectedStartMinutes = minutes,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.pop(context),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppColors.textSecondary,
+                              side: const BorderSide(color: AppColors.border),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: const Text(
+                              'Cancel',
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: () => Navigator.pop(context, {
+                              'start': _selectedStartMinutes,
+                              'duration': _duration,
+                            }),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: AppColors.primaryDark,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: const Text(
+                              'Use This Slot',
+                              style: TextStyle(fontWeight: FontWeight.w800),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _pillOption({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? Colors.white : Colors.white.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? AppColors.primaryDark : Colors.white,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _periodChip(
+    String label,
+    bool selected,
+    VoidCallback onTap,
+  ) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        width: 48,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? Colors.white : Colors.white.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+        ),
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: selected ? AppColors.primaryDark : Colors.white,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _hourCell({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        width: 68,
+        height: 56,
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primaryDark : const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: selected ? AppColors.primaryDark : const Color(0xFFD9E2EC),
+          ),
+        ),
+        child: Center(
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? Colors.white : AppColors.textPrimary,
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 // ─── Business Hours ───────────────────────────────────────────────────────────
@@ -2819,7 +4084,7 @@ class _BusinessHoursScreen extends StatefulWidget {
 }
 
 class _BusinessHoursScreenState extends State<_BusinessHoursScreen> {
-  final _api = _SA();
+  final _api = AdminService();
   List<Map<String,dynamic>> _hours = [];
   bool _loading = true, _saving = false;
   static const _days = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'];
@@ -2830,7 +4095,7 @@ class _BusinessHoursScreenState extends State<_BusinessHoursScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final raw = await _api.getHours();
+    final raw = await _api.getBusinessHours();
     if (raw.isEmpty) {
       _hours = _days.map((d) => {'dayOfWeek': d, 'openTime': '09:00', 'closeTime': '18:00', 'workingDay': d != 'SATURDAY' && d != 'SUNDAY', 'id': 0}).toList();
     } else {
@@ -2849,9 +4114,25 @@ class _BusinessHoursScreenState extends State<_BusinessHoursScreen> {
   }
 
   Future<void> _save() async {
+    for (final h in _hours.where((item) => item['workingDay'] == true)) {
+      final open = (h['openTime'] ?? '').toString();
+      final close = (h['closeTime'] ?? '').toString();
+      final openParts = open.split(':');
+      final closeParts = close.split(':');
+      if (openParts.length != 2 || closeParts.length != 2) {
+        _snack(context, 'Each working day needs a valid opening and closing time.', error: true);
+        return;
+      }
+      final openMinutes = (int.tryParse(openParts[0]) ?? 0) * 60 + (int.tryParse(openParts[1]) ?? 0);
+      final closeMinutes = (int.tryParse(closeParts[0]) ?? 0) * 60 + (int.tryParse(closeParts[1]) ?? 0);
+      if (closeMinutes <= openMinutes) {
+        _snack(context, 'Closing time must be later than opening time.', error: true);
+        return;
+      }
+    }
     setState(() => _saving = true);
     Map<String,dynamic> tp(String t) { final p = t.split(':'); return {'hour': int.parse(p[0]), 'minute': int.parse(p[1]), 'second': 0, 'nano': 0}; }
-    final ok = await _api.saveHours(_hours.map((h) => {'dayOfWeek': h['dayOfWeek'], 'startTime': tp(h['openTime'] as String), 'endTime': tp(h['closeTime'] as String), 'workingDay': h['workingDay']}).toList());
+    final ok = await _api.updateBusinessHours(_hours.map((h) => {'dayOfWeek': h['dayOfWeek'], 'startTime': tp(h['openTime'] as String), 'endTime': tp(h['closeTime'] as String), 'workingDay': h['workingDay']}).toList());
     if (mounted) { setState(() => _saving = false); _snack(context, ok ? 'Business hours saved' : 'Save failed', error: !ok); }
   }
 
@@ -2880,7 +4161,7 @@ class _BusinessHoursScreenState extends State<_BusinessHoursScreen> {
     ),
   );
 
-  Widget _timePick(String time, VoidCallback onTap) => GestureDetector(onTap: onTap, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7), decoration: BoxDecoration(color: AppColors.surfaceVariant, borderRadius: BorderRadius.circular(8)), child: Text(time, style: AppTextStyles.label.copyWith(color: AppColors.primaryLight))));
+  Widget _timePick(String time, VoidCallback onTap) => GestureDetector(onTap: onTap, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7), decoration: BoxDecoration(color: AppColors.surfaceVariant, borderRadius: BorderRadius.circular(8)), child: Text(_formatClockValue(time), style: AppTextStyles.label.copyWith(color: AppColors.primaryLight))));
 }
 
 // ─── Holidays ─────────────────────────────────────────────────────────────────
@@ -2891,13 +4172,13 @@ class _HolidaysScreen extends StatefulWidget {
 }
 
 class _HolidaysScreenState extends State<_HolidaysScreen> {
-  final _api = _SA();
+  final _api = AdminService();
   List<Map<String,dynamic>> _holidays = [];
   bool _loading = true;
 
   @override
   void initState() { super.initState(); _load(); }
-  Future<void> _load() async { setState(() => _loading = true); _holidays = await _api.getHolidays(); if (mounted) setState(() => _loading = false); }
+  Future<void> _load() async { setState(() => _loading = true); _holidays = List<Map<String,dynamic>>.from(await _api.getHolidays()); if (mounted) setState(() => _loading = false); }
 
   void _addSheet() {
     final nc = TextEditingController(); String? selDate;
@@ -2918,17 +4199,17 @@ class _HolidaysScreenState extends State<_HolidaysScreen> {
     body: _loading ? const Center(child: CircularProgressIndicator())
         : _holidays.isEmpty ? const EmptyState(icon: Icons.beach_access_outlined, title: 'No holidays added')
         : RefreshIndicator(onRefresh: _load, child: ListView.builder(padding: const EdgeInsets.all(14), itemCount: _holidays.length, itemBuilder: (_, i) {
-            final h = _holidays[i];
-            return Container(margin: const EdgeInsets.only(bottom: 8), decoration: _cardDeco(), child: ListTile(
-              leading: Container(padding: const EdgeInsets.all(9), decoration: BoxDecoration(color: const Color(0xFFF97316).withValues(alpha: 0.1), shape: BoxShape.circle), child: const Icon(Icons.beach_access_outlined, color: Color(0xFFF97316), size: 18)),
-              title: Text(h['name'] ?? '', style: AppTextStyles.h4),
-              subtitle: Text(_fmtDate(h['holidayDate']), style: AppTextStyles.caption),
-              trailing: IconButton(icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626)), onPressed: () async {
-                final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: const Text('Delete Holiday?'), content: Text('Delete "${h['name']}"?'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)), onPressed: () => Navigator.pop(context, true), child: const Text('Delete'))]));
-                if (ok == true) { await _api.delHoliday(h['id']); _load(); }
-              }),
-            ));
-          })),
+      final h = _holidays[i];
+      return Container(margin: const EdgeInsets.only(bottom: 8), decoration: _cardDeco(), child: ListTile(
+        leading: Container(padding: const EdgeInsets.all(9), decoration: BoxDecoration(color: const Color(0xFFF97316).withValues(alpha: 0.1), shape: BoxShape.circle), child: const Icon(Icons.beach_access_outlined, color: Color(0xFFF97316), size: 18)),
+        title: Text(h['name'] ?? '', style: AppTextStyles.h4),
+        subtitle: Text(_fmtDate(h['holidayDate']), style: AppTextStyles.caption),
+        trailing: IconButton(icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626)), onPressed: () async {
+          final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: const Text('Delete Holiday?'), content: Text('Delete "${h['name']}"?'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)), onPressed: () => Navigator.pop(context, true), child: const Text('Delete'))]));
+          if (ok == true) { await _api.delHoliday(h['id']); _load(); }
+        }),
+      ));
+    })),
   );
 }
 
@@ -2940,7 +4221,7 @@ class _AutoResponderScreen extends StatefulWidget {
 }
 
 class _AutoResponderScreenState extends State<_AutoResponderScreen> {
-  final _api = _SA(); final _msgCtrl = TextEditingController();
+  final _api = AdminService(); final _msgCtrl = TextEditingController();
   bool _enabled = false, _loading = true, _saving = false;
 
   @override
@@ -2950,7 +4231,7 @@ class _AutoResponderScreenState extends State<_AutoResponderScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final d = await _api.getAR();
+    final d = await _api.getAutoResponder();
     if (d != null) setState(() { _enabled = d['enabled'] ?? false; _msgCtrl.text = d['message'] ?? ''; });
     if (mounted) setState(() => _loading = false);
   }
@@ -2960,10 +4241,10 @@ class _AutoResponderScreenState extends State<_AutoResponderScreen> {
     backgroundColor: AppColors.background,
     appBar: AppBar(title: const Text('Auto Responder'), backgroundColor: AppColors.surface, iconTheme: const IconThemeData(color: AppColors.textPrimary)),
     body: _loading ? const Center(child: CircularProgressIndicator()) : Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Container(padding: const EdgeInsets.all(16), decoration: _cardDeco(), child: Row(children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Auto Responder', style: AppTextStyles.h4), const SizedBox(height: 4), Text('Auto-reply when a ticket is created', style: AppTextStyles.caption)])), Switch(value: _enabled, activeThumbColor: const Color(0xFF059669), activeTrackColor: const Color(0xFF059669).withValues(alpha: 0.4), onChanged: (v) => setState(() => _enabled = v))])),
+      Container(padding: const EdgeInsets.all(16), decoration: _cardDeco(), child: Row(children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Auto Responder', style: AppTextStyles.h4), const SizedBox(height: 4), Text('Auto-reply when a ticket is created', style: AppTextStyles.caption)])), Switch(value: _enabled, activeThumbColor: AppColors.primary, activeTrackColor: AppColors.primary.withValues(alpha: 0.4), onChanged: (v) => setState(() => _enabled = v))])),
       if (_enabled) ...[const SizedBox(height: 14), Text('Auto-reply message', style: AppTextStyles.label), const SizedBox(height: 8), TextField(controller: _msgCtrl, maxLines: 5, decoration: _inp('Your auto-reply message...', icon: Icons.message_outlined))],
       const SizedBox(height: 20),
-      SizedBox(width: double.infinity, height: 48, child: FilledButton(onPressed: _saving ? null : () async { setState(() => _saving = true); final ok = await _api.setAR(_enabled, _msgCtrl.text); setState(() => _saving = false); _snack(context, ok ? 'Saved' : 'Save failed', error: !ok); }, child: _saving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Text('Save Settings'))),
+      SizedBox(width: double.infinity, height: 48, child: FilledButton(onPressed: _saving ? null : () async { setState(() => _saving = true); final ok = await _api.setAutoResponder(_enabled, _msgCtrl.text); setState(() => _saving = false); _snack(context, ok ? 'Saved' : 'Save failed', error: !ok); }, child: _saving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Text('Save Settings', style: TextStyle(fontWeight: FontWeight.w700)))),
     ])),
   );
 }
@@ -2976,13 +4257,13 @@ class _CannedResponsesScreen extends StatefulWidget {
 }
 
 class _CannedResponsesScreenState extends State<_CannedResponsesScreen> {
-  final _api = _SA();
+  final _api = AdminService();
   List<Map<String,dynamic>> _responses = [];
   bool _loading = true;
 
   @override
   void initState() { super.initState(); _load(); }
-  Future<void> _load() async { setState(() => _loading = true); _responses = await _api.getCanned(); if (mounted) setState(() => _loading = false); }
+  Future<void> _load() async { setState(() => _loading = true); _responses = List<Map<String,dynamic>>.from(await _api.getCannedResponses()); if (mounted) setState(() => _loading = false); }
 
   void _addSheet() {
     final tc = TextEditingController(), cc = TextEditingController(), catC = TextEditingController();
@@ -2994,7 +4275,7 @@ class _CannedResponsesScreenState extends State<_CannedResponsesScreen> {
       const SizedBox(height: 10),
       TextField(controller: cc, maxLines: 4, decoration: _inp('Response content *', icon: Icons.message_outlined)),
       const SizedBox(height: 16),
-      SizedBox(width: double.infinity, height: 48, child: FilledButton(onPressed: () async { if (tc.text.isEmpty || cc.text.isEmpty) return; final ok = await _api.addCanned(tc.text, cc.text, catC.text.isNotEmpty ? catC.text : null); if (ok && mounted) { Navigator.pop(context); _load(); } }, child: const Text('Add Response'))),
+      SizedBox(width: double.infinity, height: 48, child: FilledButton(onPressed: () async { if (tc.text.isEmpty || cc.text.isEmpty) return; final ok = await _api.createCannedResponse(tc.text, cc.text, catC.text.isNotEmpty ? catC.text : null); if (ok && mounted) { Navigator.pop(context); _load(); } }, child: const Text('Add Response', style: TextStyle(fontWeight: FontWeight.w700)))),
     ])));
   }
 
@@ -3005,14 +4286,14 @@ class _CannedResponsesScreenState extends State<_CannedResponsesScreen> {
     body: _loading ? const Center(child: CircularProgressIndicator())
         : _responses.isEmpty ? const EmptyState(icon: Icons.chat_bubble_outline_rounded, title: 'No canned responses')
         : ListView.builder(padding: const EdgeInsets.all(14), itemCount: _responses.length, itemBuilder: (_, i) {
-            final r = _responses[i];
-            return Container(margin: const EdgeInsets.only(bottom: 8), decoration: _cardDeco(), child: ListTile(
-              leading: Container(padding: const EdgeInsets.all(9), decoration: BoxDecoration(color: AppColors.info.withValues(alpha: 0.1), shape: BoxShape.circle), child: const Icon(Icons.chat_bubble_outline_rounded, color: AppColors.info, size: 16)),
-              title: Text(r['title'] ?? '', style: AppTextStyles.h4),
-              subtitle: Text(r['content'] ?? '', style: AppTextStyles.caption, maxLines: 2, overflow: TextOverflow.ellipsis),
-              trailing: IconButton(icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626), size: 18), onPressed: () async { await _api.delCanned(r['id']); _load(); }),
-            ));
-          }),
+      final r = _responses[i];
+      return Container(margin: const EdgeInsets.only(bottom: 8), decoration: _cardDeco(), child: ListTile(
+        leading: Container(padding: const EdgeInsets.all(9), decoration: BoxDecoration(color: AppColors.info.withValues(alpha: 0.1), shape: BoxShape.circle), child: const Icon(Icons.chat_bubble_outline_rounded, color: AppColors.info, size: 16)),
+        title: Text(r['title'] ?? '', style: AppTextStyles.h4),
+        subtitle: Text(r['content'] ?? '', style: AppTextStyles.caption, maxLines: 2, overflow: TextOverflow.ellipsis),
+        trailing: IconButton(icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626), size: 18), onPressed: () async { await _api.deleteCannedResponse(r['id']); _load(); }),
+      ));
+    }),
   );
 }
 
@@ -3024,13 +4305,32 @@ class _CategoriesScreen extends StatefulWidget {
 }
 
 class _CategoriesScreenState extends State<_CategoriesScreen> {
-  final _api = _SA();
+  final _api = AdminService();
   List<Map<String,dynamic>> _cats = [];
+  final Map<int, Map<String, dynamic>> _inactiveCats = {};
   bool _loading = true;
+
+  bool _isCatActive(Map<String, dynamic> category) =>
+      category['active'] == true || category['isActive'] == true;
 
   @override
   void initState() { super.initState(); _load(); }
-  Future<void> _load() async { setState(() => _loading = true); _cats = await _api.getCats(); if (mounted) setState(() => _loading = false); }
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    final active = List<Map<String,dynamic>>.from(await _api.getCategories());
+    final merged = <Map<String, dynamic>>[
+      ...active,
+      ..._inactiveCats.values.where((item) => !active.any((activeItem) => _toInt(activeItem['id']) == _toInt(item['id']))),
+    ];
+    merged.sort((a, b) {
+      final aActive = _isCatActive(a);
+      final bActive = _isCatActive(b);
+      if (aActive != bActive) return aActive ? -1 : 1;
+      return (a['name'] ?? '').toString().compareTo((b['name'] ?? '').toString());
+    });
+    _cats = merged;
+    if (mounted) setState(() => _loading = false);
+  }
 
   void _addSheet() {
     final nc = TextEditingController(), dc = TextEditingController();
@@ -3040,8 +4340,39 @@ class _CategoriesScreenState extends State<_CategoriesScreen> {
       const SizedBox(height: 10),
       TextField(controller: dc, decoration: _inp('Description (optional)', icon: Icons.description_outlined)),
       const SizedBox(height: 16),
-      SizedBox(width: double.infinity, height: 48, child: FilledButton(onPressed: () async { if (nc.text.isEmpty) return; final ok = await _api.addCat(nc.text, dc.text.isNotEmpty ? dc.text : null); if (ok && mounted) { Navigator.pop(context); _load(); } }, child: const Text('Add Category'))),
+      SizedBox(width: double.infinity, height: 48, child: FilledButton(onPressed: () async { if (nc.text.isEmpty) return; final ok = await _api.createCategory(nc.text, dc.text.isNotEmpty ? dc.text : null); if (ok && mounted) { Navigator.pop(context); _load(); } }, child: const Text('Add Category'))),
     ])));
+  }
+
+  Future<void> _toggleCategory(Map<String, dynamic> category) async {
+    final id = _toInt(category['id']);
+    if (id == null) return;
+    final originalActive = _isCatActive(category);
+    final nextActive = !originalActive;
+    setState(() {
+      _cats = _cats.map((item) => _toInt(item['id']) == id ? {...item, 'active': nextActive, 'isActive': nextActive} : item).toList();
+      if (nextActive) {
+        _inactiveCats.remove(id);
+      } else {
+        _inactiveCats[id] = {...category, 'active': false, 'isActive': false};
+      }
+    });
+    final ok = await _api.toggleCategory(id);
+    if (!ok) {
+      if (!mounted) return;
+      setState(() {
+        _cats = _cats.map((item) => _toInt(item['id']) == id ? {...item, 'active': originalActive, 'isActive': originalActive} : item).toList();
+        if (originalActive) {
+          _inactiveCats.remove(id);
+        } else {
+          _inactiveCats[id] = {...category, 'active': false, 'isActive': false};
+        }
+      });
+      _snack(context, 'Category status update failed', error: true);
+      return;
+    }
+    if (!nextActive) _inactiveCats[id] = {...category, 'active': false, 'isActive': false};
+    if (mounted) _snack(context, nextActive ? 'Category activated' : 'Category moved to inactive');
   }
 
   @override
@@ -3051,14 +4382,14 @@ class _CategoriesScreenState extends State<_CategoriesScreen> {
     body: _loading ? const Center(child: CircularProgressIndicator())
         : _cats.isEmpty ? const EmptyState(icon: Icons.label_outline_rounded, title: 'No categories')
         : ListView.builder(padding: const EdgeInsets.all(14), itemCount: _cats.length, itemBuilder: (_, i) {
-            final c = _cats[i]; final isActive = c['active'] == true;
-            return Container(margin: const EdgeInsets.only(bottom: 8), decoration: _cardDeco(), child: ListTile(
-              leading: Container(padding: const EdgeInsets.all(9), decoration: BoxDecoration(color: (isActive ? const Color(0xFF059669) : AppColors.textMuted).withValues(alpha: 0.1), shape: BoxShape.circle), child: Icon(Icons.label_rounded, color: isActive ? const Color(0xFF059669) : AppColors.textMuted, size: 17)),
-              title: Text(c['name'] ?? '', style: AppTextStyles.h4),
-              subtitle: c['description'] != null ? Text(c['description'], style: AppTextStyles.caption) : null,
-              trailing: Switch(value: isActive, activeThumbColor: const Color(0xFF059669), activeTrackColor: const Color(0xFF059669).withValues(alpha: 0.4), onChanged: (_) async { await _api.toggleCat(c['id']); _load(); }),
-            ));
-          }),
+      final c = _cats[i]; final isActive = _isCatActive(c);
+      return Container(margin: const EdgeInsets.only(bottom: 8), decoration: _cardDeco(), child: ListTile(
+        leading: Container(padding: const EdgeInsets.all(9), decoration: BoxDecoration(color: (isActive ? const Color(0xFF059669) : AppColors.textMuted).withValues(alpha: 0.1), shape: BoxShape.circle), child: Icon(Icons.label_rounded, color: isActive ? const Color(0xFF059669) : AppColors.textMuted, size: 17)),
+        title: Text(c['name'] ?? '', style: AppTextStyles.h4),
+        subtitle: c['description'] != null ? Text(c['description'], style: AppTextStyles.caption) : null,
+        trailing: Switch(value: isActive, activeThumbColor: const Color(0xFF059669), activeTrackColor: const Color(0xFF059669).withValues(alpha: 0.4), onChanged: (_) => _toggleCategory(c)),
+      ));
+    }),
   );
 }
 
@@ -3070,13 +4401,13 @@ class _PlansScreen extends StatefulWidget {
 }
 
 class _PlansScreenState extends State<_PlansScreen> {
-  final _api = _SA();
+  final _api = AdminService();
   List<Map<String,dynamic>> _plans = [];
   bool _loading = true;
 
   @override
   void initState() { super.initState(); _load(); }
-  Future<void> _load() async { setState(() => _loading = true); _plans = await _api.getPlans(); if (mounted) setState(() => _loading = false); }
+  Future<void> _load() async { setState(() => _loading = true); _plans = List<Map<String,dynamic>>.from(await _api.getSubscriptionPlans()); if (mounted) setState(() => _loading = false); }
 
   void _addSheet() {
     final nc = TextEditingController(), oc = TextEditingController(), dc = TextEditingController(), fc = TextEditingController(), tc = TextEditingController();
@@ -3092,7 +4423,9 @@ class _PlansScreenState extends State<_PlansScreen> {
       const SizedBox(height: 16),
       SizedBox(width: double.infinity, height: 48, child: FilledButton(onPressed: () async {
         if (nc.text.isEmpty || oc.text.isEmpty) return;
-        final ok = await _api.addPlan({'name': nc.text, 'originalPrice': double.tryParse(oc.text) ?? 0, if (dc.text.isNotEmpty) 'discountPrice': double.tryParse(dc.text), if (fc.text.isNotEmpty) 'features': fc.text, if (tc.text.isNotEmpty) 'tag': tc.text});
+        final original = double.tryParse(oc.text) ?? 0;
+        final discount = double.tryParse(dc.text) ?? original;
+        final ok = await _api.addSubscriptionPlan({'name': nc.text.trim(), 'originalPrice': original, 'discountPrice': discount, if (fc.text.isNotEmpty) 'features': fc.text.trim(), if (tc.text.isNotEmpty) 'tag': tc.text.trim()});
         if (ok && mounted) { Navigator.pop(context); _load(); }
       }, child: const Text('Create Plan'))),
     ]))));
@@ -3105,23 +4438,26 @@ class _PlansScreenState extends State<_PlansScreen> {
     body: _loading ? const Center(child: CircularProgressIndicator())
         : _plans.isEmpty ? const EmptyState(icon: Icons.card_membership_outlined, title: 'No plans created')
         : ListView.builder(padding: const EdgeInsets.all(14), itemCount: _plans.length, itemBuilder: (_, i) {
-            final p = _plans[i];
-            return Container(margin: const EdgeInsets.only(bottom: 10), decoration: _cardDeco(), child: Padding(padding: const EdgeInsets.all(14), child: Row(children: [
-              Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.card_membership_rounded, color: AppColors.primary, size: 20)),
-              const SizedBox(width: 12),
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [Text(p['name'] ?? '', style: AppTextStyles.h4), if (p['tag'] != null) ...[const SizedBox(width: 6), _chip(p['tag'], const Color(0xFFF59E0B))]]),
-                const SizedBox(height: 4),
-                if (p['discountPrice'] != null && p['discountPrice'] != p['originalPrice']) Row(children: [Text('₹${p['discountPrice']}', style: AppTextStyles.label.copyWith(color: const Color(0xFF059669), fontWeight: FontWeight.w700)), const SizedBox(width: 6), Text('₹${p['originalPrice']}', style: AppTextStyles.caption.copyWith(decoration: TextDecoration.lineThrough))])
-                else Text('₹${p['originalPrice']}', style: AppTextStyles.label.copyWith(color: const Color(0xFF059669), fontWeight: FontWeight.w700)),
-                if (p['features'] != null) Text(p['features'], style: AppTextStyles.caption, maxLines: 1, overflow: TextOverflow.ellipsis),
-              ])),
-              IconButton(icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626), size: 18), onPressed: () async {
-                final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: const Text('Delete Plan?'), content: Text('Delete "${p['name']}"?'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)), onPressed: () => Navigator.pop(context, true), child: const Text('Delete'))]));
-                if (ok == true) { await _api.delPlan(p['id']); _load(); }
-              }),
-            ])));
-          }),
+      final p = _plans[i];
+      final originalPrice = _toDouble(p['originalPrice']);
+      final discountPrice = _toDouble(p['discountPrice'] ?? p['originalPrice']);
+      final hasDiscount = discountPrice < originalPrice;
+      return Container(margin: const EdgeInsets.only(bottom: 10), decoration: _cardDeco(), child: Padding(padding: const EdgeInsets.all(14), child: Row(children: [
+        Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.card_membership_rounded, color: AppColors.primary, size: 20)),
+        const SizedBox(width: 12),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [Text(p['name'] ?? '', style: AppTextStyles.h4), if (p['tag'] != null) ...[const SizedBox(width: 6), _chip(p['tag'], const Color(0xFFF59E0B))]]),
+          const SizedBox(height: 4),
+          if (p['discountPrice'] != null && p['discountPrice'] != p['originalPrice']) Row(children: [Text('₹${p['discountPrice']}', style: AppTextStyles.label.copyWith(color: const Color(0xFF059669), fontWeight: FontWeight.w700)), const SizedBox(width: 6), Text('₹${p['originalPrice']}', style: AppTextStyles.caption.copyWith(decoration: TextDecoration.lineThrough))])
+          else Text('₹${p['originalPrice']}', style: AppTextStyles.label.copyWith(color: const Color(0xFF059669), fontWeight: FontWeight.w700)),
+          if (p['features'] != null) Text(p['features'], style: AppTextStyles.caption, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ])),
+        IconButton(icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626), size: 18), onPressed: () async {
+          final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: const Text('Delete Plan?'), content: Text('Delete "${p['name']}"?'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)), onPressed: () => Navigator.pop(context, true), child: const Text('Delete'))]));
+          if (ok == true) { await _api.deleteSubscriptionPlan(p['id']); _load(); }
+        }),
+      ])));
+    }),
   );
 }
 
@@ -3142,10 +4478,10 @@ class _UserManagementTabState extends State<_UserManagementTab> {
   Timer? _pollTimer;
 
   @override
-  void initState() { 
-    super.initState(); 
-    _load(); 
-    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) => _load(silent: true)); 
+  void initState() {
+    super.initState();
+    _load();
+    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) => _load(silent: true));
   }
 
   @override
@@ -3157,8 +4493,14 @@ class _UserManagementTabState extends State<_UserManagementTab> {
   Future<void> _load({bool silent = false}) async {
     if (!silent) setState(() => _loading = true);
     try {
-      if (_roleFilter == 'ALL') { final res = await _dio.get('/api/users'); final raw = res.data; _users = List<Map<String,dynamic>>.from(raw is List ? raw : (raw['content'] ?? [])); }
-      else { final res = await _dio.get('/api/users/role/$_roleFilter'); final raw = res.data; _users = List<Map<String,dynamic>>.from(raw is List ? raw : (raw['content'] ?? [])); }
+      if (_roleFilter == 'ALL') {
+        final users = await UserService().getAllUsers(size: 200);
+        _users = users.map((u) => u.toJson()).toList();
+      }
+      else {
+        final users = await UserService().getUsersByRole(_roleFilter);
+        _users = users.map((u) => u.toJson()).toList();
+      }
     } catch (_) { _users = []; }
     if (mounted) setState(() => _loading = false);
   }
@@ -3171,7 +4513,15 @@ class _UserManagementTabState extends State<_UserManagementTab> {
       actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)), onPressed: () => Navigator.pop(context, true), child: const Text('Delete'))],
     ));
     if (ok != true) return;
-    try { await _dio.delete('/api/users/${user['id']}'); _snack(context, 'User deleted'); _load(); }
+    try {
+      final success = await UserService().deleteUser(user['id']);
+      if (success) {
+        _snack(context, 'User deleted');
+        _load();
+      } else {
+        _snack(context, 'Delete failed', error: true);
+      }
+    }
     catch (_) { _snack(context, 'Delete failed', error: true); }
   }
 
@@ -3203,17 +4553,17 @@ class _UserManagementTabState extends State<_UserManagementTab> {
       Expanded(child: _loading ? const Center(child: CircularProgressIndicator())
           : _filtered.isEmpty ? const EmptyState(icon: Icons.people_outline_rounded, title: 'No users found')
           : RefreshIndicator(onRefresh: () => _load(), child: ListView.builder(
-              padding: const EdgeInsets.all(14),
-              itemCount: _filtered.length,
-              itemBuilder: (_, i) {
-                final u = _filtered[i]; final role = (u['role'] ?? 'GUEST').toString();
-                return Container(margin: const EdgeInsets.only(bottom: 8), decoration: _cardDeco(), child: ListTile(
-                  leading: CircleAvatar(radius: 20, backgroundColor: _roleColor(role).withValues(alpha: 0.1), child: Text((u['identifier'] ?? '?')[0].toUpperCase(), style: TextStyle(color: _roleColor(role), fontWeight: FontWeight.w700))),
-                  title: Text(u['identifier'] ?? 'Unknown', style: AppTextStyles.label),
-                  subtitle: Row(children: [_chip(role, _roleColor(role)), if (u['consultantId'] != null) ...[const SizedBox(width: 6), _chip('Consultant #${u['consultantId']}', AppColors.info)]]),
-                  trailing: IconButton(icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626), size: 18), onPressed: () => _delete(u)),
-                ));
-              }))),
+          padding: const EdgeInsets.all(14),
+          itemCount: _filtered.length,
+          itemBuilder: (_, i) {
+            final u = _filtered[i]; final role = (u['role'] ?? 'GUEST').toString();
+            return Container(margin: const EdgeInsets.only(bottom: 8), decoration: _cardDeco(), child: ListTile(
+              leading: CircleAvatar(radius: 20, backgroundColor: _roleColor(role).withValues(alpha: 0.1), child: Text((u['identifier'] ?? '?')[0].toUpperCase(), style: TextStyle(color: _roleColor(role), fontWeight: FontWeight.w700))),
+              title: Text(u['identifier'] ?? 'Unknown', style: AppTextStyles.label),
+              subtitle: Row(children: [_chip(role, _roleColor(role)), if (u['consultantId'] != null) ...[const SizedBox(width: 6), _chip('Consultant #${u['consultantId']}', AppColors.info)]]),
+              trailing: IconButton(icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626), size: 18), onPressed: () => _delete(u)),
+            ));
+          }))),
     ]),
   );
 }
@@ -3231,7 +4581,7 @@ class _ProfileSecurityScreenState extends State<_ProfileSecurityScreen> with Sin
   late TabController _tabs;
 
   @override
-  void initState() { super.initState(); _tabs = TabController(length: 2, vsync: this); }
+  void initState() { super.initState(); _tabs = TabController(length: 3, vsync: this); }
   @override
   void dispose() { _tabs.dispose(); super.dispose(); }
 
@@ -3241,10 +4591,11 @@ class _ProfileSecurityScreenState extends State<_ProfileSecurityScreen> with Sin
     appBar: AppBar(
       title: const Text('Account Settings', style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w700)),
       backgroundColor: AppColors.surface, iconTheme: const IconThemeData(color: AppColors.textPrimary),
-      bottom: TabBar(controller: _tabs, labelColor: AppColors.primaryLight, unselectedLabelColor: AppColors.textMuted, indicatorColor: AppColors.primaryLight, tabs: const [Tab(icon: Icon(Icons.person_outline_rounded, size: 18), text: 'Profile'), Tab(icon: Icon(Icons.lock_outline_rounded, size: 18), text: 'Security')]),
+      bottom: TabBar(controller: _tabs, labelColor: AppColors.primaryLight, unselectedLabelColor: AppColors.textMuted, indicatorColor: AppColors.primaryLight, tabs: const [Tab(icon: Icon(Icons.person_outline_rounded, size: 18), text: 'Profile'), Tab(icon: Icon(Icons.notifications_outlined, size: 18), text: 'Notifications'), Tab(icon: Icon(Icons.lock_outline_rounded, size: 18), text: 'Security')]),
     ),
     body: TabBarView(controller: _tabs, children: [
-      _ProfileForm(),
+      const AdminProfileSettingsScreen(),
+      const _NotificationSettingsTab(),
       _PasswordForm(),
     ]),
   );
@@ -3255,35 +4606,259 @@ class _ProfileForm extends StatefulWidget {
 }
 
 class _ProfileFormState extends State<_ProfileForm> {
-  final _nameC = TextEditingController(), _locC = TextEditingController();
+  final _nameC = TextEditingController(), _locC = TextEditingController(), _emailC = TextEditingController(), _phoneC = TextEditingController();
   bool _loading = true, _saving = false;
+  int? _userId;
+  String? _profileImageUrl;
+  String? _memberSince;
+  String? _role;
+  String? _currentPlanName;
+  List<Map<String, dynamic>> _plans = [];
+  int? _selectedPlanId;
+  XFile? _pickedImage;
 
   @override
   void initState() { super.initState(); _load(); }
 
+  @override
+  void dispose() {
+    _nameC.dispose();
+    _locC.dispose();
+    _emailC.dispose();
+    _phoneC.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
+    setState(() => _loading = true);
     try {
-      final res = await _dio.get('/api/users/me'); final u = res.data;
-      // Try to get onboarding profile
-      final userId = u['id'] ?? u['userId'];
-      if (userId != null) { try { final op = await _dio.get('/api/onboarding/$userId'); final d = op.data; _nameC.text = d['name'] ?? ''; _locC.text = d['location'] ?? ''; } catch (_) {} }
+      final me = await UserService().getMe();
+      if (me == null) throw 'User not found';
+      _userId = me.id;
+      _role = me.role;
+      _emailC.text = me.identifier ?? '';
+
+      if (_userId != null) {
+        try {
+          final data = await OnboardingService().getProfile(_userId!);
+          if (data != null) {
+            _nameC.text = data.name;
+            _locC.text = data.location ?? '';
+            if ((data.email ?? '').trim().isNotEmpty) _emailC.text = data.email ?? '';
+            _phoneC.text = data.phoneNumber ?? '';
+            _profileImageUrl = data.photoUrl?.trim().isEmpty ?? true ? null : data.photoUrl;
+            // createdAt not on OnboardingProfile — leave _memberSince as-is
+            if (data.subscriptionPlanId != null) {
+              _selectedPlanId = data.subscriptionPlanId;
+              // subscriptionPlanName not on OnboardingProfile — resolve from plans list below
+            }
+          }
+        } catch (_) {}
+      }
+
+      try {
+        _plans = await AdminService().getSubscriptionPlans();
+        // Resolve plan name from id now that plans are loaded
+        if (_selectedPlanId != null && _currentPlanName == null) {
+          final matched = _plans.firstWhere(
+                (p) => (p['id'] as num?)?.toInt() == _selectedPlanId,
+            orElse: () => <String, dynamic>{},
+          );
+          if (matched.isNotEmpty) {
+            _currentPlanName = matched['name']?.toString();
+          }
+        }
+      } catch (_) {
+        _plans = [];
+      }
     } catch (_) {}
     if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _pickImage() async {
+    final picker = ImagePicker();
+    final image = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    if (image == null || !mounted) return;
+    setState(() => _pickedImage = image);
+  }
+
+  Future<void> _save() async {
+    if ((_nameC.text).trim().isEmpty) { _snack(context, 'Full name is required', error: true); return; }
+    if (_emailC.text.trim().isEmpty || !_emailC.text.contains('@')) { _snack(context, 'Enter a valid email', error: true); return; }
+    if (_phoneC.text.trim().isEmpty || !RegExp(r'^\d{10}$').hasMatch(_phoneC.text.trim())) { _snack(context, 'Phone number must be 10 digits', error: true); return; }
+    if (_userId == null) { _snack(context, 'User profile could not be loaded', error: true); return; }
+
+    setState(() => _saving = true);
+    try {
+      final data = {
+        'name': _nameC.text.trim(),
+        'location': _locC.text.trim(),
+        'email': _emailC.text.trim().toLowerCase(),
+        'phoneNumber': _phoneC.text.trim(),
+        if (_selectedPlanId != null) 'subscriptionPlanId': _selectedPlanId.toString(),
+      };
+
+      MultipartFile? file;
+      if (_pickedImage != null) {
+        file = await MultipartFile.fromFile(_pickedImage!.path, filename: _pickedImage!.name);
+      }
+
+      final ok = await OnboardingService().updateProfile(_userId!, data, profilePhoto: file);
+      if (ok) {
+        _profileImageUrl = _pickedImage?.path ?? _profileImageUrl;
+        _pickedImage = null;
+        if (mounted) {
+          _snack(context, 'Profile updated');
+          _load();
+        }
+      } else {
+        throw 'Update failed';
+      }
+    } catch (error) {
+      if (mounted) _snack(context, _apiError(error, fallback: 'Profile update failed'), error: true);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  ImageProvider? _profileImageProvider() {
+    if (_pickedImage != null) return FileImage(File(_pickedImage!.path));
+    if (_profileImageUrl == null || _profileImageUrl!.isEmpty) return null;
+    if (_profileImageUrl!.startsWith('http')) return NetworkImage(_profileImageUrl!);
+    return FileImage(File(_profileImageUrl!));
   }
 
   @override
   Widget build(BuildContext context) => _loading ? const Center(child: CircularProgressIndicator()) : SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     Center(child: Stack(alignment: Alignment.bottomRight, children: [
-      CircleAvatar(radius: 50, backgroundColor: AppColors.primary.withValues(alpha: 0.1), child: const Icon(Icons.person_rounded, size: 50, color: AppColors.primary)),
-      Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: AppColors.primaryLight, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)), child: const Icon(Icons.camera_alt_rounded, size: 14, color: Colors.white)),
+      CircleAvatar(radius: 50, backgroundColor: AppColors.primary.withValues(alpha: 0.1), backgroundImage: _profileImageProvider(), child: _profileImageProvider() == null ? const Icon(Icons.person_rounded, size: 50, color: AppColors.primary) : null),
+      GestureDetector(onTap: _pickImage, child: Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: AppColors.primaryLight, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)), child: const Icon(Icons.camera_alt_rounded, size: 14, color: Colors.white))),
     ])),
     const SizedBox(height: 24),
     TextField(controller: _nameC, decoration: _inp('Full Name', icon: Icons.person_outline_rounded)),
     const SizedBox(height: 12),
+    TextField(controller: _emailC, keyboardType: TextInputType.emailAddress, decoration: _inp('Email', icon: Icons.email_outlined)),
+    const SizedBox(height: 12),
+    TextField(controller: _phoneC, keyboardType: TextInputType.phone, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], decoration: _inp('Phone Number', icon: Icons.phone_outlined)),
+    const SizedBox(height: 12),
     TextField(controller: _locC, decoration: _inp('Location', icon: Icons.location_on_outlined)),
+    if (_plans.isNotEmpty) ...[
+      const SizedBox(height: 12),
+      DropdownButtonFormField<int>(
+        initialValue: _selectedPlanId,
+        decoration: _inp('Subscription Plan', icon: Icons.card_membership_rounded),
+        items: _plans.where((plan) => _toInt(plan['id']) != null).map((plan) => DropdownMenuItem<int>(value: _toInt(plan['id'])!, child: Text('${plan['name']} (₹${_toDouble(plan['discountPrice'] ?? plan['originalPrice']).toStringAsFixed(0)})'))).toList(),
+        onChanged: (value) => setState(() => _selectedPlanId = value),
+      ),
+    ],
+    const SizedBox(height: 18),
+    Container(padding: const EdgeInsets.all(14), decoration: _cardDeco(), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if ((_role ?? '').isNotEmpty) _info('Role', _role!),
+      if ((_currentPlanName ?? '').isNotEmpty) _info('Current Plan', _currentPlanName!),
+      if ((_memberSince ?? '').isNotEmpty) _info('Member Since', _fmtDate(_memberSince)),
+    ])),
     const SizedBox(height: 20),
-    SizedBox(width: double.infinity, height: 48, child: FilledButton(onPressed: _saving ? null : () async { setState(() => _saving = true); await Future.delayed(const Duration(milliseconds: 800)); setState(() => _saving = false); _snack(context, 'Profile updated'); }, child: _saving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Text('Save Profile'))),
+    SizedBox(width: double.infinity, height: 48, child: FilledButton(onPressed: _saving ? null : _save, child: _saving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Text('Save Profile'))),
   ]));
+
+  Widget _info(String label, String value) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Row(children: [
+      SizedBox(width: 110, child: Text(label, style: AppTextStyles.caption)),
+      Expanded(child: Text(value, style: AppTextStyles.label)),
+    ]),
+  );
+}
+
+class _NotificationSettingsTab extends StatefulWidget {
+  const _NotificationSettingsTab();
+  @override State<_NotificationSettingsTab> createState() => _NotificationSettingsTabState();
+}
+
+class _NotificationSettingsTabState extends State<_NotificationSettingsTab> {
+  List<Map<String, dynamic>> _items = [];
+  bool _loading = true;
+
+  @override
+  void initState() { super.initState(); _load(); }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final svc = context.read<NotificationService>();
+      await svc.refresh();
+      _items = svc.notifications.map((n) => n.toJson()).toList();
+    } catch (_) {
+      _items = [];
+    }
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _markRead(int id) async {
+    final svc = context.read<NotificationService>();
+    await svc.markAsRead(id);
+    _items = svc.notifications.map((n) => n.toJson()).toList();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _markAllRead() async {
+    final svc = context.read<NotificationService>();
+    await svc.markAllRead();
+    _items = svc.notifications.map((n) => n.toJson()).toList();
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final unread = _items.where((item) => item['isRead'] != true && item['read'] != true).length;
+    return _loading ? const Center(child: CircularProgressIndicator()) : RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Row(children: [
+            Expanded(child: _StatCard(title: 'Unread', value: '$unread', icon: Icons.mark_email_unread_outlined, color: const Color(0xFF7C3AED))),
+            const SizedBox(width: 12),
+            Expanded(child: _StatCard(title: 'Inbox', value: '${_items.length}', icon: Icons.notifications_outlined, color: AppColors.primaryLight)),
+          ]),
+          const SizedBox(height: 16),
+          if (unread > 0) Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(onPressed: _markAllRead, icon: const Icon(Icons.done_all_rounded, size: 16), label: const Text('Mark all read')),
+          ),
+          if (_items.isEmpty)
+            const EmptyState(icon: Icons.notifications_none_rounded, title: 'No notifications', subtitle: 'Live notification updates will appear here')
+          else
+            ..._items.map((item) {
+              final read = item['isRead'] == true || item['read'] == true;
+              final id = _toInt(item['id']) ?? 0;
+              final title = item['type']?.toString().replaceAll('_', ' ') ?? 'Notification';
+              return Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                decoration: _cardDeco(border: read ? AppColors.border : AppColors.primaryLight.withValues(alpha: 0.25)),
+                child: ListTile(
+                  onTap: read ? null : () => _markRead(id),
+                  leading: CircleAvatar(
+                    backgroundColor: (read ? AppColors.textMuted : AppColors.primaryLight).withValues(alpha: 0.12),
+                    child: Icon(read ? Icons.notifications_none_rounded : Icons.notifications_active_outlined, color: read ? AppColors.textMuted : AppColors.primaryLight, size: 18),
+                  ),
+                  title: Text(title, style: AppTextStyles.label.copyWith(fontWeight: read ? FontWeight.w600 : FontWeight.w700)),
+                  subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const SizedBox(height: 4),
+                    Text((item['message'] ?? '').toString(), style: AppTextStyles.bodySmall),
+                    if ((item['createdAt'] ?? '').toString().isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(_fmtDateTime(item['createdAt']), style: AppTextStyles.caption),
+                    ],
+                  ]),
+                  trailing: read ? const Icon(Icons.done_rounded, color: Color(0xFF059669), size: 18) : TextButton(onPressed: () => _markRead(id), child: const Text('Read')),
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
 }
 
 class _PasswordForm extends StatefulWidget {
@@ -3311,8 +4886,15 @@ class _PasswordFormState extends State<_PasswordForm> {
         if (_newC.text.length < 8) { _snack(context, 'Min 8 characters required', error: true); return; }
         if (_newC.text != _confC.text) { _snack(context, 'Passwords do not match', error: true); return; }
         setState(() => _saving = true);
-        try { await _dio.put('/api/users/change-password', data: {'newPassword': _newC.text, 'confirmPassword': _confC.text}); _newC.clear(); _confC.clear(); _snack(context, 'Password changed successfully', icon: Icons.lock_rounded); }
-        catch (_) { _snack(context, 'Change failed', error: true); }
+        try {
+          final res = await AuthService().changePassword(newPassword: _newC.text, confirmPassword: _confC.text);
+          if (res.success) {
+            _newC.clear(); _confC.clear(); _snack(context, 'Password changed successfully', icon: Icons.lock_rounded);
+          } else {
+            throw res.error ?? 'Change failed';
+          }
+        }
+        catch (error) { _snack(context, error.toString(), error: true); }
         finally { if (mounted) setState(() => _saving = false); }
       },
       child: _saving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Text('Change Password'),
@@ -3354,31 +4936,31 @@ class _SlaBreachedScreenState extends State<SlaBreachedScreen> {
     body: _loading ? const Center(child: CircularProgressIndicator())
         : _tickets.isEmpty ? const EmptyState(icon: Icons.timer_off_rounded, title: 'No SLA breaches', subtitle: 'All tickets are within SLA')
         : RefreshIndicator(onRefresh: _load, child: ListView.builder(
-            padding: const EdgeInsets.all(14),
-            itemCount: _tickets.length,
-            itemBuilder: (_, i) {
-              final t = _tickets[i]; final sla = _calcSla(t);
-              return Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: const Color(0xFFFECACA)), boxShadow: [BoxShadow(color: const Color(0xFFDC2626).withValues(alpha: 0.05), blurRadius: 6, offset: const Offset(0, 2))]),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    const Icon(Icons.timer_off_rounded, color: Color(0xFFDC2626), size: 16), const SizedBox(width: 8),
-                    Expanded(child: Text('#${t.id} — ${t.category}', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
-                    _chip(t.status, getStatusColor(t.status)),
-                  ]),
-                  const SizedBox(height: 6),
-                  Text(t.description ?? '', maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                  const SizedBox(height: 8),
-                  Row(children: [
-                    Icon(Icons.flag_rounded, size: 13, color: getPriorityColor(t.priority)),
-                    const SizedBox(width: 4),
-                    Text(t.priority, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: getPriorityColor(t.priority))),
-                    const Spacer(),
-                    if (sla != null) Text(sla.label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFFB91C1C))),
-                  ]),
-                ]),
-              );
-            })),
+        padding: const EdgeInsets.all(14),
+        itemCount: _tickets.length,
+        itemBuilder: (_, i) {
+          final t = _tickets[i]; final sla = _calcSla(t);
+          return Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: const Color(0xFFFECACA)), boxShadow: [BoxShadow(color: const Color(0xFFDC2626).withValues(alpha: 0.05), blurRadius: 6, offset: const Offset(0, 2))]),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                const Icon(Icons.timer_off_rounded, color: Color(0xFFDC2626), size: 16), const SizedBox(width: 8),
+                Expanded(child: Text('#${t.id} — ${t.category}', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
+                _chip(t.status, getStatusColor(t.status)),
+              ]),
+              const SizedBox(height: 6),
+              Text(t.description ?? '', maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+              const SizedBox(height: 8),
+              Row(children: [
+                Icon(Icons.flag_rounded, size: 13, color: getPriorityColor(t.priority)),
+                const SizedBox(width: 4),
+                Text(t.priority, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: getPriorityColor(t.priority))),
+                const Spacer(),
+                if (sla != null) Text(sla.label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFFB91C1C))),
+              ]),
+            ]),
+          );
+        })),
   );
 }
 
@@ -3416,29 +4998,29 @@ class _EscalatedTicketsScreenState extends State<EscalatedTicketsScreen> {
     body: _loading ? const Center(child: CircularProgressIndicator())
         : _tickets.isEmpty ? const EmptyState(icon: Icons.escalator_warning_rounded, title: 'No escalated tickets')
         : RefreshIndicator(onRefresh: _load, child: ListView.builder(
-            padding: const EdgeInsets.all(14),
-            itemCount: _tickets.length,
-            itemBuilder: (_, i) {
-              final t = _tickets[i];
-              return Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: const Color(0xFFFDE68A))),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    const Icon(Icons.warning_amber_rounded, color: Color(0xFFF97316), size: 16), const SizedBox(width: 8),
-                    Expanded(child: Text('#${t.id} — ${t.category}', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: Color(0xFF92400E)))),
-                    _chip(t.status, getStatusColor(t.status)),
-                  ]),
-                  const SizedBox(height: 6),
-                  Text(t.description ?? '', maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                  const SizedBox(height: 8),
-                  Row(children: [
-                    Icon(Icons.flag_rounded, size: 13, color: getPriorityColor(t.priority)), const SizedBox(width: 4),
-                    Text(t.priority, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: getPriorityColor(t.priority))),
-                    if (t.createdAt != null) ...[const Spacer(), Text(_fmtDate(t.createdAt), style: const TextStyle(fontSize: 10, color: AppColors.textMuted))],
-                  ]),
-                ]),
-              );
-            })),
+        padding: const EdgeInsets.all(14),
+        itemCount: _tickets.length,
+        itemBuilder: (_, i) {
+          final t = _tickets[i];
+          return Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: const Color(0xFFFDE68A))),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                const Icon(Icons.warning_amber_rounded, color: Color(0xFFF97316), size: 16), const SizedBox(width: 8),
+                Expanded(child: Text('#${t.id} — ${t.category}', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: Color(0xFF92400E)))),
+                _chip(t.status, getStatusColor(t.status)),
+              ]),
+              const SizedBox(height: 6),
+              Text(t.description ?? '', maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+              const SizedBox(height: 8),
+              Row(children: [
+                Icon(Icons.flag_rounded, size: 13, color: getPriorityColor(t.priority)), const SizedBox(width: 4),
+                Text(t.priority, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: getPriorityColor(t.priority))),
+                if (t.createdAt != null) ...[const Spacer(), Text(_fmtDate(t.createdAt), style: const TextStyle(fontSize: 10, color: AppColors.textMuted))],
+              ]),
+            ]),
+          );
+        })),
   );
 }
 

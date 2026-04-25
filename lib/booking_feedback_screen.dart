@@ -1,11 +1,7 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 // Note: Adjust the import paths according to your actual project structure
 import 'package:finadvise/app_theme.dart';
-import 'package:finadvise/auth_service.dart';
-import 'package:finadvise/services/onboarding_service.dart';
-import 'package:http/http.dart' as http;
 
 // ════════════════════════════════════════════════════════════════════════════
 // PREMIUM USER PROFILE SCREEN
@@ -87,31 +83,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> with SingleTicker
   Future<void> _saveProfileData() async {
     setState(() => _isSaving = true);
     try {
-      // ════════════════════════════════════════════════════════════════════════
-      // ERROR FIX: Use Map<String, dynamic> instead of Map<String, String>.
-      // Nested arrays (List<Map>) cannot be assigned directly to String fields.
-      // ════════════════════════════════════════════════════════════════════════
-      final Map<String, dynamic> payload = {
-        "name": _nameCtrl.text,
-        "phoneNumber": _phoneCtrl.text,
-        "location": _locationCtrl.text,
-        "dob": _dobCtrl.text.isNotEmpty ? _dobCtrl.text : null,
-        "incomeItems": _incomes,
-        "expenseItems": _expenses,
-      };
-
-      // Convert the payload to a JSON string for the multipart request
-      final String jsonStringData = jsonEncode(payload);
-
-      // Example of actual Multipart Request implementation matching OpenAPI spec
-      /*
-      if (widget.userId != null) {
-        var request = http.MultipartRequest('PUT', Uri.parse('http://52.55.178.31:8081/api/onboarding/${widget.userId}'));
-        request.fields['data'] = jsonStringData; // This securely maps the nested JSON!
-        var response = await request.send();
-      }
-      */
-
       // Simulating API call
       await Future.delayed(const Duration(seconds: 1));
       

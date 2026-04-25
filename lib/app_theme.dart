@@ -4,18 +4,20 @@ import 'package:google_fonts/google_fonts.dart';
 
 class AppColors {
   // Primary Palette
-  static const Color primary = Color(0xFF1E3A8A);
-  static const Color primaryLight = Color(0xFF2563EB);
-  static const Color primaryDark = Color(0xFF1E40AF);
+  static const Color primary = Color(0xFF0F766E);
+  static const Color primaryLight = Color(0xFF14B8A6);
+  static const Color primaryDark = Color(0xFF0D9488);
+  static const Color brandBlue = Color(0xFF2563EB);
 
   // Accent
   static const Color accent = Color(0xFF10B981);
   static const Color accentLight = Color(0xFF34D399);
   static const Color gold = Color(0xFFF59E0B);
+  static const Color secondary = Color(0xFFD97706);
 
   // Danger & Status
   static const Color danger = Color(0xFFEF4444);
-  static const Color warning = Color(0xFFF97316);
+  static const Color warning = Color(0xFFD97706);
   static const Color success = Color(0xFF22C55E);
   static const Color info = Color(0xFF06B6D4);
 
@@ -45,6 +47,44 @@ class AppColors {
   static const Color priorityCritical = Color(0xFF7C0000);
 }
 
+class AppGradients {
+  static const LinearGradient primary = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [AppColors.primary, AppColors.brandBlue],
+  );
+
+  static const LinearGradient portalBrand = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF0F172A), AppColors.primary, AppColors.brandBlue],
+  );
+
+  static const LinearGradient premium = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF92400E), Color(0xFFB45309), AppColors.secondary, AppColors.gold],
+  );
+}
+
+class AppShadows {
+  // Matches web: --shadow-sm/md/xl (approx)
+  static const List<BoxShadow> sm = [
+    BoxShadow(color: Color(0x0D000000), blurRadius: 2, offset: Offset(0, 1)),
+  ];
+  static const List<BoxShadow> md = [
+    BoxShadow(color: Color(0x1A000000), blurRadius: 6, offset: Offset(0, 4)),
+    BoxShadow(color: Color(0x0F000000), blurRadius: 4, offset: Offset(0, 2)),
+  ];
+  static const List<BoxShadow> xl = [
+    BoxShadow(color: Color(0x26000000), blurRadius: 25, offset: Offset(0, 20)),
+    BoxShadow(color: Color(0x14000000), blurRadius: 10, offset: Offset(0, 10)),
+  ];
+  static const List<BoxShadow> modal = [
+    BoxShadow(color: Color(0x590F172A), blurRadius: 80, offset: Offset(0, 32)),
+  ];
+}
+
 class AppTheme {
   static ThemeData get lightTheme {
     return ThemeData(
@@ -54,7 +94,6 @@ class AppTheme {
         primary: AppColors.primary,
         secondary: AppColors.accent,
         surface: AppColors.surface,
-        background: AppColors.background,
         error: AppColors.danger,
         brightness: Brightness.light,
       ),
@@ -107,7 +146,7 @@ class AppTheme {
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: AppColors.primaryLight,
+          backgroundColor: AppColors.primary,
           foregroundColor: Colors.white,
           elevation: 0,
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),

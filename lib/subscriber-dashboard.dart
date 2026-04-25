@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'auth_service.dart';
+import 'services/services.dart';
 import 'login_screen.dart';
 
 class SubscriberDashboard extends StatelessWidget {

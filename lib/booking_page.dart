@@ -1,942 +1,1409 @@
 // lib/booking_page.dart
-// ════════════════════════════════════════════════════════════════════════════
-// BookingsPage — Flutter (matches web BookingsPage.tsx feature-for-feature)
-//
-// Features:
-//   ✓ isAdmin flag (admin = all bookings, consultant = own bookings)
-//   ✓ Stats strip: Total, Pending, Confirmed, Completed, Revenue
-//   ✓ Filter pills: ALL / PENDING / CONFIRMED / COMPLETED / CANCELLED
-//   ✓ Booking cards: avatar, user, consultant, date, time, mode, amount, status
-//   ✓ Pagination (Spring-style page 0-based)
-//   ✓ Admin actions: Edit status dialog + Delete/Cancel booking
-//   ✓ Pull-to-refresh
-//   ✓ Action snackbar toast
-//   ✓ Empty & error states
-//
-// API endpoints used:
-//   GET /api/bookings               (admin — all, paginated)
-//   GET /api/bookings/consultant/{id}  (consultant — own, paginated)
-//   PUT /api/bookings/{id}          (update status)
-//   DELETE /api/bookings/{id}       (cancel/delete)
-//   GET /api/consultants/{id}       (resolve consultant name)
-//   GET /api/users/{id}             (resolve user name)
-// ════════════════════════════════════════════════════════════════════════════
+// ignore_for_file: use_build_context_synchronously
 
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:dio/dio.dart';
 import 'package:finadvise/api_client.dart';
 import 'package:finadvise/app_theme.dart';
+import 'package:finadvise/booking_answers_screen.dart';
+import 'package:finadvise/models/models.dart';
+import 'package:finadvise/services/booking_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:intl/intl.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// BOOKING MODEL (local — parsed from API response)
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _Booking {
-  final int id;
-  final String userName;
-  final String advisorName;
-  final String date;
-  final String time;
-  final String status;
-  final double amount;
-  final String meetingMode;
-
-  _Booking({
-    required this.id,
-    required this.userName,
-    required this.advisorName,
-    required this.date,
-    required this.time,
-    required this.status,
-    required this.amount,
-    required this.meetingMode,
-  });
-
-  _Booking copyWith({String? status}) => _Booking(
-        id: id,
-        userName: userName,
-        advisorName: advisorName,
-        date: date,
-        time: time,
-        status: status ?? this.status,
-        amount: amount,
-        meetingMode: meetingMode,
-      );
+void _snack(BuildContext ctx, String msg, {bool error = false}) {
+  ScaffoldMessenger.of(ctx)
+    ..clearSnackBars()
+    ..showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              error
+                  ? Icons.error_outline_rounded
+                  : Icons.check_circle_outline_rounded,
+              color: Colors.white,
+              size: 18,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                msg,
+                style: const TextStyle(fontWeight: FontWeight.w500),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor:
+            error ? const Color(0xFFDC2626) : const Color(0xFF059669),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        duration: Duration(seconds: error ? 4 : 2),
+      ),
+    );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MODULE-LEVEL CACHES (survive hot reload, same as web _consultantCache)
-// ─────────────────────────────────────────────────────────────────────────────
-final _consultantCache = <int, String>{};
-final _userCache = <int, String>{};
+String _apiError(Object error, {String fallback = 'Something went wrong.'}) {
+  if (error is DioException) {
+    if (error.type == DioExceptionType.receiveTimeout ||
+        error.type == DioExceptionType.connectionTimeout) {
+      return 'Server took too long to respond. Please try again.';
+    }
+    final data = error.response?.data;
+    if (data is Map) {
+      final msg = data['message'] ?? data['error'];
+      if (msg != null && '$msg'.trim().isNotEmpty) return '$msg'.trim();
+    }
+  }
+  return fallback;
+}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PAGE WIDGET
-// ─────────────────────────────────────────────────────────────────────────────
+Map<String, Color> _statusColors = {
+  'CONFIRMED': const Color(0xFF0F766E),
+  'PENDING': const Color(0xFFD97706),
+  'REQUESTED': const Color(0xFFC2410C),
+  'COMPLETED': const Color(0xFF16A34A),
+  'CANCELLED': const Color(0xFFEF4444),
+};
+
+Color _statusColor(String status) =>
+    _statusColors[status.toUpperCase()] ?? const Color(0xFF64748B);
+Color _statusBg(String status) => _statusColor(status).withValues(alpha: 0.1);
+
+String _fmtDate(String? raw) {
+  if (raw == null || raw.isEmpty) return '';
+  try {
+    final iso = _normalizeDateKey(raw);
+    if (iso == '9999-12-31') return raw;
+    return DateFormat('d MMM yyyy').format(DateTime.parse(iso));
+  } catch (_) {
+    return raw;
+  }
+}
+
+List<dynamic> _extractArray(
+  dynamic data, {
+  List<String> keys = const ['content', 'data', 'items'],
+}) {
+  if (data is List) return data;
+  if (data is Map) {
+    for (final key in keys) {
+      final candidate = data[key];
+      if (candidate is List) return candidate;
+    }
+  }
+  return const [];
+}
+
+int? _toInt(dynamic value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return int.tryParse('${value ?? ''}');
+}
+
+double _toDouble(dynamic value) {
+  if (value is num) return value.toDouble();
+  return double.tryParse('${value ?? ''}') ?? 0;
+}
+
+String _string(dynamic value) => (value ?? '').toString().trim();
+
+String _firstNonEmpty(List<dynamic> values) {
+  for (final value in values) {
+    final text = _string(value);
+    if (text.isNotEmpty) return text;
+  }
+  return '';
+}
+
+dynamic _firstMeaningfulValue(List<dynamic> values) {
+  for (final value in values) {
+    if (value == null) continue;
+    if (value is String && value.trim().isEmpty) continue;
+    if (value is Map && value.isEmpty) continue;
+    return value;
+  }
+  return null;
+}
+
+String _prettifyName(String raw) {
+  if (raw.isEmpty) return raw;
+  if (raw.contains('@')) {
+    final local = raw.split('@').first;
+    return local
+        .replaceAll(RegExp(r'[._\-]+'), ' ')
+        .split(' ')
+        .where((p) => p.isNotEmpty)
+        .map((p) => p[0].toUpperCase() + p.substring(1))
+        .join(' ');
+  }
+  return raw;
+}
+
+String _normalizeDateKey(String raw) {
+  final value = _string(raw);
+  if (value.isEmpty) return '9999-12-31';
+
+  final isoMatch = RegExp(r'^(\d{4})-(\d{2})-(\d{2})').firstMatch(value);
+  if (isoMatch != null) {
+    return '${isoMatch.group(1)}-${isoMatch.group(2)}-${isoMatch.group(3)}';
+  }
+
+  final dashMatch = RegExp(r'^(\d{1,2})-(\d{1,2})-(\d{4})$').firstMatch(value);
+  if (dashMatch != null) {
+    final dd = dashMatch.group(1)!.padLeft(2, '0');
+    final mm = dashMatch.group(2)!.padLeft(2, '0');
+    final yyyy = dashMatch.group(3)!;
+    return '$yyyy-$mm-$dd';
+  }
+
+  final slashMatch = RegExp(r'^(\d{1,2})/(\d{1,2})/(\d{4})$').firstMatch(value);
+  if (slashMatch != null) {
+    final dd = slashMatch.group(1)!.padLeft(2, '0');
+    final mm = slashMatch.group(2)!.padLeft(2, '0');
+    final yyyy = slashMatch.group(3)!;
+    return '$yyyy-$mm-$dd';
+  }
+
+  try {
+    return DateTime.parse(value).toIso8601String().split('T').first;
+  } catch (_) {
+    return value;
+  }
+}
+
+int _parseTimeToMinutes(String value) {
+  final raw = _string(value);
+  if (raw.isEmpty) return 1 << 30;
+  final firstPart = raw.split(RegExp('[-\u2013]')).first.trim();
+  final match = RegExp(r'(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(AM|PM)?',
+          caseSensitive: false)
+      .firstMatch(firstPart);
+  if (match == null) return 1 << 30;
+
+  var hour = int.tryParse(match.group(1) ?? '') ?? 0;
+  final minute = int.tryParse(match.group(2) ?? '0') ?? 0;
+  final period = (match.group(3) ?? '').toUpperCase();
+  if (period == 'PM' && hour != 12) hour += 12;
+  if (period == 'AM' && hour == 12) hour = 0;
+  return hour * 60 + minute;
+}
+
+String _minutesTo12h(int totalMinutes) {
+  final minutesInDay = ((totalMinutes % 1440) + 1440) % 1440;
+  final hour24 = minutesInDay ~/ 60;
+  final minute = minutesInDay % 60;
+  final period = hour24 >= 12 ? 'PM' : 'AM';
+  final hour12 = hour24 % 12 == 0 ? 12 : hour24 % 12;
+  return '$hour12:${minute.toString().padLeft(2, '0')} $period';
+}
+
+String _timeValueToString(dynamic raw) {
+  if (raw is Map) {
+    final hour = _toInt(raw['hour']);
+    if (hour != null) {
+      final minute = _toInt(raw['minute']) ?? 0;
+      return '${hour.toString().padLeft(2, '0')}:'
+          '${minute.toString().padLeft(2, '0')}';
+    }
+  }
+  final text = _string(raw);
+  if (text.isEmpty) return '';
+  final basic = RegExp(r'^\d{2}:\d{2}');
+  if (basic.hasMatch(text)) return text.substring(0, 5);
+  return text;
+}
+
+String _buildSpecialTimeRange(String startValue, int durationHours) {
+  final startMin = _parseTimeToMinutes(startValue);
+  if (startMin >= (1 << 30)) return '';
+  final endMin = startMin + max(1, durationHours) * 60;
+  return '${_minutesTo12h(startMin)} - ${_minutesTo12h(endMin)}';
+}
+
+Map<String, dynamic>? _specialMeta(dynamic rawNotes) {
+  const prefix = '[[SPECIAL_BOOKING_META]]';
+  if (rawNotes is! String || !rawNotes.startsWith(prefix)) return null;
+  final jsonText = rawNotes.substring(prefix.length).split('\n').first.trim();
+  if (jsonText.isEmpty) return null;
+  try {
+    final decoded = jsonDecode(jsonText);
+    if (decoded is Map) return Map<String, dynamic>.from(decoded);
+  } catch (_) {}
+  return null;
+}
+
+List<_BookingItem> _sortChronologically(List<_BookingItem> source) {
+  final list = [...source];
+  list.sort((a, b) {
+    final aDate = _normalizeDateKey(a.slotDate ?? '');
+    final bDate = _normalizeDateKey(b.slotDate ?? '');
+    final dateCmp = aDate.compareTo(bDate);
+    if (dateCmp != 0) return dateCmp;
+    final aTime = _parseTimeToMinutes(a.timeRange ?? '');
+    final bTime = _parseTimeToMinutes(b.timeRange ?? '');
+    return aTime.compareTo(bTime);
+  });
+  return list;
+}
+
+class _RegularPageResult {
+  final List<_BookingItem> items;
+  final int nextPage;
+  final int totalPages;
+  final int totalElements;
+  final bool hasMore;
+
+  const _RegularPageResult({
+    required this.items,
+    required this.nextPage,
+    required this.totalPages,
+    required this.totalElements,
+    required this.hasMore,
+  });
+}
+
+class _BookingItem {
+  final int id;
+  final int? userId;
+  final int? consultantId;
+  final String? consultantName;
+  final String? clientName;
+  final String? slotDate;
+  final String? timeRange;
+  final String status;
+  final String? meetingMode;
+  final double amount;
+  final String? meetingLink;
+  final bool isSpecial;
+  final String? specialStatus;
+  final String? duration;
+
+  const _BookingItem({
+    required this.id,
+    required this.status,
+    this.userId,
+    this.consultantId,
+    this.consultantName,
+    this.clientName,
+    this.slotDate,
+    this.timeRange,
+    this.meetingMode,
+    this.amount = 0,
+    this.meetingLink,
+    this.isSpecial = false,
+    this.specialStatus,
+    this.duration,
+  });
+
+  factory _BookingItem.fromRegular(Booking b) => _BookingItem(
+        id: b.id,
+        status: b.status.toUpperCase(),
+        userId: b.userId,
+        consultantId: b.consultantId,
+        consultantName: b.consultantName,
+        clientName: b.clientName,
+        slotDate: b.slotDate,
+        timeRange: b.timeRange,
+        meetingMode: b.meetingMode,
+        amount: b.amount ?? 0,
+        meetingLink: b.meetingLink,
+      );
+
+  _BookingItem copyWith({
+    String? status,
+    String? meetingLink,
+  }) {
+    return _BookingItem(
+      id: id,
+      status: status ?? this.status,
+      userId: userId,
+      consultantId: consultantId,
+      consultantName: consultantName,
+      clientName: clientName,
+      slotDate: slotDate,
+      timeRange: timeRange,
+      meetingMode: meetingMode,
+      amount: amount,
+      meetingLink: meetingLink ?? this.meetingLink,
+      isSpecial: isSpecial,
+      specialStatus: specialStatus,
+      duration: duration,
+    );
+  }
+
+  String get statusUpper => status.toUpperCase();
+  String get specialStatusUpper => (specialStatus ?? '').toUpperCase();
+  String get displayStatus => isSpecial && specialStatusUpper == 'REQUESTED'
+      ? 'REQUESTED'
+      : statusUpper;
+}
 
 class BookingsPage extends StatefulWidget {
   final bool isAdmin;
-  final int? consultantId; // Required when isAdmin = false
-  const BookingsPage({super.key, this.isAdmin = false, this.consultantId});
+
+  const BookingsPage({super.key, this.isAdmin = false});
 
   @override
   State<BookingsPage> createState() => _BookingsPageState();
 }
 
 class _BookingsPageState extends State<BookingsPage> {
-  static const int _pageSize = 10;
+  final BookingService _bookingService = BookingService();
+  final Dio _dio = ApiClient().dio;
+  final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
-  final _dio = ApiClient().dio;
+  List<_BookingItem> _regularBookings = [];
+  List<_BookingItem> _specialBookings = [];
 
-  List<_Booking> _bookings = [];
-  int _totalElements = 0;
-  int _totalPages = 0;
-  int _currentPage = 0;
   bool _loading = true;
-  String? _error;
+  bool _loadingMore = false;
+  int _nextPage = 0;
+  int _totalPages = 1;
+  int _totalElements = 0;
+  bool _hasMore = true;
+  int _specialTotal = 0;
+
   String _filter = 'ALL';
+  String _search = '';
+  Timer? _pollTimer;
 
-  // page cache: pageNumber → list (instant adjacent-page navigation)
-  final Map<int, List<_Booking>> _pageCache = {};
-
-  // admin action state
-  int? _deletingId;
-  _Booking? _editingBooking;
-  String _editStatus = 'PENDING';
-  bool _savingEdit = false;
+  static const _pageSize = 10;
+  static const _baseFilters = [
+    'ALL',
+    'PENDING',
+    'CONFIRMED',
+    'COMPLETED',
+    'CANCELLED',
+  ];
 
   @override
   void initState() {
     super.initState();
-    _loadPage(0);
+    _load(reset: true);
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => _load(reset: true, silent: true),
+    );
   }
 
-  // ── LOAD PAGE ──────────────────────────────────────────────────────────────
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
 
-  Future<void> _loadPage(int page) async {
-    if (_pageCache.containsKey(page)) {
-      setState(() {
-        _bookings = _pageCache[page]!;
-        _currentPage = page;
-        _loading = false;
-      });
-      return;
+  List<String> get _filters => _specialTotal > 0
+      ? const [..._baseFilters, 'SPECIAL']
+      : const [..._baseFilters];
+
+  List<_BookingItem> get _mergedBookings =>
+      _sortChronologically([..._specialBookings, ..._regularBookings]);
+
+  List<_BookingItem> get _filtered {
+    List<_BookingItem> list = _mergedBookings;
+    if (_filter == 'SPECIAL') {
+      list = list.where((b) => b.isSpecial).toList();
+    } else if (_filter != 'ALL') {
+      list = list.where((b) => b.statusUpper == _filter).toList();
     }
-    setState(() { _loading = true; _error = null; });
-    try {
-      final Map<String, dynamic> params = {'page': page, 'size': _pageSize};
-      final response = widget.isAdmin
-          ? await _dio.get('/api/bookings', queryParameters: params)
-          : await _fetchConsultantBookings(page, params);
+    if (_search.isNotEmpty) {
+      final q = _search.toLowerCase();
+      list = list.where((b) {
+        return (b.clientName ?? '').toLowerCase().contains(q) ||
+            (b.consultantName ?? '').toLowerCase().contains(q) ||
+            b.id.toString().contains(q);
+      }).toList();
+    }
+    return list;
+  }
 
-      final raw = response.data;
-      final List<dynamic> content;
-      int total = 0;
-      int totalPgs = 1;
+  Map<String, int> get _counts {
+    final all = _mergedBookings;
+    final totalRegular = max(_totalElements, _regularBookings.length);
+    return {
+      'ALL': totalRegular + _specialTotal,
+      'PENDING': all.where((b) => b.statusUpper == 'PENDING').length,
+      'CONFIRMED': all.where((b) => b.statusUpper == 'CONFIRMED').length,
+      'COMPLETED': all.where((b) => b.statusUpper == 'COMPLETED').length,
+      'CANCELLED': all.where((b) => b.statusUpper == 'CANCELLED').length,
+      'SPECIAL': _specialTotal,
+    };
+  }
 
-      if (raw is Map) {
-        content = raw['content'] ?? raw['data'] ?? [];
-        total = raw['totalElements'] ?? raw['total'] ?? content.length;
-        totalPgs = raw['totalPages'] ?? 1;
-      } else if (raw is List) {
-        content = raw;
-        total = raw.length;
-        totalPgs = 1;
+  double get _revenue => _mergedBookings
+      .where((b) => b.statusUpper == 'COMPLETED')
+      .fold(0.0, (sum, b) => sum + b.amount);
+
+  Future<void> _load({bool reset = false, bool silent = false}) async {
+    if (reset) {
+      if (!silent) {
+        setState(() {
+          _loading = true;
+          _nextPage = 0;
+          _hasMore = true;
+          _regularBookings = [];
+          _specialBookings = [];
+          _specialTotal = 0;
+          _totalElements = 0;
+          _totalPages = 1;
+        });
       } else {
-        content = [];
+        _nextPage = 0;
+        _hasMore = true;
+        _totalElements = 0;
+        _totalPages = 1;
+      }
+    } else {
+      if (_loadingMore || !_hasMore) return;
+      setState(() => _loadingMore = true);
+    }
+
+    try {
+      final pageToLoad = reset ? 0 : _nextPage;
+      final regularFuture = _fetchRegularPage(pageToLoad);
+      final specialFuture =
+          reset ? _fetchSpecialBookings() : Future.value(_specialBookings);
+
+      final results =
+          await Future.wait<dynamic>([regularFuture, specialFuture]);
+      final regularPage = results[0] as _RegularPageResult;
+      final specialItems = results[1] as List<_BookingItem>;
+
+      if (!mounted) return;
+      setState(() {
+        if (reset) {
+          _regularBookings = regularPage.items;
+          _specialBookings = specialItems;
+        } else {
+          _regularBookings.addAll(regularPage.items);
+        }
+        _specialTotal = _specialBookings.length;
+        _nextPage = regularPage.nextPage;
+        _totalPages = regularPage.totalPages;
+        _totalElements = regularPage.totalElements;
+        _hasMore = regularPage.hasMore;
+        _loading = false;
+        _loadingMore = false;
+      });
+    } catch (_) {
+      if (mounted && !silent) {
+        setState(() {
+          _loading = false;
+          _loadingMore = false;
+        });
+      } else if (mounted) {
+        setState(() => _loadingMore = false);
+      }
+    }
+  }
+
+  Future<_RegularPageResult> _fetchRegularPage(int page) async {
+    if (widget.isAdmin) {
+      final result = await _bookingService.getAllBookingsPaginated(
+        page: page,
+        size: _pageSize,
+      );
+      final rowsRaw = result['bookings'];
+      final rows =
+          rowsRaw is List ? rowsRaw.whereType<Booking>().toList() : <Booking>[];
+
+      final mapped = rows.map(_BookingItem.fromRegular).toList();
+      final totalPages = max(1, _toInt(result['totalPages']) ?? 1);
+      final currentPage = _toInt(result['currentPage']) ?? page;
+      final totalElements = _toInt(result['totalElements']) ?? mapped.length;
+      final nextPage = currentPage + 1;
+
+      return _RegularPageResult(
+        items: mapped,
+        nextPage: nextPage,
+        totalPages: totalPages,
+        totalElements: totalElements,
+        hasMore: nextPage < totalPages,
+      );
+    }
+
+    final consultantId = _toInt(await _storage.read(key: 'consultant_id'));
+    final rows = consultantId != null && consultantId > 0
+        ? await _bookingService.getBookingsByConsultant(
+            consultantId,
+            page: page,
+            size: _pageSize,
+          )
+        : await _bookingService.getMyBookings(page: page, size: _pageSize);
+    final mapped = rows.map(_BookingItem.fromRegular).toList();
+    return _RegularPageResult(
+      items: mapped,
+      nextPage: page + 1,
+      totalPages: page + (mapped.length == _pageSize ? 2 : 1),
+      totalElements: _totalElements + mapped.length,
+      hasMore: mapped.length == _pageSize,
+    );
+  }
+
+  Future<List<_BookingItem>> _fetchSpecialBookings() async {
+    int? consultantId;
+    if (!widget.isAdmin) {
+      consultantId = _toInt(await _storage.read(key: 'consultant_id'));
+      if (consultantId == null) return const [];
+    }
+
+    final endpoints = <String>[
+      if (widget.isAdmin) '/api/special-bookings?page=0&size=200',
+      if (widget.isAdmin) '/api/special-bookings/all',
+      if (widget.isAdmin) '/api/special-bookings',
+      if (!widget.isAdmin && consultantId != null)
+        '/api/special-bookings/consultant/$consultantId',
+      if (!widget.isAdmin && consultantId != null)
+        '/api/consultants/$consultantId/special-bookings',
+      if (!widget.isAdmin && consultantId != null)
+        '/api/special-bookings?consultantId=$consultantId',
+    ];
+
+    for (final endpoint in endpoints) {
+      try {
+        final response = await _dio.get(endpoint);
+        final raw = _extractArray(response.data);
+        return _mapSpecialRaw(raw, consultantId: consultantId);
+      } catch (_) {}
+    }
+    return const [];
+  }
+
+  List<_BookingItem> _mapSpecialRaw(
+    List<dynamic> raw, {
+    int? consultantId,
+  }) {
+    final mapped = <_BookingItem>[];
+    for (final item in raw.whereType<Map>()) {
+      final row = Map<String, dynamic>.from(item);
+      final id = _toInt(row['id']) ?? 0;
+      if (id <= 0) continue;
+
+      final rawStatus = _string(row['status']).toUpperCase();
+      final displayStatus = rawStatus == 'REQUESTED'
+          ? 'PENDING'
+          : rawStatus == 'SCHEDULED'
+              ? 'CONFIRMED'
+              : (rawStatus.isEmpty ? 'PENDING' : rawStatus);
+
+      final meta = _specialMeta(row['userNotes']);
+      final durationHours = max(
+          1, _toInt(row['durationInHours'] ?? row['duration_in_hours']) ?? 1);
+      final duration = durationHours == 1 ? '1 hr' : '$durationHours hrs';
+
+      final date = _firstNonEmpty([
+        row['scheduledDate'],
+        row['scheduled_date'],
+        meta?['scheduledDate'],
+        meta?['preferredDate'],
+      ]);
+
+      final scheduledTimeRaw = _firstMeaningfulValue([
+        row['scheduledTime'],
+        row['scheduled_time'],
+        meta?['scheduledTime'],
+        meta?['preferredTime'],
+      ]);
+      final scheduledTime = _timeValueToString(scheduledTimeRaw);
+
+      var timeRange = _firstNonEmpty([
+        row['scheduledTimeRange'],
+        row['timeRange'],
+        meta?['scheduledTimeRange'],
+        meta?['preferredTimeRange'],
+      ]);
+      if (timeRange.isEmpty && scheduledTime.isNotEmpty) {
+        timeRange = _buildSpecialTimeRange(scheduledTime, durationHours);
       }
 
-      final mapped = await _mapRaw(content);
-      if (!mounted) return;
-      setState(() {
-        _bookings = mapped;
-        _totalElements = total;
-        _totalPages = totalPgs;
-        _currentPage = page;
-        _loading = false;
-        _pageCache[page] = mapped;
-      });
+      final userName = _prettifyName(_firstNonEmpty([
+        row['user'] is Map ? row['user']['name'] : null,
+        row['user'] is Map ? row['user']['fullName'] : null,
+        row['user'] is Map ? row['user']['username'] : null,
+        row['userName'],
+        row['clientName'],
+      ]));
 
-      // Pre-fetch adjacent pages silently
-      _prefetch(page - 1);
-      _prefetch(page + 1);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() { _loading = false; _error = 'Failed to load bookings. Tap retry.'; });
-    }
-  }
+      final advisorName = _firstNonEmpty([
+        row['consultant'] is Map ? row['consultant']['name'] : null,
+        row['consultant'] is Map ? row['consultant']['fullName'] : null,
+        row['consultantName'],
+      ]);
 
-  Future<dynamic> _fetchConsultantBookings(int page, Map<String, dynamic> params) async {
-    final consultantId = widget.consultantId;
-    if (consultantId == null) throw Exception('Consultant ID not provided');
-    return _dio.get('/api/bookings/consultant/$consultantId', queryParameters: params);
-  }
-
-  Future<void> _prefetch(int page) async {
-    if (page < 0 || (_totalPages > 0 && page >= _totalPages) || _pageCache.containsKey(page)) return;
-    try {
-      final Map<String, dynamic> params = {'page': page, 'size': _pageSize};
-      final response = widget.isAdmin
-          ? await _dio.get('/api/bookings', queryParameters: params)
-          : await _fetchConsultantBookings(page, params);
-      final raw = response.data;
-      final List<dynamic> content = raw is Map ? (raw['content'] ?? raw['data'] ?? []) : (raw is List ? raw : []);
-      final mapped = await _mapRaw(content);
-      if (mounted) setState(() => _pageCache[page] = mapped);
-    } catch (_) { /* silent */ }
-  }
-
-  // ── MAP RAW → _Booking ─────────────────────────────────────────────────────
-
-  Future<List<_Booking>> _mapRaw(List<dynamic> raw) async {
-    if (raw.isEmpty) return [];
-
-    // Collect uncached consultant IDs
-    final uncachedCids = raw.map((b) => b['consultantId']).whereType<int>()
-        .where((id) => !_consultantCache.containsKey(id))
-        .toSet().toList();
-
-    // Collect uncached user IDs
-    final uncachedUids = raw.map((b) => b['userId'] ?? b['user']?['id']).whereType<int>()
-        .where((id) => !_userCache.containsKey(id))
-        .toSet().toList();
-
-    // Parallel enrichment
-    await Future.wait([
-      ...uncachedCids.map(_fetchConsultantName),
-      ...uncachedUids.map(_fetchUserName),
-    ]);
-
-    return raw.map((b) {
-      final int? cid = b['consultantId'];
-      final int? uid = b['userId'] ?? b['user']?['id'];
-
-      final userName = _prettify(
-        b['user']?['name'] ?? b['user']?['fullName'] ?? b['user']?['username'] ??
-        b['userName'] ?? b['clientName'] ??
-        (uid != null ? _userCache[uid] : null) ??
-        (uid != null ? 'User #$uid' : 'Booking #${b['id']}'),
+      mapped.add(
+        _BookingItem(
+          id: id,
+          status: displayStatus,
+          userId: _toInt(row['userId'] ?? row['user_id']),
+          consultantId: _toInt(row['consultantId']) ?? consultantId,
+          consultantName: advisorName.isEmpty ? 'Consultant' : advisorName,
+          clientName: userName.isEmpty ? 'Client' : userName,
+          slotDate: date.isEmpty ? null : date,
+          timeRange: timeRange.isEmpty ? null : timeRange,
+          meetingMode: _firstNonEmpty([
+            row['meetingMode'],
+            row['meeting_mode'],
+            'ONLINE',
+          ]).toUpperCase(),
+          amount: _toDouble(
+            row['sessionAmount'] ??
+                row['totalAmount'] ??
+                row['total_amount'] ??
+                row['amount'] ??
+                row['charges'],
+          ),
+          isSpecial: true,
+          specialStatus: rawStatus.isEmpty ? null : rawStatus,
+          duration: duration,
+        ),
       );
-
-      final advisorName =
-        b['consultant']?['name'] ?? b['consultant']?['fullName'] ??
-        b['advisorName'] ?? b['consultantName'] ??
-        (cid != null ? _consultantCache[cid] : null) ??
-        (cid != null ? 'Consultant #$cid' : 'Consultant');
-
-      final status = (b['bookingStatus'] ?? b['BookingStatus'] ?? b['status'] ?? 'PENDING')
-          .toString().toUpperCase();
-
-      return _Booking(
-        id: b['id'] ?? 0,
-        userName: userName,
-        advisorName: advisorName,
-        date: b['slotDate'] ?? b['bookingDate'] ?? b['date'] ?? '',
-        time: b['timeRange'] ?? b['slotTime'] ?? b['bookingTime'] ?? '',
-        status: status,
-        amount: (b['amount'] ?? b['charges'] ?? b['fee'] ?? 0).toDouble(),
-        meetingMode: b['meetingMode'] ?? b['mode'] ?? '',
-      );
-    }).toList()
-      ..sort((a, b) {
-        final dc = b.date.compareTo(a.date);
-        return dc != 0 ? dc : b.id.compareTo(a.id);
-      });
-  }
-
-  Future<void> _fetchConsultantName(int id) async {
-    try {
-      final r = await _dio.get('/api/consultants/$id');
-      _consultantCache[id] = r.data?['name'] ?? r.data?['fullName'] ?? 'Consultant #$id';
-    } catch (_) {
-      try {
-        final r = await _dio.get('/api/users/$id');
-        _consultantCache[id] = r.data?['name'] ?? r.data?['fullName'] ?? 'Consultant #$id';
-      } catch (_) { _consultantCache[id] = 'Consultant #$id'; }
     }
+    return mapped;
   }
 
-  Future<void> _fetchUserName(int id) async {
-    try {
-      final r = await _dio.get('/api/users/$id');
-      _userCache[id] = _prettify(
-        r.data?['name'] ?? r.data?['fullName'] ?? r.data?['username'] ?? r.data?['email'] ?? 'User #$id',
-      );
-    } catch (_) { _userCache[id] = 'User #$id'; }
+  void _updateRegularBooking(
+    _BookingItem booking, {
+    required String status,
+    String? meetingLink,
+  }) {
+    _regularBookings = _regularBookings.map((b) {
+      if (b.id != booking.id) return b;
+      return b.copyWith(status: status, meetingLink: meetingLink);
+    }).toList();
   }
 
-  String _prettify(String raw) {
-    if (raw.contains('@')) {
-      return raw.split('@')[0]
-          .replaceAll(RegExp(r'[._\-]'), ' ')
-          .split(' ')
-          .map((w) => w.isEmpty ? '' : w[0].toUpperCase() + w.substring(1))
-          .join(' ');
-    }
-    return raw;
-  }
+  Future<void> _cancelBooking(_BookingItem booking) async {
+    if (booking.isSpecial) return;
 
-  // ── ADMIN ACTIONS ──────────────────────────────────────────────────────────
-
-  Future<void> _deleteBooking(int id) async {
-    final confirmed = await showDialog<bool>(
+    final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         title: const Text('Cancel Booking?'),
-        content: Text('Cancel booking #$id? This cannot be undone.'),
+        content: Text('Cancel booking #${booking.id}? This cannot be undone.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('No')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('No'),
+          ),
+          FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Yes, Cancel', style: TextStyle(color: Colors.white)),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+            ),
+            child: const Text('Cancel Booking'),
           ),
         ],
       ),
     );
-    if (confirmed != true || !mounted) return;
-    setState(() => _deletingId = id);
+
+    if (confirm != true) return;
+
     try {
-      await _dio.delete('/api/bookings/$id');
-      setState(() {
-        _bookings.removeWhere((b) => b.id == id);
-        _totalElements = (_totalElements - 1).clamp(0, 999999);
-        _pageCache.clear();
-        _deletingId = null;
-      });
-      _showSnack('Booking #$id cancelled.', ok: true);
-    } catch (_) {
-      setState(() => _deletingId = null);
-      _showSnack('Failed to cancel booking.', ok: false);
+      await _dio.patch('/api/bookings/${booking.id}/cancel');
+      setState(() => _updateRegularBooking(booking, status: 'CANCELLED'));
+      _snack(context, 'Booking #${booking.id} cancelled');
+    } catch (error) {
+      _snack(
+        context,
+        _apiError(error, fallback: 'Failed to cancel booking'),
+        error: true,
+      );
     }
   }
 
-  void _openEditDialog(_Booking b) {
-    setState(() { _editingBooking = b; _editStatus = b.status; });
-    showDialog(
+  Future<void> _confirmBooking(_BookingItem booking) async {
+    if (booking.isSpecial) return;
+    try {
+      await _dio.put(
+        '/api/bookings/${booking.id}',
+        data: {'bookingStatus': 'CONFIRMED'},
+      );
+      setState(() => _updateRegularBooking(booking, status: 'CONFIRMED'));
+      _snack(context, 'Booking #${booking.id} confirmed');
+    } catch (error) {
+      _snack(
+        context,
+        _apiError(error, fallback: 'Failed to confirm booking'),
+        error: true,
+      );
+    }
+  }
+
+  Future<void> _addMeetingLink(_BookingItem booking) async {
+    if (booking.isSpecial) return;
+
+    final ctrl = TextEditingController(text: booking.meetingLink ?? '');
+    final result = await showDialog<String>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (_, ss) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          contentPadding: EdgeInsets.zero,
-          content: SizedBox(
-            width: 400,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Header
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(colors: [Color(0xFF1E3A5F), Color(0xFF2563EB)]),
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('EDIT BOOKING', style: TextStyle(fontSize: 10, color: Color(0xFF93C5FD), fontWeight: FontWeight.w700, letterSpacing: 1.2)),
-                          const SizedBox(height: 4),
-                          Text('Booking #${b.id}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
-                        ],
-                      )),
-                      IconButton(
-                        onPressed: () { Navigator.pop(ctx); setState(() => _editingBooking = null); },
-                        icon: const Icon(Icons.close, color: Colors.white, size: 20),
-                        style: IconButton.styleFrom(backgroundColor: Colors.white24, shape: const CircleBorder()),
-                      ),
-                    ],
-                  ),
-                ),
-                // Body
-                Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _editInfoRow('User', b.userName),
-                      const SizedBox(height: 12),
-                      _editInfoRow('Consultant', b.advisorName),
-                      const SizedBox(height: 16),
-                      const Text('Booking Status', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B), letterSpacing: 0.8)),
-                      const SizedBox(height: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            value: _editStatus,
-                            isExpanded: true,
-                            items: ['PENDING', 'CONFIRMED', 'COMPLETED', 'CANCELLED']
-                                .map((s) => DropdownMenuItem(value: s, child: Row(
-                                  children: [
-                                    Container(width: 8, height: 8, margin: const EdgeInsets.only(right: 10),
-                                        decoration: BoxDecoration(color: _statusColor(s), shape: BoxShape.circle)),
-                                    Text(s, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                                  ],
-                                ))).toList(),
-                            onChanged: (v) { if (v != null) { setState(() => _editStatus = v); ss(() {}); } },
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      Row(children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () { Navigator.pop(ctx); setState(() => _editingBooking = null); },
-                            style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                            child: const Text('Cancel'),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          flex: 2,
-                          child: ElevatedButton(
-                            onPressed: _savingEdit ? null : () => _saveEdit(ctx, ss),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primaryLight,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                            ),
-                            child: _savingEdit
-                                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                                : const Text('Save Changes', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-                          ),
-                        ),
-                      ]),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Add Meeting Link'),
+        content: TextField(
+          controller: ctrl,
+          decoration: InputDecoration(
+            hintText: 'https://meet.google.com/...',
+            prefixIcon: const Icon(Icons.link_rounded),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
+          keyboardType: TextInputType.url,
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, ctrl.text.trim()),
+            style:
+                FilledButton.styleFrom(backgroundColor: AppColors.primaryLight),
+            child: const Text('Save'),
+          ),
+        ],
       ),
     );
-  }
 
-  Widget _editInfoRow(String label, String value) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(label.toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF64748B), letterSpacing: 0.8)),
-      const SizedBox(height: 4),
-      Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF0F172A))),
-    ],
-  );
+    if (result == null || result.isEmpty) return;
 
-  Future<void> _saveEdit(BuildContext ctx, StateSetter ss) async {
-    if (_editingBooking == null) return;
-    ss(() => _savingEdit = true);
-    setState(() => _savingEdit = true);
     try {
-      await _dio.put('/api/bookings/${_editingBooking!.id}', data: {'bookingStatus': _editStatus});
-      final updatedBooking = _editingBooking!.copyWith(status: _editStatus);
-      setState(() {
-        _bookings = _bookings.map((b) => b.id == updatedBooking.id ? updatedBooking : b).toList();
-        _pageCache.clear();
-        _editingBooking = null;
-        _savingEdit = false;
-      });
-      if (mounted) Navigator.pop(ctx);
-      _showSnack('Booking #${updatedBooking.id} updated.', ok: true);
-    } catch (_) {
-      ss(() => _savingEdit = false);
-      setState(() => _savingEdit = false);
-      _showSnack('Update failed. Try again.', ok: false);
+      await _dio.put(
+        '/api/bookings/${booking.id}',
+        data: {'meetingLink': result, 'bookingStatus': 'CONFIRMED'},
+      );
+      setState(
+        () => _updateRegularBooking(
+          booking,
+          status: 'CONFIRMED',
+          meetingLink: result,
+        ),
+      );
+      _snack(context, 'Meeting link added');
+    } catch (error) {
+      _snack(
+        context,
+        _apiError(error, fallback: 'Failed to add meeting link'),
+        error: true,
+      );
     }
   }
 
-  void _showSnack(String msg, {required bool ok}) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      backgroundColor: ok ? AppColors.success : AppColors.danger,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      duration: const Duration(seconds: 3),
-    ));
-  }
-
-  // ── HELPERS ────────────────────────────────────────────────────────────────
-
-  List<_Booking> get _filtered =>
-      _filter == 'ALL' ? _bookings : _bookings.where((b) => b.status == _filter).toList();
-
-  Map<String, int> get _counts => {
-    'ALL': _totalElements,
-    'PENDING': _bookings.where((b) => b.status == 'PENDING').length,
-    'CONFIRMED': _bookings.where((b) => b.status == 'CONFIRMED').length,
-    'COMPLETED': _bookings.where((b) => b.status == 'COMPLETED').length,
-    'CANCELLED': _bookings.where((b) => b.status == 'CANCELLED').length,
-  };
-
-  double get _revenue => _bookings.where((b) => b.status == 'COMPLETED').fold(0, (s, b) => s + b.amount);
-
-  Color _statusColor(String s) {
-    switch (s) {
-      case 'CONFIRMED': return AppColors.primaryLight;
-      case 'COMPLETED': return AppColors.success;
-      case 'CANCELLED': return AppColors.danger;
-      default: return AppColors.warning;
+  Future<void> _markCompleted(_BookingItem booking) async {
+    if (booking.isSpecial) return;
+    try {
+      await _dio.put(
+        '/api/bookings/${booking.id}',
+        data: {'bookingStatus': 'COMPLETED'},
+      );
+      setState(() => _updateRegularBooking(booking, status: 'COMPLETED'));
+      _snack(context, 'Booking #${booking.id} marked as completed');
+    } catch (error) {
+      _snack(
+        context,
+        _apiError(error, fallback: 'Failed to update booking'),
+        error: true,
+      );
     }
   }
-
-  Color _statusBg(String s) {
-    switch (s) {
-      case 'CONFIRMED': return const Color(0xFFEFF6FF);
-      case 'COMPLETED': return const Color(0xFFF0FDF4);
-      case 'CANCELLED': return const Color(0xFFFEF2F2);
-      default: return const Color(0xFFFFFBEB);
-    }
-  }
-
-  IconData _modeIcon(String m) {
-    switch (m.toUpperCase()) {
-      case 'ONLINE': return Icons.videocam_outlined;
-      case 'PHONE': return Icons.phone_outlined;
-      default: return Icons.location_on_outlined;
-    }
-  }
-
-  String _modeLabel(String m) {
-    switch (m.toUpperCase()) {
-      case 'ONLINE': return 'Online';
-      case 'PHONE': return 'Phone';
-      case 'PHYSICAL': return 'In-Person';
-      default: return m;
-    }
-  }
-
-  // ── PAGINATION PAGES ───────────────────────────────────────────────────────
-
-  List<dynamic> _pageNums() {
-    if (_totalPages <= 7) return List.generate(_totalPages, (i) => i);
-    final set = <int>{
-      0, _totalPages - 1,
-      if (_currentPage > 0) _currentPage - 1,
-      _currentPage,
-      if (_currentPage < _totalPages - 1) _currentPage + 1,
-    };
-    final sorted = set.toList()..sort();
-    final result = <dynamic>[];
-    for (int i = 0; i < sorted.length; i++) {
-      if (i > 0 && sorted[i] - sorted[i - 1] > 1) result.add('…');
-      result.add(sorted[i]);
-    }
-    return result;
-  }
-
-  // ── BUILD ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: RefreshIndicator(
-        onRefresh: () async {
-          _pageCache.clear();
-          await _loadPage(_currentPage);
-        },
-        child: CustomScrollView(
-          slivers: [
-            SliverToBoxAdapter(child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-              child: Column(children: [
-                // ── Header row ──
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      widget.isAdmin ? 'All Bookings' : 'My Bookings',
-                      style: AppTextStyles.h3.copyWith(fontSize: 22),
-                    ),
-                    TextButton.icon(
-                      onPressed: () { _pageCache.clear(); _loadPage(_currentPage); },
-                      icon: const Icon(Icons.refresh_rounded, size: 16),
-                      label: const Text('Refresh'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppColors.primaryLight,
-                        backgroundColor: const Color(0xFFEFF6FF),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: const BorderSide(color: Color(0xFFBFDBFE))),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
+    final filtered = _filtered;
+    final showLoadMore = _hasMore && _filter != 'SPECIAL';
+    final counts = _counts;
 
-                // ── Stats strip ──
-                if (!_loading && _bookings.isNotEmpty) _buildStatsStrip(),
-
-                // ── Error banner ──
-                if (_error != null) _buildErrorBanner(),
-
-                // ── Filter pills ──
-                _buildFilterPills(),
-                const SizedBox(height: 4),
-              ]),
-            )),
-
-            // ── Content ──
-            if (_loading)
-              const SliverFillRemaining(child: Center(child: CircularProgressIndicator()))
-            else if (_filtered.isEmpty)
-              SliverFillRemaining(child: _buildEmpty())
-            else
-              SliverPadding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                sliver: SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (ctx, i) => _buildBookingCard(_filtered[i], i),
-                    childCount: _filtered.length,
-                  ),
-                ),
-              ),
-
-            // ── Pagination ──
-            if (!_loading && _totalPages > 1)
-              SliverToBoxAdapter(child: _buildPagination()),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ── STATS STRIP ────────────────────────────────────────────────────────────
-
-  Widget _buildStatsStrip() {
-    final items = [
-      {'label': 'Total', 'value': '$_totalElements', 'color': AppColors.primaryLight, 'bg': const Color(0xFFEFF6FF)},
-      {'label': 'Pending', 'value': '${_counts['PENDING']}', 'color': AppColors.warning, 'bg': const Color(0xFFFFFBEB)},
-      {'label': 'Confirmed', 'value': '${_counts['CONFIRMED']}', 'color': AppColors.primaryLight, 'bg': const Color(0xFFEFF6FF)},
-      {'label': 'Completed', 'value': '${_counts['COMPLETED']}', 'color': AppColors.success, 'bg': const Color(0xFFF0FDF4)},
-      {'label': 'Revenue', 'value': '₹${NumberFormat('#,##,###').format(_revenue.toInt())}', 'color': AppColors.success, 'bg': const Color(0xFFF0FDF4)},
-    ];
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Row(
-        children: items.map((item) => Expanded(
-          child: Container(
-            margin: const EdgeInsets.only(right: 8),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-            decoration: BoxDecoration(
-              color: item['bg'] as Color,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: (item['color'] as Color).withValues(alpha: 0.15)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(item['value'] as String, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: item['color'] as Color)),
-                Text(item['label'] as String, style: const TextStyle(fontSize: 9, color: Color(0xFF64748B), fontWeight: FontWeight.w700, letterSpacing: 0.5)),
-              ],
-            ),
-          ),
-        )).toList(),
-      ),
-    );
-  }
-
-  // ── ERROR BANNER ───────────────────────────────────────────────────────────
-
-  Widget _buildErrorBanner() {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFEF2F2),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFFECACA)),
-      ),
-      child: Row(children: [
-        const Icon(Icons.warning_amber_rounded, color: Color(0xFFB91C1C), size: 18),
-        const SizedBox(width: 8),
-        Expanded(child: Text(_error!, style: const TextStyle(color: Color(0xFFB91C1C), fontSize: 13, fontWeight: FontWeight.w600))),
-        TextButton(
-          onPressed: () => _loadPage(_currentPage),
-          style: TextButton.styleFrom(backgroundColor: AppColors.danger, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6)),
-          child: const Text('Retry', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
-        ),
-      ]),
-    );
-  }
-
-  // ── FILTER PILLS ───────────────────────────────────────────────────────────
-
-  Widget _buildFilterPills() {
-    const filters = ['ALL', 'PENDING', 'CONFIRMED', 'COMPLETED', 'CANCELLED'];
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: filters.map((f) {
-          final active = _filter == f;
-          final cnt = _counts[f] ?? 0;
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: GestureDetector(
-              onTap: () { setState(() { _filter = f; }); },
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                decoration: BoxDecoration(
-                  color: active ? AppColors.primaryLight : const Color(0xFFF1F5F9),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: active ? AppColors.primaryLight : const Color(0xFFE2E8F0)),
-                ),
-                child: Text(
-                  '$f ($cnt)',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: active ? Colors.white : const Color(0xFF64748B),
-                  ),
-                ),
-              ),
-            ),
-          );
-        }).toList(),
-      ),
-    );
-  }
-
-  // ── BOOKING CARD ───────────────────────────────────────────────────────────
-
-  Widget _buildBookingCard(_Booking b, int idx) {
-    final sc = _statusColor(b.status);
-    final sbg = _statusBg(b.status);
-    final isDeleting = _deletingId == b.id;
-
-    return Opacity(
-      opacity: isDeleting ? 0.5 : 1,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border(
-            left: BorderSide(color: sc, width: 4),
-            top: const BorderSide(color: Color(0xFFF1F5F9)),
-            right: const BorderSide(color: Color(0xFFF1F5F9)),
-            bottom: const BorderSide(color: Color(0xFFF1F5F9)),
-          ),
-          boxShadow: const [BoxShadow(color: Color(0x0A000000), blurRadius: 8, offset: Offset(0, 2))],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
+    return Column(
+      children: [
+        Container(
+          color: AppColors.surface,
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(children: [
-                // Avatar
-                Container(
-                  width: 46, height: 46,
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)]),
+              TextField(
+                onChanged: (v) => setState(() => _search = v),
+                decoration: InputDecoration(
+                  hintText: widget.isAdmin
+                      ? 'Search by client, consultant...'
+                      : 'Search bookings...',
+                  prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                  filled: true,
+                  fillColor: AppColors.surfaceVariant,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
                   ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    b.userName.isNotEmpty ? b.userName[0].toUpperCase() : '?',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 18),
-                  ),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 ),
-                const SizedBox(width: 12),
-                // Name + subtitle
-                Expanded(child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.isAdmin ? b.userName : 'Session with ${b.advisorName}',
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: Color(0xFF0F172A)),
-                    ),
-                    if (widget.isAdmin)
-                      Text('Consultant: ${b.advisorName}', style: const TextStyle(fontSize: 12, color: Color(0xFF2563EB), fontWeight: FontWeight.w600)),
-                  ],
-                )),
-                // Serial + status badge
-                Row(children: [
-                  Text('#${_currentPage * _pageSize + idx + 1}', style: const TextStyle(fontSize: 11, color: Color(0xFFCBD5E1))),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                    decoration: BoxDecoration(color: sbg, borderRadius: BorderRadius.circular(20), border: Border.all(color: sc.withValues(alpha: 0.4))),
-                    child: Text(b.status, style: TextStyle(color: sc, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
-                  ),
-                ]),
-              ]),
-
-              // Date / time / mode / amount chips
-              if (b.date.isNotEmpty || b.time.isNotEmpty || b.meetingMode.isNotEmpty || b.amount > 0)
-                Padding(
-                  padding: const EdgeInsets.only(top: 10),
-                  child: Wrap(spacing: 8, runSpacing: 6, children: [
-                    if (b.date.isNotEmpty)
-                      _chip(Icons.calendar_today_outlined, b.date, const Color(0xFF64748B)),
-                    if (b.time.isNotEmpty)
-                      _timeChip(b.time),
-                    if (b.meetingMode.isNotEmpty)
-                      _chip(_modeIcon(b.meetingMode), _modeLabel(b.meetingMode), const Color(0xFF64748B)),
-                    if (b.amount > 0)
-                      _chip(Icons.currency_rupee, NumberFormat('#,##,###').format(b.amount.toInt()), AppColors.success),
-                  ]),
-                ),
-
-              // Admin action buttons
-              if (widget.isAdmin)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: Row(children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: isDeleting ? null : () => _openEditDialog(b),
-                        icon: const Icon(Icons.edit_outlined, size: 14),
-                        label: const Text('Edit Status', style: TextStyle(fontSize: 12)),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppColors.primaryLight,
-                          side: const BorderSide(color: Color(0xFFBFDBFE)),
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              const SizedBox(height: 10),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: _filters.map((f) {
+                    final active = _filter == f;
+                    final count = counts[f] ?? 0;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8, bottom: 10),
+                      child: FilterChip(
+                        label: Text('$f${f != 'ALL' ? ' ($count)' : ''}'),
+                        selected: active,
+                        onSelected: (_) {
+                          setState(() {
+                            _filter = f;
+                            _search = '';
+                          });
+                          _load(reset: true);
+                        },
+                        selectedColor: f == 'SPECIAL'
+                            ? const Color(0xFFB45309).withValues(alpha: 0.12)
+                            : (f != 'ALL'
+                                ? _statusColor(f).withValues(alpha: 0.12)
+                                : AppColors.primaryLight
+                                    .withValues(alpha: 0.12)),
+                        checkmarkColor: f == 'SPECIAL'
+                            ? const Color(0xFFB45309)
+                            : (f != 'ALL'
+                                ? _statusColor(f)
+                                : AppColors.primaryLight),
+                        labelStyle: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: active
+                              ? (f == 'SPECIAL'
+                                  ? const Color(0xFFB45309)
+                                  : (f != 'ALL'
+                                      ? _statusColor(f)
+                                      : AppColors.primaryLight))
+                              : AppColors.textSecondary,
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: isDeleting ? null : () => _deleteBooking(b.id),
-                        icon: isDeleting
-                            ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                            : const Icon(Icons.cancel_outlined, size: 14),
-                        label: Text(isDeleting ? 'Cancelling…' : 'Cancel', style: const TextStyle(fontSize: 12)),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppColors.danger,
-                          side: BorderSide(color: AppColors.danger.withValues(alpha: 0.4)),
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
+                    );
+                  }).toList(),
+                ),
+              ),
+              if (_specialTotal > 0)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'Special bookings: $_specialTotal',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFFB45309),
                       ),
                     ),
-                  ]),
+                  ),
                 ),
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _chip(IconData icon, String label, Color color) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 12, color: color),
-        const SizedBox(width: 4),
-        Text(label, style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w500)),
+        if (!_loading)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            color: AppColors.surfaceVariant,
+            child: Row(
+              children: [
+                Text(
+                  '${filtered.length} booking${filtered.length != 1 ? 's' : ''}',
+                  style: AppTextStyles.caption
+                      .copyWith(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'Revenue: Rs ${_revenue.toStringAsFixed(0)}',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF059669),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (showLoadMore)
+                  const Text(
+                    '  -  scroll for more',
+                    style: TextStyle(fontSize: 10, color: AppColors.textMuted),
+                  ),
+              ],
+            ),
+          ),
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : filtered.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            Icons.calendar_today_outlined,
+                            size: 56,
+                            color: AppColors.textMuted,
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            _filter == 'ALL'
+                                ? 'No bookings yet'
+                                : _filter == 'SPECIAL'
+                                    ? 'No special bookings found'
+                                    : 'No $_filter bookings',
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                          if (_filter != 'ALL')
+                            TextButton(
+                              onPressed: () {
+                                setState(() => _filter = 'ALL');
+                                _load(reset: true);
+                              },
+                              child: const Text('Show all bookings'),
+                            ),
+                        ],
+                      ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: () => _load(reset: true),
+                      child: ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(14, 8, 14, 24),
+                        itemCount: filtered.length +
+                            (_loadingMore ? 1 : 0) +
+                            (showLoadMore && !_loadingMore ? 1 : 0),
+                        itemBuilder: (_, i) {
+                          if (i == filtered.length && _loadingMore) {
+                            return const Center(
+                              child: Padding(
+                                padding: EdgeInsets.all(16),
+                                child: CircularProgressIndicator(),
+                              ),
+                            );
+                          }
+                          if (i == filtered.length && showLoadMore) {
+                            return TextButton(
+                              onPressed: _load,
+                              child: const Text('Load more'),
+                            );
+                          }
+                          if (i >= filtered.length)
+                            return const SizedBox.shrink();
+                          final booking = filtered[i];
+                          return _BookingCard(
+                            booking: booking,
+                            isAdmin: widget.isAdmin,
+                            onViewAnswers: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => BookingAnswersScreen(
+                                  bookingId: booking.isSpecial ? null : booking.id,
+                                  specialBookingId: booking.isSpecial ? booking.id : null,
+                                  bookingType: booking.isSpecial ? 'SPECIAL' : 'NORMAL',
+                                  userId: booking.userId,
+                                  clientName: booking.clientName ?? 'Client',
+                                ),
+                              ),
+                            ),
+                            onCancel: () => _cancelBooking(booking),
+                            onConfirm: widget.isAdmin
+                                ? () => _confirmBooking(booking)
+                                : null,
+                            onAddMeetingLink: widget.isAdmin
+                                ? () => _addMeetingLink(booking)
+                                : null,
+                            onMarkCompleted: widget.isAdmin
+                                ? () => _markCompleted(booking)
+                                : null,
+                          );
+                        },
+                      ),
+                    ),
+        ),
       ],
     );
   }
+}
 
-  Widget _timeChip(String time) {
+class _BookingCard extends StatelessWidget {
+  final _BookingItem booking;
+  final bool isAdmin;
+  final VoidCallback onCancel;
+  final VoidCallback? onViewAnswers;
+  final VoidCallback? onConfirm;
+  final VoidCallback? onAddMeetingLink;
+  final VoidCallback? onMarkCompleted;
+
+  const _BookingCard({
+    required this.booking,
+    required this.isAdmin,
+    required this.onCancel,
+    this.onViewAnswers,
+    this.onConfirm,
+    this.onAddMeetingLink,
+    this.onMarkCompleted,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final b = booking;
+    final status = b.statusUpper;
+    final chipStatus = b.displayStatus;
+    final color = _statusColor(chipStatus);
+    final isCancelled = status == 'CANCELLED';
+    final isCompleted = status == 'COMPLETED';
+    final isConfirmed = status == 'CONFIRMED';
+    final isPending = status == 'PENDING';
+    final canCancel = !b.isSpecial && !isCancelled && !isCompleted;
+    final awaitingSchedule = b.isSpecial &&
+        b.specialStatusUpper == 'REQUESTED' &&
+        _string(b.slotDate).isEmpty;
+
+    final who = (b.clientName ?? b.consultantName ?? '').trim();
+    final initial = who.isNotEmpty ? who[0].toUpperCase() : '#';
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-      decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(20)),
-      child: Text(time, style: const TextStyle(fontSize: 12, color: Color(0xFF2563EB), fontWeight: FontWeight.w600)),
-    );
-  }
-
-  // ── EMPTY STATE ────────────────────────────────────────────────────────────
-
-  Widget _buildEmpty() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Text('📅', style: TextStyle(fontSize: 48)),
-          const SizedBox(height: 12),
-          Text(
-            _totalElements == 0 ? 'No bookings yet.' : 'No ${_filter.toLowerCase()} bookings on this page.',
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF94A3B8)),
-          ),
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isCancelled ? const Color(0xFFFECACA) : AppColors.border,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          )
         ],
       ),
-    );
-  }
-
-  // ── PAGINATION ─────────────────────────────────────────────────────────────
-
-  Widget _buildPagination() {
-    final pages = _pageNums();
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-      child: Column(children: [
-        Text(
-          'Page ${_currentPage + 1} of $_totalPages  ·  $_totalElements total bookings',
-          style: const TextStyle(fontSize: 12, color: Color(0xFF64748B), fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 6, runSpacing: 6, alignment: WrapAlignment.center,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _pageBtn('← Prev', _currentPage > 0, () => _loadPage(_currentPage - 1)),
-            ...pages.map((pg) {
-              if (pg == '…') return const Padding(padding: EdgeInsets.symmetric(horizontal: 4), child: Text('…', style: TextStyle(color: Color(0xFF94A3B8))));
-              final p = pg as int;
-              final active = p == _currentPage;
-              final cached = _pageCache.containsKey(p);
-              return GestureDetector(
-                onTap: () => _loadPage(p),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  width: 36, height: 36,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: active ? AppColors.primaryLight : (cached ? const Color(0xFFEFF6FF) : Colors.white),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: active ? AppColors.primaryLight : (cached ? const Color(0xFFBFDBFE) : const Color(0xFFE2E8F0)),
-                      width: active ? 2 : 1.5,
-                    ),
-                  ),
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 18,
+                  backgroundColor: color.withValues(alpha: 0.1),
                   child: Text(
-                    '${p + 1}',
+                    initial,
                     style: TextStyle(
+                      color: color,
+                      fontWeight: FontWeight.w700,
                       fontSize: 13,
-                      fontWeight: active ? FontWeight.w800 : FontWeight.w600,
-                      color: active ? Colors.white : (cached ? AppColors.primaryLight : const Color(0xFF374151)),
                     ),
                   ),
                 ),
-              );
-            }),
-            _pageBtn('Next →', _currentPage < _totalPages - 1, () => _loadPage(_currentPage + 1)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              isAdmin
+                                  ? (b.clientName ?? 'User #${b.userId ?? ''}')
+                                  : (b.consultantName ?? 'Consultant'),
+                              style: AppTextStyles.h4,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (b.isSpecial)
+                            Container(
+                              margin: const EdgeInsets.only(left: 6),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFB45309),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: const Text(
+                                'SPECIAL',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white,
+                                  letterSpacing: 0.3,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      Text(
+                        isAdmin
+                            ? (b.consultantName ?? 'Consultant')
+                            : (b.clientName ?? ''),
+                        style: AppTextStyles.caption,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _statusBg(chipStatus),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    chipStatus,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: color,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 16,
+              runSpacing: 6,
+              children: [
+                if (awaitingSchedule)
+                  _detailChip(
+                    Icons.calendar_month_rounded,
+                    'Awaiting schedule from consultant',
+                    const Color(0xFFC2410C),
+                  )
+                else if (b.slotDate != null && b.slotDate!.isNotEmpty)
+                  _detailChip(
+                    Icons.calendar_today_rounded,
+                    _fmtDate(b.slotDate),
+                    AppColors.primaryLight,
+                  ),
+                if (b.timeRange != null && b.timeRange!.isNotEmpty)
+                  _detailChip(
+                      Icons.access_time_rounded, b.timeRange!, AppColors.info),
+                if (b.isSpecial &&
+                    b.duration != null &&
+                    b.duration!.isNotEmpty &&
+                    (b.timeRange == null || b.timeRange!.isEmpty))
+                  _detailChip(
+                    Icons.hourglass_top_rounded,
+                    b.duration!,
+                    const Color(0xFFC2410C),
+                  ),
+                if (b.meetingMode != null && b.meetingMode!.isNotEmpty)
+                  _detailChip(
+                    b.meetingMode!.toUpperCase() == 'ONLINE'
+                        ? Icons.videocam_rounded
+                        : b.meetingMode!.toUpperCase() == 'PHONE'
+                            ? Icons.phone_rounded
+                            : Icons.location_on_rounded,
+                    b.meetingMode!,
+                    AppColors.textSecondary,
+                  ),
+                if (b.amount > 0)
+                  _detailChip(
+                    Icons.currency_rupee_rounded,
+                    'Rs ${b.amount.toStringAsFixed(0)}',
+                    const Color(0xFF059669),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '#${b.id}',
+              style: const TextStyle(
+                fontSize: 10,
+                color: AppColors.textMuted,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (b.meetingLink != null && b.meetingLink!.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF059669).withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: const Color(0xFF059669).withValues(alpha: 0.2),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.videocam_rounded,
+                      size: 14,
+                      color: Color(0xFF059669),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        b.meetingLink!,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF059669),
+                          fontWeight: FontWeight.w600,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            if (isAdmin && !b.isSpecial && !isCancelled && !isCompleted) ...[
+              const SizedBox(height: 10),
+              const Divider(height: 1),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  if (isPending && onConfirm != null)
+                    OutlinedButton.icon(
+                      onPressed: onConfirm,
+                      icon: const Icon(Icons.check_circle_outline_rounded,
+                          size: 15),
+                      label: const Text('Confirm'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF059669),
+                        side: const BorderSide(color: Color(0xFF059669)),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        textStyle: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  if (isConfirmed && onAddMeetingLink != null)
+                    OutlinedButton.icon(
+                      onPressed: onAddMeetingLink,
+                      icon: const Icon(Icons.link_rounded, size: 15),
+                      label: Text(
+                        b.meetingLink?.isNotEmpty == true
+                            ? 'Edit Link'
+                            : 'Add Link',
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.primaryLight,
+                        side: const BorderSide(color: AppColors.primaryLight),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        textStyle: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  if (isConfirmed && onMarkCompleted != null)
+                    OutlinedButton.icon(
+                      onPressed: onMarkCompleted,
+                      icon: const Icon(Icons.done_all_rounded, size: 15),
+                      label: const Text('Complete'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF7C3AED),
+                        side: const BorderSide(color: Color(0xFF7C3AED)),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        textStyle: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  if (canCancel)
+                    OutlinedButton.icon(
+                      onPressed: onCancel,
+                      icon: const Icon(Icons.cancel_outlined, size: 15),
+                      label: const Text('Cancel'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFDC2626),
+                        side: const BorderSide(color: Color(0xFFDC2626)),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        textStyle: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+            if (onViewAnswers != null) ...[
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerRight,
+                child: OutlinedButton.icon(
+                  onPressed: onViewAnswers,
+                  icon: const Icon(Icons.description_outlined, size: 15),
+                  label: const Text('View Answers'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.primary,
+                    side: const BorderSide(color: AppColors.primary),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+            if (!isAdmin && canCancel) ...[
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: onCancel,
+                  icon: const Icon(Icons.cancel_outlined, size: 15),
+                  label: const Text('Cancel Booking'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFFDC2626),
+                    textStyle: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ],
-        ),
-      ]),
-    );
-  }
-
-  Widget _pageBtn(String label, bool enabled, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: enabled ? onTap : null,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: enabled ? Colors.white : const Color(0xFFF8FAFC),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 13, fontWeight: FontWeight.w700,
-            color: enabled ? AppColors.primaryLight : const Color(0xFFCBD5E1),
-          ),
         ),
       ),
     );
   }
+
+  Widget _detailChip(IconData icon, String label, Color color) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+                fontSize: 12, color: color, fontWeight: FontWeight.w600),
+          ),
+        ],
+      );
 }

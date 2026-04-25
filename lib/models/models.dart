@@ -4,24 +4,6 @@
 // Base URL: http://52.55.178.31:8081
 // ════════════════════════════════════════════════════════════════════════════
 
-// ─── AUTH ─────────────────────────────────────────────────────────────────────
-
-class AuthResult {
-  final bool success;
-  final String? role;
-  final String? userId;
-  final String? consultantId;
-  final String? message;
-
-  AuthResult({
-    required this.success,
-    this.role,
-    this.userId,
-    this.consultantId,
-    this.message,
-  });
-}
-
 // ─── USER ─────────────────────────────────────────────────────────────────────
 
 class UserModel {
@@ -29,6 +11,7 @@ class UserModel {
   final String name;
   final String email;
   final String role;
+  final String? createdAt;
   final String? phone;
   final String? photoUrl;
   final String? identifier;
@@ -39,6 +22,7 @@ class UserModel {
     required this.name,
     required this.email,
     required this.role,
+    this.createdAt,
     this.phone,
     this.photoUrl,
     this.identifier,
@@ -46,30 +30,58 @@ class UserModel {
   });
 
   factory UserModel.fromJson(Map<String, dynamic> json) => UserModel(
-        id: json['id'] ?? 0,
-        name: json['name'] ?? json['fullName'] ?? '',
-        email: json['email'] ?? '',
-        role: json['role'] ?? 'USER',
-        phone: json['phone']?.toString() ?? json['phoneNumber']?.toString(),
-        photoUrl: json['photoUrl'] ?? json['profilePicture'],
-        identifier: json['identifier']?.toString(),
-        consultantId: json['consultantId'],
-      );
+    id: json['id'] ?? 0,
+    name: json['name'] ?? json['fullName'] ?? '',
+    email: json['email'] ?? '',
+    role: json['role'] ?? 'USER',
+    createdAt: json['createdAt']?.toString(),
+    phone: json['phone']?.toString() ?? json['phoneNumber']?.toString(),
+    photoUrl: json['photoUrl'] ?? json['profilePicture'],
+    identifier: json['identifier']?.toString(),
+    consultantId: json['consultantId'],
+  );
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'email': email,
-        'role': role,
-        if (phone != null) 'phone': phone,
-        if (photoUrl != null) 'photoUrl': photoUrl,
-        if (identifier != null) 'identifier': identifier,
-        if (consultantId != null) 'consultantId': consultantId,
-      };
+    'id': id,
+    'name': name,
+    'email': email,
+    'role': role,
+    if (createdAt != null) 'createdAt': createdAt,
+    if (phone != null) 'phone': phone,
+    if (photoUrl != null) 'photoUrl': photoUrl,
+    if (identifier != null) 'identifier': identifier,
+    if (consultantId != null) 'consultantId': consultantId,
+  };
 }
 
 // ─── CONSULTANT ───────────────────────────────────────────────────────────────
 // API: GET/POST/PUT/DELETE /api/consultants
+
+double? _asDouble(dynamic value) {
+  if (value == null) return null;
+  if (value is num) return value.toDouble();
+  return double.tryParse(value.toString());
+}
+
+Map<String, dynamic>? _timeToMap(dynamic value) {
+  if (value is Map) return Map<String, dynamic>.from(value);
+  if (value is String && value.isNotEmpty) {
+    final parts = value.split(':');
+    if (parts.length >= 2) {
+      final hour = int.tryParse(parts[0]);
+      final minute = int.tryParse(parts[1]);
+      if (hour != null && minute != null) {
+        return {
+          'hour': hour,
+          'minute': minute,
+          'second': parts.length >= 3 ? int.tryParse(parts[2]) ?? 0 : 0,
+          'nano': 0,
+        };
+      }
+    }
+  }
+  return null;
+}
 
 class ConsultantModel {
   final int id;
@@ -83,6 +95,8 @@ class ConsultantModel {
   final String? photoUrl;
   final Map<String, dynamic>? shiftStartTime;  // {hour, minute, second, nano}
   final Map<String, dynamic>? shiftEndTime;
+  final double? yearsOfExperience;
+  final int? slotsDuration;
   final List<String> skills;
   final bool isActive;
 
@@ -98,25 +112,49 @@ class ConsultantModel {
     this.photoUrl,
     this.shiftStartTime,
     this.shiftEndTime,
+    this.yearsOfExperience,
+    this.slotsDuration,
     this.skills = const [],
     this.isActive = true,
   });
 
   factory ConsultantModel.fromJson(Map<String, dynamic> json) => ConsultantModel(
-        id: json['id'] ?? 0,
-        name: json['name'] ?? json['fullName'] ?? '',
-        email: json['email'] ?? '',
-        designation: json['designation'] ?? json['title'],
-        description: json['description'],
-        charges: (json['charges'] ?? json['feePerSession'] ?? json['fee'] ?? 0).toDouble(),
-        rating: (json['rating'] ?? 0).toDouble(),
-        reviewCount: json['reviewCount'] ?? json['totalReviews'] ?? 0,
-        photoUrl: json['photoUrl'] ?? json['profilePicture'],
-        shiftStartTime: json['shiftStartTime'] is Map ? Map<String, dynamic>.from(json['shiftStartTime']) : null,
-        shiftEndTime: json['shiftEndTime'] is Map ? Map<String, dynamic>.from(json['shiftEndTime']) : null,
-        skills: (json['skills'] as List<dynamic>? ?? []).map((s) => s.toString()).toList(),
-        isActive: json['isActive'] ?? json['active'] ?? true,
-      );
+    id: json['id'] ?? 0,
+    name: json['name'] ?? json['fullName'] ?? '',
+    email: json['email'] ?? '',
+    designation: json['designation'] ?? json['title'],
+    description: json['description'],
+    charges: _asDouble(json['charges'] ?? json['feePerSession'] ?? json['fee'] ?? json['totalAmount']),
+    rating: _asDouble(json['rating']),
+    reviewCount: json['reviewCount'] ?? json['totalReviews'] ?? 0,
+    photoUrl: json['photoUrl'] ?? json['profilePhoto'] ?? json['profilePicture'],
+    shiftStartTime: _timeToMap(json['shiftStartTime']),
+    shiftEndTime: _timeToMap(json['shiftEndTime']),
+    yearsOfExperience: _asDouble(json['yearsOfExperience']),
+    slotsDuration: json['slotsDuration'] is num
+        ? (json['slotsDuration'] as num).toInt()
+        : int.tryParse('${json['slotsDuration'] ?? ''}'),
+    skills: (json['skills'] as List<dynamic>? ?? []).map((s) => s.toString()).toList(),
+    isActive: json['isActive'] ?? json['active'] ?? true,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'email': email,
+    if (designation != null) 'designation': designation,
+    if (description != null) 'description': description,
+    if (charges != null) 'charges': charges,
+    if (rating != null) 'rating': rating,
+    if (reviewCount != null) 'reviewCount': reviewCount,
+    if (photoUrl != null) 'photoUrl': photoUrl,
+    if (shiftStartTime != null) 'shiftStartTime': shiftStartTime,
+    if (shiftEndTime != null) 'shiftEndTime': shiftEndTime,
+    if (yearsOfExperience != null) 'yearsOfExperience': yearsOfExperience,
+    if (slotsDuration != null) 'slotsDuration': slotsDuration,
+    'skills': skills,
+    'isActive': isActive,
+  };
 
   // Human readable shift time string: "9:00 AM - 6:00 PM"
   String get shiftDisplay {
@@ -151,10 +189,10 @@ class MasterTimeSlot {
   });
 
   factory MasterTimeSlot.fromJson(Map<String, dynamic> json) => MasterTimeSlot(
-        id: json['id'] ?? 0,
-        timeRange: json['timeRange'] ?? '',
-        consultantId: json['consultantId'],
-      );
+    id: json['id'] ?? 0,
+    timeRange: json['timeRange'] ?? '',
+    consultantId: json['consultantId'],
+  );
 }
 
 // ─── TIMESLOT ─────────────────────────────────────────────────────────────────
@@ -182,16 +220,26 @@ class TimeSlot {
   });
 
   factory TimeSlot.fromJson(Map<String, dynamic> json) => TimeSlot(
-        id: json['id'] ?? 0,
-        consultantId: json['consultantId'] ?? 0,
-        slotDate: json['slotDate']?.toString() ?? json['date']?.toString() ?? '',
-        masterTimeSlotId: json['masterTimeSlotId'] ?? 0,
-        timeRange: json['timeRange'] ?? json['startTime'] ?? '',
-        durationMinutes: json['durationMinutes'] ?? 60,
-        status: json['status'] ?? 'AVAILABLE',
-      );
+    id: json['id'] ?? 0,
+    consultantId: json['consultantId'] ?? 0,
+    slotDate: json['slotDate']?.toString() ?? json['date']?.toString() ?? '',
+    masterTimeSlotId: json['masterTimeSlotId'] ?? 0,
+    timeRange: json['timeRange'] ?? json['slotTime'] ?? json['startTime'] ?? '',
+    durationMinutes: json['durationMinutes'] ?? 60,
+    status: json['status'] ?? 'AVAILABLE',
+  );
 
   bool get isAvailable => status == 'AVAILABLE';
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'consultantId': consultantId,
+    'slotDate': slotDate,
+    'masterTimeSlotId': masterTimeSlotId,
+    'timeRange': timeRange,
+    'durationMinutes': durationMinutes,
+    'status': status,
+  };
 }
 
 // ─── BOOKING ──────────────────────────────────────────────────────────────────
@@ -211,6 +259,7 @@ class Booking {
   final String? meetingNotes;
   final String? userNotes;
   final double? amount;
+  final double? discountAmount;
   final int? timeSlotId;
   final int? consultantId;
   final String? consultantName;
@@ -230,6 +279,7 @@ class Booking {
     this.meetingNotes,
     this.userNotes,
     this.amount,
+    this.discountAmount,
     this.timeSlotId,
     this.consultantId,
     this.consultantName,
@@ -246,13 +296,21 @@ class Booking {
   factory Booking.fromJson(Map<String, dynamic> json) {
     String? extractConsultantName(Map<String, dynamic> j) {
       if (j['consultantName'] != null) return j['consultantName'];
-      if (j['consultant'] is Map) return j['consultant']['name'];
+      if (j['consultant'] is Map) {
+        return j['consultant']['name'] ??
+            j['consultant']['fullName'] ??
+            j['consultant']['username'];
+      }
       return null;
     }
     String? extractClientName(Map<String, dynamic> j) {
       if (j['clientName'] != null) return j['clientName'];
       if (j['userName'] != null) return j['userName'];
-      if (j['user'] is Map) return j['user']['name'];
+      if (j['userIdentifier'] != null) return j['userIdentifier'];
+      if (j['userEmail'] != null) return j['userEmail'];
+      if (j['user'] is Map) {
+        return j['user']['name'] ?? j['user']['fullName'] ?? j['user']['identifier'] ?? j['user']['email'];
+      }
       return null;
     }
     String? extractSlotDate(Map<String, dynamic> j) {
@@ -262,7 +320,12 @@ class Booking {
     }
     String? extractTimeRange(Map<String, dynamic> j) {
       if (j['timeRange'] != null) return j['timeRange'];
-      if (j['timeSlot'] is Map) return j['timeSlot']['timeRange'];
+      if (j['slotTime'] != null) return j['slotTime'];
+      if (j['timeSlot'] is Map) {
+        return j['timeSlot']['timeRange'] ??
+            j['timeSlot']['slotTime'] ??
+            j['timeSlot']['startTime'];
+      }
       return j['startTime'] ?? j['slotStartTime'];
     }
 
@@ -275,7 +338,8 @@ class Booking {
       meetingId: json['meetingId'],
       meetingNotes: json['meetingNotes'],
       userNotes: json['userNotes'],
-      amount: (json['amount'] ?? 0).toDouble(),
+      amount: _asDouble(json['totalAmount'] ?? json['amount'] ?? json['charges'] ?? json['fee']),
+      discountAmount: _asDouble(json['discountAmount']),
       timeSlotId: json['timeSlotId'] ?? json['slotId'],
       consultantId: json['consultantId'],
       consultantName: extractConsultantName(json),
@@ -298,6 +362,28 @@ class Booking {
   bool get isConfirmed => bookingStatus == 'CONFIRMED';
   bool get isCompleted => bookingStatus == 'COMPLETED';
   bool get isCancelled => bookingStatus == 'CANCELLED';
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'bookingStatus': bookingStatus,
+    'status': bookingStatus,
+    if (paymentStatus != null) 'paymentStatus': paymentStatus,
+    if (meetingMode != null) 'meetingMode': meetingMode,
+    if (meetingLink != null) 'meetingLink': meetingLink,
+    if (meetingId != null) 'meetingId': meetingId,
+    if (meetingNotes != null) 'meetingNotes': meetingNotes,
+    if (userNotes != null) 'userNotes': userNotes,
+    if (amount != null) 'totalAmount': amount,
+    if (discountAmount != null) 'discountAmount': discountAmount,
+    if (timeSlotId != null) 'timeSlotId': timeSlotId,
+    if (consultantId != null) 'consultantId': consultantId,
+    if (consultantName != null) 'consultantName': consultantName,
+    if (userId != null) 'userId': userId,
+    if (clientName != null) 'clientName': clientName,
+    if (slotDate != null) 'slotDate': slotDate,
+    if (timeRange != null) 'timeRange': timeRange,
+    if (createdAt != null) 'createdAt': createdAt,
+  };
 }
 
 // ─── TICKET ───────────────────────────────────────────────────────────────────
@@ -350,27 +436,56 @@ class Ticket {
   // Backward compat — title = category
   String get title => category;
 
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'category': category,
+    'title': category,
+    if (description != null) 'description': description,
+    'status': status,
+    'priority': priority,
+    if (userId != null) 'userId': userId,
+    if (userName != null) 'userName': userName,
+    if (consultantId != null) 'consultantId': consultantId,
+    if (consultantName != null) 'consultantName': consultantName,
+    if (createdAt != null) 'createdAt': createdAt,
+    if (updatedAt != null) 'updatedAt': updatedAt,
+    if (slaRespondBy != null) 'slaRespondBy': slaRespondBy,
+    if (slaResolveBy != null) 'slaResolveBy': slaResolveBy,
+    'slaBreached': slaBreached,
+    'escalated': escalated,
+    if (slaHours != null) 'slaHours': slaHours,
+    'comments': comments.map((c) => c.toJson()).toList(),
+  };
+
   factory Ticket.fromJson(Map<String, dynamic> json) => Ticket(
-        id: json['id'] ?? 0,
-        category: json['category'] ?? json['title'] ?? json['subject'] ?? 'General',
-        description: json['description'] ?? json['body'],
-        status: json['status'] ?? 'NEW',
-        priority: json['priority'] ?? 'MEDIUM',
-        userId: json['userId'] ?? json['user']?['id'],
-        userName: json['userName'] ?? json['user']?['name'] ?? json['clientName'],
-        consultantId: json['consultantId'] ?? json['assignedTo'],
-        consultantName: json['consultantName'] ?? json['assignedToName'],
-        createdAt: json['createdAt']?.toString(),
-        updatedAt: json['updatedAt']?.toString(),
-        slaRespondBy: json['slaRespondBy']?.toString(),
-        slaResolveBy: json['slaResolveBy']?.toString(),
-        slaBreached: json['slaBreached'] ?? false,
-        escalated: json['escalated'] ?? false,
-        slaHours: json['slaHours'],
-        comments: (json['comments'] as List<dynamic>? ?? [])
-            .map((c) => TicketComment.fromJson(c))
-            .toList(),
-      );
+    id: json['id'] ?? 0,
+    category: json['categoryName'] ??
+        json['category'] ??
+        json['title'] ??
+        json['subject'] ??
+        (json['ticketCategory'] is Map
+            ? json['ticketCategory']['name']
+            : null) ??
+        (json['category'] is Map ? json['category']['name'] : null) ??
+        'General',
+    description: json['description'] ?? json['body'],
+    status: json['status'] ?? 'NEW',
+    priority: json['priority'] ?? 'MEDIUM',
+    userId: json['userId'] ?? json['user']?['id'],
+    userName: json['userName'] ?? json['user']?['name'] ?? json['clientName'],
+    consultantId: json['consultantId'] ?? json['assignedTo'],
+    consultantName: json['consultantName'] ?? json['assignedToName'],
+    createdAt: json['createdAt']?.toString(),
+    updatedAt: json['updatedAt']?.toString(),
+    slaRespondBy: json['slaRespondBy']?.toString(),
+    slaResolveBy: json['slaResolveBy']?.toString(),
+    slaBreached: json['slaBreached'] ?? json['isSlaBreached'] ?? false,
+    escalated: json['escalated'] ?? json['isEscalated'] ?? false,
+    slaHours: json['slaHours'],
+    comments: (json['comments'] as List<dynamic>? ?? [])
+        .map((c) => TicketComment.fromJson(c))
+        .toList(),
+  );
 
   SlaInfo getSlaInfo() {
     // Use backend-provided slaResolveBy if available
@@ -439,15 +554,26 @@ class TicketComment {
   bool get isInternal => isConsultantReply;
 
   factory TicketComment.fromJson(Map<String, dynamic> json) => TicketComment(
-        id: json['id'] ?? 0,
-        ticketId: json['ticketId'],
-        message: json['message'] ?? json['content'] ?? json['body'] ?? '',
-        senderId: json['senderId'],
-        authorName: json['authorName'] ?? json['senderName'] ?? json['author']?['name'],
-        authorRole: json['authorRole'] ?? json['role'],
-        isConsultantReply: json['isConsultantReply'] ?? json['isInternal'] ?? json['internal'] ?? false,
-        createdAt: json['createdAt']?.toString(),
-      );
+    id: json['id'] ?? 0,
+    ticketId: json['ticketId'],
+    message: json['message'] ?? json['content'] ?? json['body'] ?? '',
+    senderId: json['senderId'],
+    authorName: json['authorName'] ?? json['senderName'] ?? json['author']?['name'],
+    authorRole: json['authorRole'] ?? json['role'],
+    isConsultantReply: json['isConsultantReply'] ?? json['isInternal'] ?? json['internal'] ?? false,
+    createdAt: json['createdAt']?.toString(),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'ticketId': ticketId,
+    'message': message,
+    'senderId': senderId,
+    'authorName': authorName,
+    'authorRole': authorRole,
+    'isConsultantReply': isConsultantReply,
+    'createdAt': createdAt,
+  };
 }
 
 // ─── TICKET NOTE ──────────────────────────────────────────────────────────────
@@ -462,11 +588,19 @@ class TicketNote {
   TicketNote({required this.id, required this.content, this.authorName, this.createdAt});
 
   factory TicketNote.fromJson(Map<String, dynamic> json) => TicketNote(
-        id: json['id'] ?? 0,
-        content: json['content'] ?? json['message'] ?? '',
-        authorName: json['authorName'] ?? json['author']?['name'],
-        createdAt: json['createdAt']?.toString(),
-      );
+    id: json['id'] ?? 0,
+    content: json['content'] ?? json['message'] ?? '',
+    authorName: json['authorName'] ?? json['author']?['name'],
+    createdAt: json['createdAt']?.toString(),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'content': content,
+    'authorName': authorName,
+    'createdAt': createdAt,
+    'noteText': content, // for backward compat in UI
+  };
 }
 
 // ─── FEEDBACK ─────────────────────────────────────────────────────────────────
@@ -498,16 +632,16 @@ class Feedback {
   });
 
   factory Feedback.fromJson(Map<String, dynamic> json) => Feedback(
-        id: json['id'] ?? 0,
-        rating: json['rating'] ?? 0,
-        comments: json['comments'] ?? json['comment'] ?? json['review'],
-        clientName: json['clientName'] ?? json['userName'] ?? json['user']?['name'],
-        userId: json['userId'],
-        consultantId: json['consultantId'],
-        bookingId: json['bookingId'],
-        meetingId: json['meetingId'],
-        createdAt: json['createdAt']?.toString(),
-      );
+    id: json['id'] ?? 0,
+    rating: json['rating'] ?? 0,
+    comments: json['comments'] ?? json['comment'] ?? json['review'],
+    clientName: json['clientName'] ?? json['userName'] ?? json['user']?['name'],
+    userId: json['userId'],
+    consultantId: json['consultantId'],
+    bookingId: json['bookingId'],
+    meetingId: json['meetingId'],
+    createdAt: json['createdAt']?.toString(),
+  );
 }
 
 // ─── DASHBOARD / ANALYTICS ────────────────────────────────────────────────────
@@ -540,17 +674,17 @@ class DashboardAnalytics {
   });
 
   factory DashboardAnalytics.fromJson(Map<String, dynamic> json) => DashboardAnalytics(
-        totalTickets: json['totalTickets'] ?? 0,
-        openTickets: json['openTickets'] ?? 0,
-        resolvedTickets: json['resolvedTickets'] ?? 0,
-        slaBreaches: json['slaBreaches'] ?? 0,
-        avgResponseTime: (json['avgResponseTime'] ?? 0).toDouble(),
-        avgResolutionTime: (json['avgResolutionTime'] ?? 0).toDouble(),
-        avgRating: (json['avgRating'] ?? 0).toDouble(),
-        ticketsByStatus: Map<String, int>.from(json['ticketsByStatus'] ?? {}),
-        ticketsByPriority: Map<String, int>.from(json['ticketsByPriority'] ?? {}),
-        ticketsByCategory: Map<String, int>.from(json['ticketsByCategory'] ?? {}),
-      );
+    totalTickets: json['totalTickets'] ?? 0,
+    openTickets: json['openTickets'] ?? 0,
+    resolvedTickets: json['resolvedTickets'] ?? 0,
+    slaBreaches: json['slaBreaches'] ?? 0,
+    avgResponseTime: (json['avgResponseTime'] ?? 0).toDouble(),
+    avgResolutionTime: (json['avgResolutionTime'] ?? 0).toDouble(),
+    avgRating: (json['avgRating'] ?? 0).toDouble(),
+    ticketsByStatus: Map<String, int>.from(json['ticketsByStatus'] ?? {}),
+    ticketsByPriority: Map<String, int>.from(json['ticketsByPriority'] ?? {}),
+    ticketsByCategory: Map<String, int>.from(json['ticketsByCategory'] ?? {}),
+  );
 }
 
 class DashboardSummary {
@@ -560,9 +694,9 @@ class DashboardSummary {
   DashboardSummary({required this.label, required this.count});
 
   factory DashboardSummary.fromJson(Map<String, dynamic> json) => DashboardSummary(
-        label: json['label']?.toString() ?? '',
-        count: json['count'] ?? 0,
-      );
+    label: json['label']?.toString() ?? '',
+    count: json['count'] ?? 0,
+  );
 }
 
 // ─── NOTIFICATION ─────────────────────────────────────────────────────────────
@@ -570,7 +704,7 @@ class DashboardSummary {
 //      PUT /api/notifications/{id}/read
 
 class AppNotification {
-  final String id;
+  final int id;
   final String title;
   final String body;
   final String type;        // ticket | booking | system
@@ -589,36 +723,55 @@ class AppNotification {
   });
 
   AppNotification copyWith({bool? isRead}) => AppNotification(
-        id: id,
-        title: title,
-        body: body,
-        type: type,
-        isRead: isRead ?? this.isRead,
-        createdAt: createdAt,
-        data: data,
-      );
+    id: id,
+    title: title,
+    body: body,
+    type: type,
+    isRead: isRead ?? this.isRead,
+    createdAt: createdAt,
+    data: data,
+  );
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'title': title,
-        'body': body,
-        'type': type,
-        'isRead': isRead,
-        'createdAt': createdAt.toIso8601String(),
-        if (data != null) 'data': data,
-      };
+    'id': id,
+    'title': title,
+    'body': body,
+    'type': type,
+    'isRead': isRead,
+    'createdAt': createdAt.toIso8601String(),
+    if (data != null) 'data': data,
+  };
 
   factory AppNotification.fromJson(Map<String, dynamic> json) => AppNotification(
-        id: json['id']?.toString() ?? '',
-        title: json['title'] ?? '',
-        body: json['body'] ?? json['message'] ?? '',
-        type: json['type'] ?? 'system',
-        isRead: json['isRead'] ?? json['read'] ?? false,
-        createdAt: json['createdAt'] != null
-            ? DateTime.tryParse(json['createdAt'].toString()) ?? DateTime.now()
-            : DateTime.now(),
-        data: json['data'] is Map ? Map<String, dynamic>.from(json['data']) : null,
-      );
+    id: json['id'] is num ? (json['id'] as num).toInt() : int.tryParse('${json['id'] ?? 0}') ?? 0,
+    title: (json['title'] ?? '').toString().trim().isNotEmpty
+        ? json['title'].toString()
+        : _notificationTitle(json['type']?.toString() ?? 'system', json['ticketId']),
+    body: (json['body'] ?? json['message'] ?? '').toString(),
+    type: json['type']?.toString() ?? 'system',
+    isRead: json['isRead'] ?? json['read'] ?? false,
+    createdAt: json['createdAt'] != null
+        ? DateTime.tryParse(json['createdAt'].toString()) ?? DateTime.now()
+        : DateTime.now(),
+    data: json['data'] is Map
+        ? Map<String, dynamic>.from(json['data'])
+        : {
+      if (json['ticketId'] != null)
+        'ticketId': json['ticketId'] is num
+            ? (json['ticketId'] as num).toInt()
+            : int.tryParse('${json['ticketId']}'),
+    },
+  );
+}
+
+String _notificationTitle(String type, dynamic ticketId) {
+  final normalized = type.toLowerCase();
+  final suffix = ticketId != null ? ' #$ticketId' : '';
+  if (normalized.contains('assignment')) return 'New Assignment$suffix';
+  if (normalized.contains('booking')) return 'Booking Update$suffix';
+  if (normalized.contains('ticket')) return 'Ticket Update$suffix';
+  if (normalized.contains('escalat')) return 'Escalation Alert$suffix';
+  return 'Notification$suffix';
 }
 
 // ─── SUBSCRIPTION PLAN ────────────────────────────────────────────────────────
@@ -643,15 +796,24 @@ class SubscriptionPlan {
   });
 
   factory SubscriptionPlan.fromJson(Map<String, dynamic> json) => SubscriptionPlan(
-        id: json['id'] ?? 0,
-        name: json['name'] ?? '',
-        originalPrice: (json['originalPrice'] ?? json['price'] ?? 0).toDouble(),
-        discountPrice: json['discountPrice'] != null ? (json['discountPrice']).toDouble() : null,
-        features: json['features'],
-        tag: json['tag'],
-      );
+    id: json['id'] ?? 0,
+    name: json['name'] ?? '',
+    originalPrice: (json['originalPrice'] ?? json['price'] ?? 0).toDouble(),
+    discountPrice: json['discountPrice'] != null ? (json['discountPrice']).toDouble() : null,
+    features: json['features'],
+    tag: json['tag'],
+  );
 
   double get effectivePrice => discountPrice ?? originalPrice;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'originalPrice': originalPrice,
+    if (discountPrice != null) 'discountPrice': discountPrice,
+    if (features != null) 'features': features,
+    if (tag != null) 'tag': tag,
+  };
 }
 
 // ─── CANNED RESPONSE ──────────────────────────────────────────────────────────
@@ -677,12 +839,12 @@ class CannedResponse {
   String get message => content;
 
   factory CannedResponse.fromJson(Map<String, dynamic> json) => CannedResponse(
-        id: json['id'] ?? 0,
-        title: json['title'] ?? '',
-        content: json['content'] ?? json['message'] ?? '',
-        category: json['category'],
-        createdAt: json['createdAt']?.toString(),
-      );
+    id: json['id'] ?? 0,
+    title: json['title'] ?? '',
+    content: json['content'] ?? json['message'] ?? '',
+    category: json['category'],
+    createdAt: json['createdAt']?.toString(),
+  );
 }
 
 // ─── CATEGORY ─────────────────────────────────────────────────────────────────
@@ -698,11 +860,11 @@ class TicketCategory {
   TicketCategory({required this.id, required this.name, this.isActive = true, this.description});
 
   factory TicketCategory.fromJson(Map<String, dynamic> json) => TicketCategory(
-        id: json['id'] ?? 0,
-        name: json['name'] ?? '',
-        isActive: json['isActive'] ?? json['active'] ?? true,
-        description: json['description'],
-      );
+    id: json['id'] ?? 0,
+    name: json['name'] ?? '',
+    isActive: json['isActive'] ?? json['active'] ?? true,
+    description: json['description'],
+  );
 }
 
 // ─── BUSINESS HOURS ───────────────────────────────────────────────────────────
@@ -724,12 +886,16 @@ class BusinessHours {
   });
 
   factory BusinessHours.fromJson(Map<String, dynamic> json) => BusinessHours(
-        id: json['id'] ?? 0,
-        dayOfWeek: json['dayOfWeek'] ?? '',
-        openTime: json['openTime'] ?? '09:00',
-        closeTime: json['closeTime'] ?? '18:00',
-        isOpen: json['isOpen'] ?? json['open'] ?? true,
-      );
+    id: json['id'] ?? 0,
+    dayOfWeek: json['dayOfWeek']?.toString() ?? '',
+    openTime: _timeToMap(json['startTime']) != null
+        ? '${(_timeToMap(json['startTime'])!['hour'] ?? 9).toString().padLeft(2, '0')}:${(_timeToMap(json['startTime'])!['minute'] ?? 0).toString().padLeft(2, '0')}'
+        : json['openTime']?.toString() ?? '09:00',
+    closeTime: _timeToMap(json['endTime']) != null
+        ? '${(_timeToMap(json['endTime'])!['hour'] ?? 18).toString().padLeft(2, '0')}:${(_timeToMap(json['endTime'])!['minute'] ?? 0).toString().padLeft(2, '0')}'
+        : json['closeTime']?.toString() ?? '18:00',
+    isOpen: json['isWorkingDay'] ?? json['workingDay'] ?? json['isOpen'] ?? json['open'] ?? true,
+  );
 }
 
 // ─── HOLIDAY ──────────────────────────────────────────────────────────────────
@@ -744,10 +910,10 @@ class Holiday {
   Holiday({required this.id, required this.name, required this.date});
 
   factory Holiday.fromJson(Map<String, dynamic> json) => Holiday(
-        id: json['id'] ?? 0,
-        name: json['name'] ?? '',
-        date: json['date']?.toString() ?? '',
-      );
+    id: json['id'] ?? 0,
+    name: json['name'] ?? '',
+    date: json['holidayDate']?.toString() ?? json['date']?.toString() ?? '',
+  );
 }
 
 // ─── ONBOARDING ───────────────────────────────────────────────────────────────
@@ -784,21 +950,36 @@ class OnboardingProfile {
   });
 
   factory OnboardingProfile.fromJson(Map<String, dynamic> json) => OnboardingProfile(
-        id: json['id'] ?? 0,
-        name: json['name'] ?? '',
-        dob: json['dob']?.toString(),
-        identifier: json['identifier']?.toString(),
-        email: json['email'],
-        phoneNumber: json['phoneNumber']?.toString(),
-        location: json['location'],
-        subscribed: json['subscribed'] ?? false,
-        subscriptionPlanId: json['subscriptionPlanId'],
-        incomeItems: (json['incomeItems'] as List<dynamic>? ?? [])
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList(),
-        expenseItems: (json['expenseItems'] as List<dynamic>? ?? [])
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList(),
-        photoUrl: json['photoUrl'] ?? json['profilePicture'],
-      );
+    id: json['id'] ?? 0,
+    name: json['name'] ?? '',
+    dob: json['dob']?.toString(),
+    identifier: json['identifier']?.toString(),
+    email: json['email'],
+    phoneNumber: json['phoneNumber']?.toString(),
+    location: json['location'],
+    subscribed: json['subscribed'] ?? false,
+    subscriptionPlanId: json['subscriptionPlanId'],
+    incomeItems: (json['incomeItems'] as List<dynamic>? ?? [])
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(),
+    expenseItems: (json['expenseItems'] as List<dynamic>? ?? [])
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(),
+    photoUrl: json['photoUrl'] ?? json['profilePicture'],
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    if (dob != null) 'dob': dob,
+    if (identifier != null) 'identifier': identifier,
+    if (email != null) 'email': email,
+    if (phoneNumber != null) 'phoneNumber': phoneNumber,
+    if (location != null) 'location': location,
+    'subscribed': subscribed,
+    if (subscriptionPlanId != null) 'subscriptionPlanId': subscriptionPlanId,
+    'incomeItems': incomeItems,
+    'expenseItems': expenseItems,
+    if (photoUrl != null) 'photoUrl': photoUrl,
+  };
 }

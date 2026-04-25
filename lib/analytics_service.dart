@@ -1,361 +1,193 @@
-// lib/services/analytics_service.dart
+// lib/core/services/analytics_service.dart
+// ════════════════════════════════════════════════════════════════════════════
+// Swagger spec ke ALL dashboard endpoints:
+//   GET /api/dashboard/analytics?period=WEEKLY      ← resolution analytics
+//   GET /api/dashboard/summaries?period=WEEKLY       ← graph data
+//   GET /api/dashboard/ticket-volume?days=14
+//   GET /api/dashboard/sla-breach?days=14
+//   GET /api/dashboard/revenue?days=14
+//   GET /api/dashboard/response-times?days=14
+//   GET /api/dashboard/reports?days=14&groupBy=CATEGORY
+//   GET /api/dashboard/customer-satisfaction?days=14
+//   GET /api/dashboard/agent-performance?days=14
+// ════════════════════════════════════════════════════════════════════════════
+
 import 'package:finadvise/api_client.dart';
+import '../models/models.dart';
 
-// ─── MODELS ───────────────────────────────────────────────────────────────────
-
-class TicketGraphData {
-  final int count;
-  final String label;
-
-  TicketGraphData({required this.count, required this.label});
-
-  factory TicketGraphData.fromJson(Map<String, dynamic> json) => TicketGraphData(
-        count: json['count'] ?? 0,
-        label: json['label'] ?? '',
-      );
+class AnalyticsPeriod {
+  static const String weekly = 'WEEKLY';
+  static const String monthly = 'MONTHLY';
+  static const String yearly = 'YEARLY';
 }
-
-/// Consolidated analytics model built from real API endpoints:
-/// - GET /api/dashboard/summaries?period=WEEKLY
-///   → Map<String, List<TicketGraphData>>
-///   → keys: "byStatus", "byPriority", "trend" (actual keys depend on backend)
-/// - GET /api/dashboard/analytics?period=WEEKLY
-///   → Map<String, Object>
-///   → keys: totalTickets, resolvedTickets, avgResponseTime, avgResolutionTime, etc.
-class DashboardAnalytics {
-  // From /api/dashboard/analytics
-  final int totalTickets;
-  final int resolvedTickets;
-  final int openTickets;
-  final int slaBreaches;
-  final double avgResponseTime; // hours
-  final double avgResolutionTime; // hours
-  final double avgRating;
-
-  // From /api/dashboard/summaries
-  final Map<String, int> ticketsByStatus;
-  final Map<String, int> ticketsByPriority;
-  final List<TicketGraphData> weeklyTrend;
-
-  DashboardAnalytics({
-    required this.totalTickets,
-    required this.resolvedTickets,
-    required this.openTickets,
-    required this.slaBreaches,
-    required this.avgResponseTime,
-    required this.avgResolutionTime,
-    required this.avgRating,
-    required this.ticketsByStatus,
-    required this.ticketsByPriority,
-    required this.weeklyTrend,
-  });
-
-  static DashboardAnalytics empty() => DashboardAnalytics(
-        totalTickets: 0,
-        resolvedTickets: 0,
-        openTickets: 0,
-        slaBreaches: 0,
-        avgResponseTime: 0,
-        avgResolutionTime: 0,
-        avgRating: 0,
-        ticketsByStatus: {},
-        ticketsByPriority: {},
-        weeklyTrend: [],
-      );
-}
-
-// ─── SERVICE ──────────────────────────────────────────────────────────────────
 
 class AnalyticsService {
   final ApiClient _apiClient = ApiClient();
 
-  /// GET /api/dashboard/summaries?period=WEEKLY
-  /// Returns Map<String, List<TicketGraphData>>
-  /// period: WEEKLY | MONTHLY
-  Future<Map<String, List<TicketGraphData>>> getDashboardSummaries({
-    String period = 'WEEKLY',
-  }) async {
-    try {
-      final response = await _apiClient.dio.get(
-        '/api/dashboard/summaries',
-        queryParameters: {'period': period},
-      );
-      final raw = response.data as Map<String, dynamic>;
-      return raw.map((key, value) => MapEntry(
-            key,
-            (value as List).map((e) => TicketGraphData.fromJson(e)).toList(),
-          ));
-    } catch (_) {
-      return {};
-    }
-  }
+  // ── PERIOD-BASED ──────────────────────────────────────────────────────────
 
   /// GET /api/dashboard/analytics?period=WEEKLY
-  /// Returns Map<String, Object>
-  Future<Map<String, dynamic>> getResolutionAnalytics({
-    String period = 'WEEKLY',
+  Future<Map<String, dynamic>?> getAnalytics({
+    String period = AnalyticsPeriod.weekly,
   }) async {
     try {
       final response = await _apiClient.dio.get(
         '/api/dashboard/analytics',
         queryParameters: {'period': period},
       );
-      return Map<String, dynamic>.from(response.data);
-    } catch (_) {
-      return {};
-    }
-  }
-
-  /// Fetches BOTH endpoints and merges into DashboardAnalytics
-  Future<DashboardAnalytics> getFullDashboard({String period = 'WEEKLY'}) async {
-    try {
-      final results = await Future.wait([
-        getDashboardSummaries(period: period),
-        getResolutionAnalytics(period: period),
-      ]);
-
-      final summaries = results[0] as Map<String, List<TicketGraphData>>;
-      final analytics = results[1] as Map<String, dynamic>;
-
-      // Build status map from summaries (key "byStatus" or first matching list)
-      final Map<String, int> statusMap = {};
-      final Map<String, int> priorityMap = {};
-      List<TicketGraphData> trend = [];
-
-      summaries.forEach((key, graphList) {
-        final k = key.toLowerCase();
-        if (k.contains('status')) {
-          for (final g in graphList) {
-            statusMap[g.label] = g.count;
-          }
-        } else if (k.contains('priority')) {
-          for (final g in graphList) {
-            priorityMap[g.label] = g.count;
-          }
-        } else if (k.contains('trend') || k.contains('daily') || k.contains('weekly')) {
-          trend = graphList;
-        }
-      });
-
-      // Parse analytics map — keys depend on backend implementation
-      final int totalTickets = _parseInt(analytics['totalTickets']) ??
-          _parseInt(analytics['total']) ?? 0;
-      final int resolvedTickets = _parseInt(analytics['resolvedTickets']) ??
-          _parseInt(analytics['resolved']) ?? 0;
-      final int openTickets = _parseInt(analytics['openTickets']) ??
-          _parseInt(analytics['open']) ?? 0;
-      final int slaBreaches = _parseInt(analytics['slaBreaches']) ??
-          _parseInt(analytics['breached']) ?? 0;
-      final double avgResponse = _parseDouble(analytics['avgResponseTime']) ??
-          _parseDouble(analytics['avgFirstResponseTime']) ?? 0.0;
-      final double avgResolution = _parseDouble(analytics['avgResolutionTime']) ?? 0.0;
-      final double avgRating = _parseDouble(analytics['avgRating']) ??
-          _parseDouble(analytics['averageRating']) ?? 0.0;
-
-      return DashboardAnalytics(
-        totalTickets: totalTickets,
-        resolvedTickets: resolvedTickets,
-        openTickets: openTickets,
-        slaBreaches: slaBreaches,
-        avgResponseTime: avgResponse,
-        avgResolutionTime: avgResolution,
-        avgRating: avgRating,
-        ticketsByStatus: statusMap,
-        ticketsByPriority: priorityMap,
-        weeklyTrend: trend,
-      );
-    } catch (_) {
-      return DashboardAnalytics.empty();
-    }
-  }
-
-  int? _parseInt(dynamic v) {
-    if (v == null) return null;
-    if (v is int) return v;
-    if (v is double) return v.toInt();
-    if (v is String) return int.tryParse(v);
-    return null;
-  }
-
-  double? _parseDouble(dynamic v) {
-    if (v == null) return null;
-    if (v is double) return v;
-    if (v is int) return v.toDouble();
-    if (v is String) return double.tryParse(v);
-    return null;
-  }
-}
-
-// ─── ADMIN SERVICE (merged) ───────────────────────────────────────────────────
-
-class AdminService {
-  final ApiClient _apiClient = ApiClient();
-
-  // ── USERS ──
-
-  /// GET /api/users
-  Future<List<Map<String, dynamic>>> getAllUsers() async {
-    try {
-      final response = await _apiClient.dio.get('/api/users');
-      return List<Map<String, dynamic>>.from(response.data);
-    } catch (_) {
-      return [];
-    }
-  }
-
-  /// GET /api/users/role/{role}
-  /// role: USER | SUBSCRIBER | CONSULTANT | ADMIN
-  Future<List<Map<String, dynamic>>> getUsersByRole(String role) async {
-    try {
-      final response = await _apiClient.dio.get('/api/users/role/$role');
-      return List<Map<String, dynamic>>.from(response.data);
-    } catch (_) {
-      return [];
-    }
-  }
-
-  /// PUT /api/users/{id}
-  /// Body: { identifier?, password?, role?, consultantId? }
-  Future<bool> updateUser(int userId, Map<String, dynamic> data) async {
-    try {
-      await _apiClient.dio.put('/api/users/$userId', data: data);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// DELETE /api/users/{id}
-  Future<bool> deleteUser(int userId) async {
-    try {
-      await _apiClient.dio.delete('/api/users/$userId');
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  // ── SYSTEM SETTINGS ──
-
-  /// GET /api/admin/settings/holidays
-  Future<List<Map<String, dynamic>>> getHolidays() async {
-    try {
-      final response = await _apiClient.dio.get('/api/admin/settings/holidays');
-      return List<Map<String, dynamic>>.from(response.data);
-    } catch (_) {
-      return [];
-    }
-  }
-
-  /// POST /api/admin/settings/holidays
-  /// Body: { holidayDate, name }
-  Future<bool> addHoliday(String date, String name) async {
-    try {
-      await _apiClient.dio.post('/api/admin/settings/holidays', data: {
-        'holidayDate': date,
-        'name': name,
-      });
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// DELETE /api/admin/settings/holidays/{id}
-  Future<bool> deleteHoliday(int id) async {
-    try {
-      await _apiClient.dio.delete('/api/admin/settings/holidays/$id');
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// GET /api/admin/settings/business-hours
-  Future<List<Map<String, dynamic>>> getBusinessHours() async {
-    try {
-      final response = await _apiClient.dio.get('/api/admin/settings/business-hours');
-      return List<Map<String, dynamic>>.from(response.data);
-    } catch (_) {
-      return [];
-    }
-  }
-
-  /// POST /api/admin/settings/business-hours
-  /// Body: List of { dayOfWeek, startTime, endTime, workingDay }
-  Future<bool> updateBusinessHours(List<Map<String, dynamic>> hours) async {
-    try {
-      await _apiClient.dio.post('/api/admin/settings/business-hours', data: hours);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// GET /api/admin/settings/auto-responder
-  Future<Map<String, dynamic>?> getAutoResponder() async {
-    try {
-      final response = await _apiClient.dio.get('/api/admin/settings/auto-responder');
-      return Map<String, dynamic>.from(response.data);
-    } catch (_) {
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data)
+          : null;
+    } catch (e) {
       return null;
     }
   }
 
-  /// POST /api/admin/settings/auto-responder
-  /// Body: { enabled, message }
-  Future<bool> updateAutoResponder(bool enabled, String message) async {
+  /// GET /api/dashboard/summaries?period=WEEKLY
+  /// Returns: Map<String, List<{count, label}>>
+  Future<Map<String, dynamic>?> getSummaries({
+    String period = AnalyticsPeriod.weekly,
+  }) async {
     try {
-      await _apiClient.dio.post('/api/admin/settings/auto-responder', data: {
-        'enabled': enabled,
-        'message': message,
-      });
-      return true;
-    } catch (_) {
-      return false;
+      final response = await _apiClient.dio.get(
+        '/api/dashboard/summaries',
+        queryParameters: {'period': period},
+      );
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data)
+          : null;
+    } catch (e) {
+      return null;
     }
   }
 
-  // ── SUBSCRIPTION PLANS ──
+  // ── DAYS-BASED ────────────────────────────────────────────────────────────
 
-  /// GET /api/subscription-plans
-  Future<List<Map<String, dynamic>>> getAllPlans() async {
+  /// GET /api/dashboard/ticket-volume?days=14
+  Future<Map<String, dynamic>?> getTicketVolume({int days = 14}) async {
     try {
-      final response = await _apiClient.dio.get('/api/subscription-plans');
-      return List<Map<String, dynamic>>.from(response.data);
-    } catch (_) {
-      return [];
+      final response = await _apiClient.dio.get(
+        '/api/dashboard/ticket-volume',
+        queryParameters: {'days': days},
+      );
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data)
+          : null;
+    } catch (e) {
+      return null;
     }
   }
 
-  /// POST /api/subscription-plans
-  /// Body: { name, originalPrice, discountPrice, features?, tag? }
-  Future<bool> createPlan(Map<String, dynamic> data) async {
+  /// GET /api/dashboard/sla-breach?days=14
+  Future<Map<String, dynamic>?> getSlaBreach({int days = 14}) async {
     try {
-      await _apiClient.dio.post('/api/subscription-plans', data: data);
-      return true;
-    } catch (_) {
-      return false;
+      final response = await _apiClient.dio.get(
+        '/api/dashboard/sla-breach',
+        queryParameters: {'days': days},
+      );
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data)
+          : null;
+    } catch (e) {
+      return null;
     }
   }
 
-  /// PUT /api/subscription-plans/{id}
-  Future<bool> updatePlan(int id, Map<String, dynamic> data) async {
+  /// GET /api/dashboard/revenue?days=14
+  Future<Map<String, dynamic>?> getRevenue({int days = 14}) async {
     try {
-      await _apiClient.dio.put('/api/subscription-plans/$id', data: data);
-      return true;
-    } catch (_) {
-      return false;
+      final response = await _apiClient.dio.get(
+        '/api/dashboard/revenue',
+        queryParameters: {'days': days},
+      );
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data)
+          : null;
+    } catch (e) {
+      return null;
     }
   }
 
-  /// DELETE /api/subscription-plans/{id}
-  Future<bool> deletePlan(int id) async {
+  /// GET /api/dashboard/response-times?days=14
+  Future<Map<String, dynamic>?> getResponseTimes({int days = 14}) async {
     try {
-      await _apiClient.dio.delete('/api/subscription-plans/$id');
-      return true;
-    } catch (_) {
-      return false;
+      final response = await _apiClient.dio.get(
+        '/api/dashboard/response-times',
+        queryParameters: {'days': days},
+      );
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data)
+          : null;
+    } catch (e) {
+      return null;
     }
   }
+
+  /// GET /api/dashboard/reports?days=14&groupBy=CATEGORY
+  /// groupBy: CATEGORY | PRIORITY | STATUS | CONSULTANT (server-side values)
+  Future<Map<String, dynamic>?> getReports({
+    int days = 14,
+    String groupBy = 'CATEGORY',
+  }) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/api/dashboard/reports',
+        queryParameters: {'days': days, 'groupBy': groupBy},
+      );
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data)
+          : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// GET /api/dashboard/customer-satisfaction?days=14
+  Future<Map<String, dynamic>?> getCustomerSatisfaction({int days = 14}) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/api/dashboard/customer-satisfaction',
+        queryParameters: {'days': days},
+      );
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data)
+          : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// GET /api/dashboard/agent-performance?days=14
+  Future<Map<String, dynamic>?> getAgentPerformance({int days = 14}) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/api/dashboard/agent-performance',
+        queryParameters: {'days': days},
+      );
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data)
+          : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ── FULL DASHBOARD (parallel fetch) ──────────────────────────────────────
+
+  /// Sab period-based data ek saath fetch karo
+  Future<({Map<String, dynamic>? analytics, Map<String, dynamic>? summaries})>
+  getFullDashboard({String period = AnalyticsPeriod.weekly}) async {
+    final results = await Future.wait([
+      getAnalytics(period: period),
+      getSummaries(period: period),
+    ]);
+    return (
+    analytics: results[0],
+    summaries: results[1],
+    );
+  }
+
+  /// Alias for getFullDashboard to support legacy dashboard code
+  Future<({Map<String, dynamic>? analytics, Map<String, dynamic>? summaries})>
+  getAnalyticsAlias({String period = AnalyticsPeriod.weekly}) => getFullDashboard(period: period);
 }

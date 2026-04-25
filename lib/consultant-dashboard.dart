@@ -21,38 +21,42 @@
 
 import 'dart:async';
 import 'dart:io';
+
 import 'package:dio/dio.dart' as dio_pkg;
 import 'package:finadvise/api_client.dart';
 import 'package:finadvise/app_theme.dart';
-import 'package:finadvise/auth_service.dart';
+import 'package:finadvise/booking_answers_screen.dart';
 import 'package:finadvise/consultant_earnings_tab.dart';
-import 'package:finadvise/consultant_timeslot_manager.dart';
 import 'package:finadvise/login_screen.dart';
 import 'package:finadvise/models/models.dart';
-import 'package:finadvise/services/booking_service.dart';
-import 'package:finadvise/services/consultant_service.dart';
-import 'package:finadvise/services/feedback_service.dart';
-import 'package:finadvise/services/notification_service.dart';
-import 'package:finadvise/services/ticket_service.dart';
+import 'package:finadvise/services/services.dart';
 import 'package:finadvise/shared_widgets.dart';
 import 'package:flutter/material.dart' hide Feedback;
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-
-const _kApiBase = 'http://52.55.178.31:8081';
 
 // ─── Extensions ──────────────────────────────────────────────────────────────
 
 extension _TicketCompat on Ticket {
   String? get attachmentUrl {
-    try { return (this as dynamic).attachmentUrl as String?; } catch (_) { return null; }
+    try {
+      return (this as dynamic).attachmentUrl as String?;
+    } catch (_) {
+      return null;
+    }
   }
+
   String? get ticketNumber {
-    try { return (this as dynamic).ticketNumber as String?; } catch (_) { return null; }
+    try {
+      return (this as dynamic).ticketNumber as String?;
+    } catch (_) {
+      return null;
+    }
   }
 }
 
@@ -62,8 +66,9 @@ extension _ConsultantCompat on ConsultantModel {
 
   /// Returns HH:mm string for start time, empty if missing
   String get shiftStart => _parseLocalTime((this as dynamic).shiftStartTime);
+
   /// Returns HH:mm string for end time, empty if missing
-  String get shiftEnd   => _parseLocalTime((this as dynamic).shiftEndTime);
+  String get shiftEnd => _parseLocalTime((this as dynamic).shiftEndTime);
 
   String get shiftTimingsDisplay {
     final s = shiftStart;
@@ -76,9 +81,11 @@ extension _ConsultantCompat on ConsultantModel {
     try {
       final p = (this as dynamic).profilePhoto as String?;
       if (p == null || p.isEmpty) return null;
-      if (p.startsWith('http') || p.startsWith('blob:')) return p;
-      return '$_kApiBase${p.startsWith('/') ? p : '/$p'}';
-    } catch (_) { return null; }
+      final url = ApiClient.buildBackendAssetUrl(p);
+      return url.isEmpty ? null : url;
+    } catch (_) {
+      return null;
+    }
   }
 }
 
@@ -117,142 +124,180 @@ _SlaInfo? _computeSla(Ticket t) {
     } else if (diff.inHours < 2) {
       return _SlaInfo(_SlaState.warning, 'DUE in ${diff.inMinutes}m');
     }
-    return _SlaInfo(_SlaState.onTrack,
-        'Due ${DateFormat('d MMM HH:mm').format(deadline)}');
-  } catch (_) { return null; }
+    return _SlaInfo(
+        _SlaState.onTrack, 'Due ${DateFormat('d MMM HH:mm').format(deadline)}');
+  } catch (_) {
+    return null;
+  }
 }
 
 Color _slaColor(_SlaState s) {
   switch (s) {
-    case _SlaState.breached: return AppColors.danger;
-    case _SlaState.warning:  return AppColors.warning;
-    case _SlaState.onTrack:  return AppColors.success;
+    case _SlaState.breached:
+      return AppColors.danger;
+    case _SlaState.warning:
+      return AppColors.warning;
+    case _SlaState.onTrack:
+      return AppColors.success;
   }
 }
 
 Color _statusColor(String s) {
   switch (s.toUpperCase()) {
-    case 'CONFIRMED':   return AppColors.info;
-    case 'COMPLETED':   return AppColors.success;
-    case 'PENDING':     return AppColors.warning;
-    case 'CANCELLED':   return AppColors.danger;
-    case 'NEW':         return AppColors.primaryLight;
-    case 'OPEN':        return AppColors.info;
-    case 'IN_PROGRESS': return AppColors.warning;
-    case 'RESOLVED':    return AppColors.success;
-    case 'CLOSED':      return AppColors.textMuted;
-    case 'ESCALATED':   return AppColors.danger;
-    default:            return AppColors.textMuted;
+    case 'CONFIRMED':
+      return AppColors.info;
+    case 'COMPLETED':
+      return AppColors.success;
+    case 'PENDING':
+      return AppColors.warning;
+    case 'CANCELLED':
+      return AppColors.danger;
+    case 'NEW':
+      return AppColors.primaryLight;
+    case 'OPEN':
+      return AppColors.info;
+    case 'IN_PROGRESS':
+      return AppColors.warning;
+    case 'RESOLVED':
+      return AppColors.success;
+    case 'CLOSED':
+      return AppColors.textMuted;
+    case 'ESCALATED':
+      return AppColors.danger;
+    default:
+      return AppColors.textMuted;
   }
 }
 
 Color _priorityColor(String p) {
   switch (p.toUpperCase()) {
-    case 'CRITICAL': return const Color(0xFF7C3AED);
-    case 'URGENT':   return AppColors.danger;
-    case 'HIGH':     return AppColors.warning;
-    case 'MEDIUM':   return AppColors.info;
-    default:         return AppColors.textMuted;
+    case 'CRITICAL':
+      return const Color(0xFF7C3AED);
+    case 'URGENT':
+      return AppColors.danger;
+    case 'HIGH':
+      return AppColors.warning;
+    case 'MEDIUM':
+      return AppColors.info;
+    default:
+      return AppColors.textMuted;
   }
 }
 
 // ─── Direct API wrappers ──────────────────────────────────────────────────────
 
-final _api = ApiClient();
+final _ticketService = TicketService();
+final _offerService = OfferService();
+final _consultantService = ConsultantService();
 
 Future<List<dynamic>> _getTicketComments(int id) async {
   try {
-    final r = await _api.dio.get('/api/tickets/$id/comments');
-    final d = r.data;
-    return d is List ? d : (d is Map ? (d['content'] ?? d['data'] ?? []) : []);
-  } catch (_) { return []; }
+    final r = await _ticketService.getTicketComments(id);
+    return r.map((e) => e.toJson()).toList();
+  } catch (_) {
+    return [];
+  }
 }
 
 Future<Map<String, dynamic>?> _postComment({
-  required int ticketId, required int senderId,
-  required bool isConsultantReply, required String message,
+  required int ticketId,
+  required int senderId,
+  required bool isConsultantReply,
+  required String message,
 }) async {
   try {
-    final r = await _api.dio.post('/api/tickets/comments', data: {
-      'ticketId': ticketId, 'senderId': senderId,
-      'isConsultantReply': isConsultantReply, 'message': message,
-    });
-    return r.data as Map<String, dynamic>;
-  } catch (_) { return null; }
+    final r = await _ticketService.addComment(ticketId, message,
+        senderId: senderId, isConsultantReply: isConsultantReply);
+    return r?.toJson();
+  } catch (_) {
+    return null;
+  }
 }
 
 Future<List<dynamic>> _getInternalNotes(int id) async {
   try {
-    final r = await _api.dio.get('/api/tickets/$id/notes');
-    return r.data is List ? r.data : [];
-  } catch (_) { return []; }
+    final r = await _ticketService.getNotes(id);
+    return r.map((e) => e.toJson()).toList();
+  } catch (_) {
+    return [];
+  }
 }
 
 Future<Map<String, dynamic>?> _postNote({
-  required int ticketId, required int authorId, required String noteText,
+  required int ticketId,
+  required int authorId,
+  required String noteText,
 }) async {
   try {
-    final r = await _api.dio.post('/api/tickets/$ticketId/notes',
-        data: {'authorId': authorId, 'noteText': noteText});
-    return r.data as Map<String, dynamic>;
-  } catch (_) { return null; }
+    final r = await _ticketService.addNote(ticketId,
+        authorId: authorId, noteText: noteText);
+    return r?.toJson();
+  } catch (_) {
+    return null;
+  }
 }
 
 Future<bool> _escalateTicket(int id, String reason) async {
   try {
-    await _api.dio.post('/api/tickets/$id/escalate', data: {'reason': reason});
-    return true;
-  } catch (_) { return false; }
+    return await _ticketService.escalateTicket(id, reason);
+  } catch (_) {
+    return false;
+  }
 }
 
 Future<List<dynamic>> _getMyOffers() async {
   try {
-    final r = await _api.dio.get('/api/offers/my-offers');
-    final d = r.data;
-    return d is List ? d : (d is Map ? (d['content'] ?? d['data'] ?? []) : []);
-  } catch (_) { return []; }
+    return await _offerService.getMyOffers();
+  } catch (_) {
+    return [];
+  }
 }
 
-Future<Map<String, dynamic>?> _saveOffer(Map<String, dynamic> data, {int? id}) async {
+Future<Map<String, dynamic>?> _saveOffer(Map<String, dynamic> data,
+    {int? id}) async {
   try {
-    final r = id != null
-        ? await _api.dio.put('/api/offers/$id', data: data)
-        : await _api.dio.post('/api/offers', data: data);
-    return r.data as Map<String, dynamic>;
-  } catch (_) { return null; }
+    return id != null
+        ? (await _offerService.updateOffer(id, data) ? data : null)
+        : (await _offerService.createOffer(data) ? data : null);
+  } catch (_) {
+    return null;
+  }
 }
 
 Future<bool> _deleteOffer(int id) async {
-  try { await _api.dio.delete('/api/offers/$id'); return true; }
-  catch (_) { return false; }
+  return await _offerService.deleteOffer(id);
 }
 
 Future<List<dynamic>> _getMasterSlots() async {
   try {
-    final r = await _api.dio.get('/api/master-timeslots',
-        queryParameters: {'page': 0, 'size': 100});
-    final d = r.data;
-    return d is Map ? (d['content'] ?? d['data'] ?? []) : (d is List ? d : []);
-  } catch (_) { return []; }
+    return await _consultantService.getAllMasterSlots();
+  } catch (_) {
+    return [];
+  }
 }
 
 Future<bool> _createMasterSlot(String t) async {
   try {
-    await _api.dio.post('/api/master-timeslots', data: {'timeRange': t});
-    return true;
-  } catch (_) { return false; }
+    return await _consultantService.createMasterSlot(t);
+  } catch (_) {
+    return false;
+  }
 }
 
 Future<bool> _updateMasterSlotApi(int id, String t) async {
   try {
-    await _api.dio.put('/api/master-timeslots/$id', data: {'timeRange': t});
-    return true;
-  } catch (_) { return false; }
+    return await _consultantService.updateMasterSlot(id, t);
+  } catch (_) {
+    return false;
+  }
 }
 
 Future<bool> _deleteMasterSlotApi(int id) async {
-  try { await _api.dio.delete('/api/master-timeslots/$id'); return true; }
-  catch (_) { return false; }
+  try {
+    return await _consultantService.deleteMasterSlot(id);
+  } catch (_) {
+    return false;
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -274,12 +319,33 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
   Timer? _refreshTimer;
 
   static const _navItems = [
-    (icon: Icons.calendar_today_outlined, activeIcon: Icons.calendar_today,     label: 'Bookings'),
-    (icon: Icons.confirmation_number_outlined, activeIcon: Icons.confirmation_number, label: 'Tickets'),
-    (icon: Icons.schedule_outlined,        activeIcon: Icons.schedule,           label: 'Schedule'),
-    (icon: Icons.star_outline,             activeIcon: Icons.star,               label: 'Feedback'),
-    (icon: Icons.payments_outlined,        activeIcon: Icons.payments,           label: 'Earnings'),
-    (icon: Icons.person_outline,           activeIcon: Icons.person,             label: 'Profile'),
+    (
+      icon: Icons.calendar_today_outlined,
+      activeIcon: Icons.calendar_today,
+      label: 'Bookings'
+    ),
+    (
+      icon: Icons.confirmation_number_outlined,
+      activeIcon: Icons.confirmation_number,
+      label: 'Tickets'
+    ),
+    (
+      icon: Icons.schedule_outlined,
+      activeIcon: Icons.schedule,
+      label: 'Schedule'
+    ),
+    (icon: Icons.star_outline, activeIcon: Icons.star, label: 'Feedback'),
+    (
+      icon: Icons.payments_outlined,
+      activeIcon: Icons.payments,
+      label: 'Earnings'
+    ),
+    (
+      icon: Icons.local_offer_outlined,
+      activeIcon: Icons.local_offer,
+      label: 'Offers'
+    ),
+    (icon: Icons.person_outline, activeIcon: Icons.person, label: 'Profile'),
   ];
 
   @override
@@ -295,7 +361,10 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
   }
 
   Future<void> _initAuth() async {
-    setState(() { _authLoading = true; _authError = null; });
+    setState(() {
+      _authLoading = true;
+      _authError = null;
+    });
     try {
       final auth = AuthService();
       final cIdStr = await auth.getConsultantId();
@@ -307,7 +376,8 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
       if (cId == null) {
         setState(() {
           _authLoading = false;
-          _authError = 'Consultant ID not found. Please logout and login again.';
+          _authError =
+              'Consultant ID not found. Please logout and login again.';
         });
         return;
       }
@@ -322,7 +392,10 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() { _authLoading = false; _authError = e.toString(); });
+      setState(() {
+        _authLoading = false;
+        _authError = e.toString();
+      });
     }
   }
 
@@ -334,11 +407,14 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
         title: const Text('Confirm Logout'),
         content: const Text('Are you sure you want to logout?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
               child: const Text('Cancel')),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.danger,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10))),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Logout', style: TextStyle(color: Colors.white)),
           ),
@@ -348,8 +424,10 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
     if (ok == true && mounted) {
       await AuthService().logout();
       if (mounted) {
-        Navigator.pushAndRemoveUntil(context,
-            MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
+        Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (_) => const LoginScreen()),
+            (_) => false);
       }
     }
   }
@@ -362,7 +440,9 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.65, maxChildSize: 0.95, minChildSize: 0.4,
+        initialChildSize: 0.65,
+        maxChildSize: 0.95,
+        minChildSize: 0.4,
         expand: false,
         builder: (_, sc) => _NotificationPanel(
             scrollController: sc, onClose: () => Navigator.pop(ctx)),
@@ -395,22 +475,32 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
             const SizedBox(height: 12),
             TextButton(
               onPressed: _confirmLogout,
-              child: const Text('Logout', style: TextStyle(color: AppColors.danger)),
+              child: const Text('Logout',
+                  style: TextStyle(color: AppColors.danger)),
             ),
           ]),
         ),
       );
     }
     switch (_selectedIndex) {
-      case 0: return _ConsultantBookingsTab(
-          consultantId: _consultantIdInt!, userId: _userId ?? 0);
-      case 1: return _ConsultantTicketsTab(
-          consultantId: _consultantIdInt!, userId: _userId ?? 0);
-      case 2: return _ConsultantScheduleTab(consultantId: _consultantIdInt!);
-      case 3: return _ConsultantFeedbacksTab(consultantId: _consultantIdInt!);
-      case 4: return ConsultantEarningsTab(consultantId: _consultantIdInt!);
-      case 5: return _ConsultantProfileTab(consultantId: _consultantIdInt!);
-      default: return const SizedBox();
+      case 0:
+        return _ConsultantBookingsTab(
+            consultantId: _consultantIdInt!, userId: _userId ?? 0);
+      case 1:
+        return _ConsultantTicketsTab(
+            consultantId: _consultantIdInt!, userId: _userId ?? 0);
+      case 2:
+        return _ConsultantScheduleTab(consultantId: _consultantIdInt!);
+      case 3:
+        return _ConsultantFeedbacksTab(consultantId: _consultantIdInt!);
+      case 4:
+        return ConsultantEarningsTab(consultantId: _consultantIdInt!);
+      case 5:
+        return _ConsultantOffersTab(consultantId: _consultantIdInt!);
+      case 6:
+        return _ConsultantProfileTab(consultantId: _consultantIdInt!);
+      default:
+        return const SizedBox();
     }
   }
 
@@ -422,17 +512,19 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
         backgroundColor: AppColors.surface,
         elevation: 0,
         title: Row(children: [
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-                color: AppColors.accent, borderRadius: BorderRadius.circular(8)),
-            child: const Icon(Icons.work_outline, color: Colors.white, size: 18),
+          Image.asset(
+            'assets/images/meet_the_masters_logo.png',
+            height: 28,
+            fit: BoxFit.contain,
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 12),
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('FINADVISE',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800,
-                    color: AppColors.primary, letterSpacing: 1)),
+            const Text('MEET THE MASTERS',
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.brandBlue,
+                    letterSpacing: 1.5)),
             Text(_navItems[_selectedIndex].label, style: AppTextStyles.caption),
           ]),
         ]),
@@ -445,22 +537,27 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
                 onPressed: _openNotifications,
               ),
               if (svc.unreadCount > 0)
-                Positioned(right: 8, top: 8,
+                Positioned(
+                    right: 8,
+                    top: 8,
                     child: Container(
                       padding: const EdgeInsets.all(3),
                       decoration: const BoxDecoration(
                           color: AppColors.danger, shape: BoxShape.circle),
                       child: Text(
                         svc.unreadCount > 9 ? '9+' : '${svc.unreadCount}',
-                        style: const TextStyle(color: Colors.white,
-                            fontSize: 9, fontWeight: FontWeight.bold),
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold),
                       ),
                     )),
             ]),
           ),
           PopupMenuButton<String>(
             offset: const Offset(0, 48),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             icon: CircleAvatar(
               radius: 16,
               backgroundColor: AppColors.accent.withValues(alpha: 0.2),
@@ -472,14 +569,17 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
               if (v == 'profile') setState(() => _selectedIndex = 5);
             },
             itemBuilder: (_) => [
-              const PopupMenuItem(value: 'profile',
+              const PopupMenuItem(
+                  value: 'profile',
                   child: Row(children: [
-                    Icon(Icons.person_outline, size: 18,
-                        color: AppColors.textSecondary),
-                    SizedBox(width: 10), Text('My Profile'),
+                    Icon(Icons.person_outline,
+                        size: 18, color: AppColors.textSecondary),
+                    SizedBox(width: 10),
+                    Text('My Profile'),
                   ])),
               const PopupMenuDivider(),
-              const PopupMenuItem(value: 'logout',
+              const PopupMenuItem(
+                  value: 'logout',
                   child: Row(children: [
                     Icon(Icons.logout, size: 18, color: AppColors.danger),
                     SizedBox(width: 10),
@@ -505,11 +605,13 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
           elevation: 0,
           selectedFontSize: 10,
           unselectedFontSize: 10,
-          items: _navItems.map((n) => BottomNavigationBarItem(
-            icon: Icon(n.icon, size: 22),
-            activeIcon: Icon(n.activeIcon, size: 22),
-            label: n.label,
-          )).toList(),
+          items: _navItems
+              .map((n) => BottomNavigationBarItem(
+                    icon: Icon(n.icon, size: 22),
+                    activeIcon: Icon(n.activeIcon, size: 22),
+                    label: n.label,
+                  ))
+              .toList(),
         ),
       ),
     );
@@ -523,7 +625,8 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
 class _ConsultantBookingsTab extends StatefulWidget {
   final int consultantId;
   final int userId;
-  const _ConsultantBookingsTab({required this.consultantId, required this.userId});
+  const _ConsultantBookingsTab(
+      {required this.consultantId, required this.userId});
   @override
   State<_ConsultantBookingsTab> createState() => _ConsultantBookingsTabState();
 }
@@ -533,31 +636,51 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
   final _svc = BookingService();
   late TabController _tabs;
   List<Booking> _bookings = [];
+  List<Map<String, dynamic>> _specialBookings = [];
   bool _loading = true;
+  bool _specialLoading = false;
 
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 3, vsync: this);
+    _tabs = TabController(length: 4, vsync: this);
     _load();
   }
 
   @override
-  void dispose() { _tabs.dispose(); super.dispose(); }
-
-  Future<void> _load() async {
-    setState(() => _loading = true);
-    _bookings = await _svc.getBookingsByConsultant(widget.consultantId, size: 100);
-    if (mounted) setState(() => _loading = false);
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
   }
 
-  List<Booking> get _upcoming =>
-      _bookings.where((b) => b.status.toUpperCase() == 'CONFIRMED' && !b.isExpired).toList();
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _specialLoading = true;
+    });
+    final results = await Future.wait([
+      _svc.getBookingsByConsultant(widget.consultantId, size: 100),
+      _svc.getSpecialBookingsByConsultant(widget.consultantId),
+    ]);
+    if (mounted)
+      setState(() {
+        _bookings = results[0] as List<Booking>;
+        _specialBookings = results[1] as List<Map<String, dynamic>>;
+        _loading = false;
+        _specialLoading = false;
+      });
+  }
+
+  List<Booking> get _upcoming => _bookings
+      .where((b) => b.status.toUpperCase() == 'CONFIRMED' && !b.isExpired)
+      .toList();
   List<Booking> get _pending =>
       _bookings.where((b) => b.status.toUpperCase() == 'PENDING').toList();
-  List<Booking> get _history =>
-      _bookings.where((b) =>
-          b.isExpired || ['COMPLETED', 'CANCELLED'].contains(b.status.toUpperCase())).toList();
+  List<Booking> get _history => _bookings
+      .where((b) =>
+          b.isExpired ||
+          ['COMPLETED', 'CANCELLED'].contains(b.status.toUpperCase()))
+      .toList();
 
   Future<void> _updateStatus(Booking b, String newStatus) async {
     final ok = await _svc.updateBooking(b.id, bookingStatus: newStatus);
@@ -568,8 +691,8 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
   }
 
   Future<void> _cancelBooking(Booking b) async {
-    final confirm = await _confirmDialog(
-        'Cancel Booking #${b.id}?', 'This cannot be undone.', 'Cancel', AppColors.danger);
+    final confirm = await _confirmDialog('Cancel Booking #${b.id}?',
+        'This cannot be undone.', 'Cancel', AppColors.danger);
     if (confirm != true) return;
     final ok = await _svc.cancelBooking(b.id);
     if (mounted) {
@@ -580,7 +703,10 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
 
   Future<void> _markComplete(Booking b) async {
     final confirm = await _confirmDialog(
-        'Mark as Completed?', 'Booking #${b.id} will be marked complete.', 'Complete', AppColors.success);
+        'Mark as Completed?',
+        'Booking #${b.id} will be marked complete.',
+        'Complete',
+        AppColors.success);
     if (confirm != true) return;
     final ok = await _svc.updateBooking(b.id, bookingStatus: 'COMPLETED');
     if (mounted) {
@@ -598,35 +724,45 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => Padding(
-        padding: EdgeInsets.only(left: 20, right: 20, top: 20,
+        padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
             bottom: MediaQuery.of(ctx).viewInsets.bottom + 24),
-        child: Column(mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _handleBar(),
-          Text('Meeting Link — Booking #${b.id}', style: AppTextStyles.h3),
-          const SizedBox(height: 16),
-          TextField(controller: ctrl,
-              decoration: const InputDecoration(
-                  labelText: 'Meeting URL',
-                  hintText: 'https://meet.jit.si/...',
-                  prefixIcon: Icon(Icons.videocam_outlined))),
-          const SizedBox(height: 16),
-          SizedBox(width: double.infinity, height: 48,
-            child: ElevatedButton.icon(
-              icon: const Icon(Icons.save_outlined, size: 18),
-              label: const Text('Save Link',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-              onPressed: () async {
-                final ok = await _svc.addMeetingLink(b.id, meetingLink: ctrl.text.trim());
-                if (ctx.mounted) {
-                  Navigator.pop(ctx);
-                  _snack(ok ? 'Meeting link saved!' : 'Failed to save', ok);
-                  if (ok) _load();
-                }
-              },
-            ),
-          ),
-        ]),
+        child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _handleBar(),
+              Text('Meeting Link — Booking #${b.id}', style: AppTextStyles.h3),
+              const SizedBox(height: 16),
+              TextField(
+                  controller: ctrl,
+                  decoration: const InputDecoration(
+                      labelText: 'Meeting URL',
+                      hintText: 'https://meet.jit.si/...',
+                      prefixIcon: Icon(Icons.videocam_outlined))),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.save_outlined, size: 18),
+                  label: const Text('Save Link',
+                      style: TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.w700)),
+                  onPressed: () async {
+                    final ok = await _svc.addMeetingLink(b.id,
+                        meetingLink: ctrl.text.trim());
+                    if (ctx.mounted) {
+                      Navigator.pop(ctx);
+                      _snack(ok ? 'Meeting link saved!' : 'Failed to save', ok);
+                      if (ok) _load();
+                    }
+                  },
+                ),
+              ),
+            ]),
       ),
     );
   }
@@ -638,39 +774,63 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Padding(padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-              child: Text('Booking #${b.id}', style: AppTextStyles.h3)),
-          const Divider(height: 1),
-          if (b.meetingLink != null && b.meetingLink!.isNotEmpty)
-            _actionTile(Icons.copy_outlined, 'Copy Meeting Link', AppColors.info, () {
-              Navigator.pop(context);
-              Clipboard.setData(ClipboardData(text: b.meetingLink!));
-              _snack('Meeting link copied!', true);
-            }),
-          _actionTile(Icons.video_call_outlined, 'Set / Update Meeting Link',
-              AppColors.primaryLight, () {
-            Navigator.pop(context);
-            _showMeetingLinkSheet(b);
-          }),
-          if (b.status.toUpperCase() == 'PENDING')
-            _actionTile(Icons.check_circle_outline, 'Confirm Booking', AppColors.success, () {
-              Navigator.pop(context);
-              _updateStatus(b, 'CONFIRMED');
-            }),
-          if (b.status.toUpperCase() == 'CONFIRMED')
-            _actionTile(Icons.task_alt_rounded, 'Mark as Completed', AppColors.success, () {
-              Navigator.pop(context);
-              _markComplete(b);
-            }),
-          if (!['CANCELLED', 'COMPLETED'].contains(b.status.toUpperCase()))
-            _actionTile(Icons.cancel_outlined, 'Cancel Booking', AppColors.danger, () {
-              Navigator.pop(context);
-              _cancelBooking(b);
-            }),
-          const SizedBox(height: 8),
-        ]),
+        child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                  child: Text('Booking #${b.id}', style: AppTextStyles.h3)),
+              const Divider(height: 1),
+              if (b.meetingLink != null && b.meetingLink!.isNotEmpty)
+                _actionTile(
+                    Icons.copy_outlined, 'Copy Meeting Link', AppColors.info,
+                    () {
+                  Navigator.pop(context);
+                  Clipboard.setData(ClipboardData(text: b.meetingLink!));
+                  _snack('Meeting link copied!', true);
+                }),
+              _actionTile(Icons.description_outlined, 'View Client Answers',
+                  AppColors.primary, () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => BookingAnswersScreen(
+                      bookingId: b.id,
+                      bookingType: 'NORMAL',
+                      userId: b.userId,
+                      clientName: b.clientName ?? 'Client',
+                    ),
+                  ),
+                );
+              }),
+              _actionTile(Icons.video_call_outlined,
+                  'Set / Update Meeting Link', AppColors.primaryLight, () {
+                Navigator.pop(context);
+                _showMeetingLinkSheet(b);
+              }),
+              if (b.status.toUpperCase() == 'PENDING')
+                _actionTile(Icons.check_circle_outline, 'Confirm Booking',
+                    AppColors.success, () {
+                  Navigator.pop(context);
+                  _updateStatus(b, 'CONFIRMED');
+                }),
+              if (b.status.toUpperCase() == 'CONFIRMED')
+                _actionTile(Icons.task_alt_rounded, 'Mark as Completed',
+                    AppColors.success, () {
+                  Navigator.pop(context);
+                  _markComplete(b);
+                }),
+              if (!['CANCELLED', 'COMPLETED'].contains(b.status.toUpperCase()))
+                _actionTile(
+                    Icons.cancel_outlined, 'Cancel Booking', AppColors.danger,
+                    () {
+                  Navigator.pop(context);
+                  _cancelBooking(b);
+                }),
+              const SizedBox(height: 8),
+            ]),
       ),
     );
   }
@@ -700,13 +860,15 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
             Tab(text: 'Upcoming (${_upcoming.length})'),
             Tab(text: 'Pending (${_pending.length})'),
             const Tab(text: 'History'),
+            Tab(text: 'Special (${_specialBookings.length})'),
           ],
         ),
       ),
       const Divider(height: 1),
       Expanded(
         child: _loading
-            ? ListView.builder(padding: const EdgeInsets.all(16),
+            ? ListView.builder(
+                padding: const EdgeInsets.all(16),
                 itemCount: 4,
                 itemBuilder: (_, __) => const Padding(
                     padding: EdgeInsets.only(bottom: 12), child: ShimmerCard()))
@@ -716,6 +878,7 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
                   _buildList(_upcoming, 'No upcoming sessions'),
                   _buildList(_pending, 'No pending bookings'),
                   _buildList(_history, 'No history yet'),
+                  _buildSpecialList(),
                 ]),
               ),
       ),
@@ -723,7 +886,8 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
   }
 
   Widget _buildList(List<Booking> list, String emptyTitle) {
-    if (list.isEmpty) return EmptyState(icon: Icons.calendar_today_outlined, title: emptyTitle);
+    if (list.isEmpty)
+      return EmptyState(icon: Icons.calendar_today_outlined, title: emptyTitle);
     return ListView.builder(
       padding: const EdgeInsets.all(16),
       itemCount: list.length,
@@ -737,103 +901,156 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
             borderRadius: BorderRadius.circular(16),
             child: Padding(
               padding: const EdgeInsets.all(14),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                        color: color.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(10)),
-                    child: Icon(Icons.event_outlined, color: color, size: 18),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('Booking #${b.id}', style: AppTextStyles.h4),
-                    Text([
-                      if (b.meetingMode != null) b.meetingMode,
-                      if (b.slotDate != null) b.slotDate,
-                      if (b.timeRange != null) b.timeRange,
-                    ].where((x) => x != null && x!.isNotEmpty).join('  ·  '),
-                        style: AppTextStyles.caption),
-                    if (b.clientName != null)
-                      Text('Client: ${b.clientName}', style: AppTextStyles.caption),
-                  ])),
-                  Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                          color: color.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(8)),
-                      child: Text(b.status,
-                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color)),
-                    ),
-                    if (b.amount != null) ...[
-                      const SizedBox(height: 4),
-                      Text('₹${b.amount!.toStringAsFixed(0)}',
-                          style: const TextStyle(fontSize: 13,
-                              color: AppColors.success, fontWeight: FontWeight.w700)),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                            color: color.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(10)),
+                        child:
+                            Icon(Icons.event_outlined, color: color, size: 18),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                            Text('Session with ${b.clientName ?? 'User'}',
+                                style: AppTextStyles.h4),
+                            Text(
+                                '#${b.id}  ·  ${[
+                                  if (b.meetingMode != null) b.meetingMode,
+                                  if (b.slotDate != null) b.slotDate,
+                                  if (b.timeRange != null) b.timeRange,
+                                ].where((x) => x != null && x!.isNotEmpty).join('  ·  ')}',
+                                style: AppTextStyles.caption),
+                          ])),
+                      Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                  color: color.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(8)),
+                              child: Text(b.status,
+                                  style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                      color: color)),
+                            ),
+                            if (b.amount != null) ...[
+                              const SizedBox(height: 4),
+                              Text('₹${b.amount!.toStringAsFixed(0)}',
+                                  style: const TextStyle(
+                                      fontSize: 13,
+                                      color: AppColors.success,
+                                      fontWeight: FontWeight.w700)),
+                            ],
+                          ]),
+                    ]),
+                    if (b.meetingLink != null && b.meetingLink!.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      GestureDetector(
+                        onTap: () {
+                          Clipboard.setData(
+                              ClipboardData(text: b.meetingLink!));
+                          _snack('Meeting link copied!', true);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                              color: AppColors.info.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                  color:
+                                      AppColors.info.withValues(alpha: 0.25))),
+                          child: Row(children: [
+                            const Icon(Icons.videocam_outlined,
+                                size: 14, color: AppColors.info),
+                            const SizedBox(width: 6),
+                            Expanded(
+                                child: Text(b.meetingLink!,
+                                    style: const TextStyle(
+                                        fontSize: 11, color: AppColors.info),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis)),
+                            const Icon(Icons.copy_rounded,
+                                size: 12, color: AppColors.info),
+                          ]),
+                        ),
+                      ),
                     ],
-                  ]),
-                ]),
-                if (b.meetingLink != null && b.meetingLink!.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  GestureDetector(
-                    onTap: () {
-                      Clipboard.setData(ClipboardData(text: b.meetingLink!));
-                      _snack('Meeting link copied!', true);
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                          color: AppColors.info.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppColors.info.withValues(alpha: 0.25))),
-                      child: Row(children: [
-                        const Icon(Icons.videocam_outlined, size: 14, color: AppColors.info),
-                        const SizedBox(width: 6),
-                        Expanded(child: Text(b.meetingLink!,
-                            style: const TextStyle(fontSize: 11, color: AppColors.info),
-                            maxLines: 1, overflow: TextOverflow.ellipsis)),
-                        const Icon(Icons.copy_rounded, size: 12, color: AppColors.info),
-                      ]),
-                    ),
-                  ),
-                ],
-                if (['CONFIRMED', 'PENDING'].contains(b.status.toUpperCase())) ...[
-                  const SizedBox(height: 10),
-                  Row(children: [
-                    Expanded(child: OutlinedButton.icon(
-                      onPressed: () => _showMeetingLinkSheet(b),
-                      icon: const Icon(Icons.video_call_outlined, size: 16),
-                      label: Text(b.meetingLink?.isNotEmpty == true ? 'Update Link' : 'Add Link',
-                          style: const TextStyle(fontSize: 12)),
-                      style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          side: const BorderSide(color: AppColors.primaryLight),
-                          foregroundColor: AppColors.primaryLight),
-                    )),
-                    const SizedBox(width: 8),
-                    if (b.status.toUpperCase() == 'CONFIRMED')
-                      Expanded(child: ElevatedButton.icon(
-                        onPressed: () => _markComplete(b),
-                        icon: const Icon(Icons.check_circle_outline, size: 16),
-                        label: const Text('Complete', style: TextStyle(fontSize: 12)),
-                        style: ElevatedButton.styleFrom(
+                    const SizedBox(height: 10),
+                    Row(children: [
+                      if (b.meetingMode?.toUpperCase() == 'ONLINE') ...[
+                        Expanded(
+                            child: ElevatedButton.icon(
+                          onPressed: b.meetingLink?.isNotEmpty == true
+                              ? () => launchUrl(Uri.parse(b.meetingLink!))
+                              : null,
+                          icon: const Icon(Icons.videocam_rounded,
+                              size: 16, color: Colors.white),
+                          label: const Text('Join Meeting',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold)),
+                          style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.success,
-                            padding: const EdgeInsets.symmetric(vertical: 8)),
-                      ))
-                    else if (b.status.toUpperCase() == 'PENDING')
-                      Expanded(child: ElevatedButton.icon(
-                        onPressed: () => _updateStatus(b, 'CONFIRMED'),
-                        icon: const Icon(Icons.thumb_up_outlined, size: 16),
-                        label: const Text('Confirm', style: TextStyle(fontSize: 12)),
-                        style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.info,
-                            padding: const EdgeInsets.symmetric(vertical: 8)),
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
+                          ),
+                        )),
+                        const SizedBox(width: 8),
+                      ],
+                      Expanded(
+                          child: OutlinedButton.icon(
+                        onPressed: () => _showMeetingLinkSheet(b),
+                        icon: const Icon(Icons.video_call_outlined, size: 16),
+                        label: Text(
+                            b.meetingLink?.isNotEmpty == true
+                                ? 'Update Link'
+                                : 'Add Link',
+                            style: const TextStyle(fontSize: 12)),
+                        style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            side:
+                                const BorderSide(color: AppColors.primaryLight),
+                            foregroundColor: AppColors.primaryLight),
                       )),
+                      const SizedBox(width: 8),
+                      if (b.status.toUpperCase() == 'CONFIRMED')
+                        Expanded(
+                            child: ElevatedButton.icon(
+                          onPressed: () => _markComplete(b),
+                          icon:
+                              const Icon(Icons.check_circle_outline, size: 16),
+                          label: const Text('Complete',
+                              style: TextStyle(fontSize: 12)),
+                          style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.success,
+                              padding: const EdgeInsets.symmetric(vertical: 8)),
+                        ))
+                      else if (b.status.toUpperCase() == 'PENDING')
+                        Expanded(
+                            child: ElevatedButton.icon(
+                          onPressed: () => _updateStatus(b, 'CONFIRMED'),
+                          icon: const Icon(Icons.thumb_up_outlined, size: 16),
+                          label: const Text('Confirm',
+                              style: TextStyle(fontSize: 12)),
+                          style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.info,
+                              padding: const EdgeInsets.symmetric(vertical: 8)),
+                        )),
+                    ]),
                   ]),
-                ],
-              ]),
             ),
           ),
         );
@@ -841,31 +1058,125 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
     );
   }
 
-  Widget _pill(int count, Color color, String label) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-    decoration: BoxDecoration(color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(20)),
-    child: Row(mainAxisSize: MainAxisSize.min, children: [
-      Container(width: 6, height: 6,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-      const SizedBox(width: 5),
-      Text('$count $label', style: TextStyle(fontSize: 11, color: color,
-          fontWeight: FontWeight.w600)),
-    ]),
-  );
+  // ── SPECIAL BOOKINGS LIST ────────────────────────────────────────────────
+  Widget _buildSpecialList() {
+    if (_specialLoading) {
+      return ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: 3,
+        itemBuilder: (_, __) => const Padding(
+            padding: EdgeInsets.only(bottom: 12), child: ShimmerCard()),
+      );
+    }
+    if (_specialBookings.isEmpty) {
+      return const EmptyState(
+        icon: Icons.star_border_rounded,
+        title: 'No Special Bookings',
+        subtitle: 'Users who request custom sessions will appear here',
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: _specialBookings.length,
+        itemBuilder: (_, i) {
+          final sb = _specialBookings[i];
+          return _SpecialBookingCard(
+            booking: sb,
+            onGiveSlot: () => _showGiveSlotSheet(sb),
+            onReschedule: () => _showRescheduleSheet(sb),
+            onRefresh: _load,
+          );
+        },
+      ),
+    );
+  }
 
-  Future<bool?> _confirmDialog(String title, String content, String action, Color color) {
+  // ── GIVE SLOT SHEET ──────────────────────────────────────────────────────
+  void _showGiveSlotSheet(Map<String, dynamic> sb) {
+    final id = (sb['id'] as num?)?.toInt() ?? 0;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => _GiveSlotSheet(
+        bookingId: id,
+        onSaved: () {
+          Navigator.pop(ctx);
+          _load();
+        },
+      ),
+    );
+  }
+
+  // ── RESCHEDULE SHEET ─────────────────────────────────────────────────────
+  void _showRescheduleSheet(Map<String, dynamic> sb) {
+    final id = (sb['id'] as num?)?.toInt() ?? 0;
+    final scheduledDate = sb['scheduledDate']?.toString() ?? '';
+    final scheduledTime = sb['scheduledTime']?.toString() ?? '';
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => _RescheduleSlotSheet(
+        bookingId: id,
+        currentDate: scheduledDate,
+        currentTime: scheduledTime,
+        onSaved: () {
+          Navigator.pop(ctx);
+          _load();
+        },
+      ),
+    );
+  }
+
+  void _snack(String msg, [bool success = true]) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: success ? AppColors.success : AppColors.danger,
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
+  Widget _pill(int count, Color color, String label) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(20)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+          const SizedBox(width: 5),
+          Text('$count $label',
+              style: TextStyle(
+                  fontSize: 11, color: color, fontWeight: FontWeight.w600)),
+        ]),
+      );
+
+  Future<bool?> _confirmDialog(
+      String title, String content, String action, Color color) {
     return showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(title), content: Text(content),
+        title: Text(title),
+        content: Text(content),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
               child: const Text('Cancel')),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: color,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: color,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10))),
             onPressed: () => Navigator.pop(context, true),
             child: Text(action, style: const TextStyle(color: Colors.white)),
           ),
@@ -874,30 +1185,1067 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
     );
   }
 
-  void _snack(String msg, bool ok) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      backgroundColor: ok ? AppColors.success : AppColors.danger,
-      behavior: SnackBarBehavior.floating,
-      duration: const Duration(seconds: 2),
-    ));
-  }
-
-  Widget _actionTile(IconData icon, String label, Color color, VoidCallback onTap) =>
-    ListTile(leading: Icon(icon, color: color, size: 20),
-        title: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w600)),
-        onTap: onTap, dense: true);
+  Widget _actionTile(
+          IconData icon, String label, Color color, VoidCallback onTap) =>
+      ListTile(
+          leading: Icon(icon, color: color, size: 20),
+          title: Text(label,
+              style: TextStyle(color: color, fontWeight: FontWeight.w600)),
+          onTap: onTap,
+          dense: true);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
 // TICKETS TAB
 // ════════════════════════════════════════════════════════════════════════════
 
+// ════════════════════════════════════════════════════════════════════════════
+// SPECIAL BOOKING CARD
+// Shows REQUESTED (needs slot) differently from CONFIRMED (slot given)
+// ════════════════════════════════════════════════════════════════════════════
+
+class _SpecialBookingCard extends StatelessWidget {
+  final Map<String, dynamic> booking;
+  final VoidCallback onGiveSlot;
+  final VoidCallback onReschedule;
+  final VoidCallback onRefresh;
+  const _SpecialBookingCard({
+    required this.booking,
+    required this.onGiveSlot,
+    required this.onReschedule,
+    required this.onRefresh,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final id = (booking['id'] as num?)?.toInt() ?? 0;
+    final status = (booking['status'] ?? 'REQUESTED').toString().toUpperCase();
+    final userId = (booking['userId'] as num?)?.toInt() ?? 0;
+    final duration = (booking['durationInHours'] as num?)?.toInt() ?? 1;
+    final mode = (booking['meetingMode'] ?? 'ONLINE').toString();
+    final notes = (booking['userNotes'] ?? '').toString();
+    final amount =
+        double.tryParse(booking['totalAmount']?.toString() ?? '0') ?? 0;
+    final schedDate = (booking['scheduledDate'] ?? '').toString();
+    final schedTime = (booking['scheduledTime'] ?? '').toString();
+    final meetLink = (booking['meetingLink'] ?? '').toString();
+    final isRequested = status == 'REQUESTED';
+    final isConfirmed = status == 'CONFIRMED';
+    final isCompleted = status == 'COMPLETED';
+    final isCancelled = status == 'CANCELLED';
+
+    final Color statusColor = isRequested
+        ? AppColors.warning
+        : isConfirmed
+            ? AppColors.success
+            : isCompleted
+                ? AppColors.info
+                : AppColors.danger;
+
+    final IconData statusIcon = isRequested
+        ? Icons.schedule_rounded
+        : isConfirmed
+            ? Icons.check_circle_rounded
+            : isCompleted
+                ? Icons.task_alt_rounded
+                : Icons.cancel_rounded;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isRequested
+              ? AppColors.warning.withOpacity(0.5)
+              : AppColors.border,
+          width: isRequested ? 1.5 : 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          )
+        ],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // ── Top header ─────────────────────────────────────────────────────
+        Container(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          decoration: BoxDecoration(
+            color: isRequested
+                ? AppColors.warning.withOpacity(0.06)
+                : AppColors.background,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+          ),
+          child: Row(children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: statusColor.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(statusIcon, color: statusColor, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text('Special Booking #$id',
+                      style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF0F172A))),
+                  const SizedBox(height: 2),
+                  Text(
+                      'User #$userId · $duration hr${duration > 1 ? 's' : ''} · $mode',
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF64748B))),
+                ])),
+            // Status badge
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: statusColor.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: statusColor.withOpacity(0.3)),
+              ),
+              child: Text(status.replaceAll('_', ' '),
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: statusColor)),
+            ),
+          ]),
+        ),
+
+        // ── Body ───────────────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            // Amount
+            Row(children: [
+              _infoChip(Icons.currency_rupee_rounded,
+                  '₹${amount.toStringAsFixed(0)}', AppColors.success),
+              const SizedBox(width: 8),
+              _infoChip(
+                  Icons.access_time_rounded,
+                  '$duration hr${duration > 1 ? 's' : ''}',
+                  AppColors.primaryLight),
+              const SizedBox(width: 8),
+              _infoChip(
+                  mode == 'ONLINE'
+                      ? Icons.videocam_rounded
+                      : mode == 'PHONE'
+                          ? Icons.phone_rounded
+                          : Icons.location_on_rounded,
+                  mode,
+                  AppColors.textSecondary),
+            ]),
+
+            // Scheduled date/time (shown only when CONFIRMED or COMPLETED)
+            if ((isConfirmed || isCompleted) && schedDate.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.success.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.success.withOpacity(0.2)),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.calendar_today_rounded,
+                      size: 14, color: AppColors.success),
+                  const SizedBox(width: 8),
+                  Expanded(
+                      child: Text(
+                    'Scheduled: $schedDate${schedTime.isNotEmpty ? '  ·  ${schedTime.substring(0, schedTime.length > 5 ? 5 : schedTime.length)}' : ''}',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.success),
+                  )),
+                ]),
+              ),
+            ],
+
+            // Meeting link (if given)
+            if (meetLink.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              GestureDetector(
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: meetLink));
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Meeting link copied!'),
+                    behavior: SnackBarBehavior.floating,
+                    backgroundColor: AppColors.success,
+                  ));
+                },
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.info.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppColors.info.withOpacity(0.25)),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.videocam_outlined,
+                        size: 14, color: AppColors.info),
+                    const SizedBox(width: 6),
+                    Expanded(
+                        child: Text(meetLink,
+                            style: const TextStyle(
+                                fontSize: 11, color: AppColors.info),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis)),
+                    const Icon(Icons.copy_rounded,
+                        size: 12, color: AppColors.info),
+                  ]),
+                ),
+              ),
+            ],
+
+            // REQUESTED notice
+            if (isRequested) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.warning.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.warning.withOpacity(0.3)),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.info_outline_rounded,
+                      size: 14, color: AppColors.warning),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                      child: Text(
+                    'User is waiting for you to assign a date, time & meeting link.',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.warning,
+                        fontWeight: FontWeight.w500),
+                  )),
+                ]),
+              ),
+            ],
+
+            // User notes
+            if (notes.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.notes_rounded,
+                    size: 14, color: Color(0xFF94A3B8)),
+                const SizedBox(width: 6),
+                Expanded(
+                    child: Text(notes,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF64748B)))),
+              ]),
+            ],
+          ]),
+        ),
+
+        // ── Actions ─────────────────────────────────────────────────────────
+        if (!isCancelled && !isCompleted)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+            child: Row(children: [
+              if (isRequested)
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: onGiveSlot,
+                    icon: const Icon(Icons.schedule_rounded,
+                        size: 16, color: Colors.white),
+                    label: const Text('Assign Slot',
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryLight,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+              if (isConfirmed) ...[
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onReschedule,
+                    icon: const Icon(Icons.edit_calendar_rounded, size: 16),
+                    label: const Text('Reschedule',
+                        style: TextStyle(fontSize: 12)),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      foregroundColor: AppColors.primaryLight,
+                      side: const BorderSide(color: AppColors.primaryLight),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+              ],
+            ]),
+          ),
+      ]),
+    );
+  }
+
+  Widget _infoChip(IconData icon, String label, Color color) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 4),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+        ]),
+      );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// GIVE SLOT SHEET — Consultant assigns date + time + meeting link
+// POST /api/special-bookings/{id}/give-slot
+// ════════════════════════════════════════════════════════════════════════════
+
+class _GiveSlotSheet extends StatefulWidget {
+  final int bookingId;
+  final VoidCallback onSaved;
+  const _GiveSlotSheet({required this.bookingId, required this.onSaved});
+  @override
+  State<_GiveSlotSheet> createState() => _GiveSlotSheetState();
+}
+
+class _GiveSlotSheetState extends State<_GiveSlotSheet> {
+  final _svc = BookingService();
+  final _linkCtrl = TextEditingController();
+  final _meetIdCtrl = TextEditingController();
+
+  DateTime? _selDate;
+  TimeOfDay? _selTime;
+  bool _saving = false;
+  String _err = '';
+
+  @override
+  void dispose() {
+    _linkCtrl.dispose();
+    _meetIdCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now().add(const Duration(days: 1)),
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 90)),
+      builder: (ctx, child) => Theme(
+        data: Theme.of(ctx).copyWith(
+          colorScheme: const ColorScheme.light(primary: AppColors.primaryLight),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null)
+      setState(() {
+        _selDate = picked;
+        _err = '';
+      });
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _selTime ?? const TimeOfDay(hour: 10, minute: 0),
+      builder: (ctx, child) => Theme(
+        data: Theme.of(ctx).copyWith(
+          colorScheme: const ColorScheme.light(primary: AppColors.primaryLight),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null)
+      setState(() {
+        _selTime = picked;
+        _err = '';
+      });
+  }
+
+  Future<void> _submit() async {
+    if (_selDate == null) {
+      setState(() => _err = 'Please select a date.');
+      return;
+    }
+    if (_selTime == null) {
+      setState(() => _err = 'Please select a time.');
+      return;
+    }
+    if (_linkCtrl.text.trim().isEmpty) {
+      setState(() => _err = 'Meeting link is required.');
+      return;
+    }
+    if (_meetIdCtrl.text.trim().isEmpty) {
+      setState(() => _err = 'Meeting ID is required.');
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _err = '';
+    });
+
+    // Format date as YYYY-MM-DD and time as HH:MM:SS for the backend
+    final dateStr =
+        '${_selDate!.year}-${_selDate!.month.toString().padLeft(2, '0')}-${_selDate!.day.toString().padLeft(2, '0')}';
+    final timeStr =
+        '${_selTime!.hour.toString().padLeft(2, '0')}:${_selTime!.minute.toString().padLeft(2, '0')}:00';
+
+    final ok = await _svc.giveSlotSpecialBooking(widget.bookingId, {
+      'date': dateStr,
+      'startTime': timeStr,
+      'meetingLink': _linkCtrl.text.trim(),
+      'meetingId': _meetIdCtrl.text.trim(),
+    });
+
+    if (mounted) {
+      setState(() => _saving = false);
+      if (ok) {
+        widget.onSaved();
+      } else {
+        setState(() => _err = 'Failed to assign slot. Please try again.');
+      }
+    }
+  }
+
+  String _fmtDate(DateTime d) {
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
+    return '${d.day} ${months[d.month - 1]} ${d.year}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 24),
+      child: SingleChildScrollView(
+        child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Handle bar
+              Center(
+                  child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: const Color(0xFFE2E8F0),
+                    borderRadius: BorderRadius.circular(2)),
+              )),
+              const SizedBox(height: 16),
+
+              // Header
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                      colors: [Color(0xFF1E3A5F), Color(0xFF2563EB)]),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.schedule_rounded,
+                      color: Colors.white, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                        const Text('Assign Session Slot',
+                            style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white)),
+                        Text('Booking #${widget.bookingId}',
+                            style: const TextStyle(
+                                fontSize: 11, color: Color(0xFF93C5FD))),
+                      ])),
+                ]),
+              ),
+              const SizedBox(height: 20),
+
+              // Error banner
+              if (_err.isNotEmpty)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 14),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.danger.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(10),
+                    border:
+                        Border.all(color: AppColors.danger.withOpacity(0.3)),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.warning_rounded,
+                        size: 16, color: AppColors.danger),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: Text(_err,
+                            style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.danger,
+                                fontWeight: FontWeight.w600))),
+                  ]),
+                ),
+
+              // Date picker
+              _sectionLabel('DATE *'),
+              const SizedBox(height: 8),
+              GestureDetector(
+                onTap: _pickDate,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: _selDate != null
+                        ? const Color(0xFFEFF6FF)
+                        : AppColors.background,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: _selDate != null
+                          ? AppColors.primaryLight
+                          : AppColors.border,
+                      width: _selDate != null ? 1.5 : 1,
+                    ),
+                  ),
+                  child: Row(children: [
+                    Icon(Icons.calendar_today_rounded,
+                        size: 18,
+                        color: _selDate != null
+                            ? AppColors.primaryLight
+                            : AppColors.textSecondary),
+                    const SizedBox(width: 10),
+                    Text(
+                        _selDate != null
+                            ? _fmtDate(_selDate!)
+                            : 'Tap to select date',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: _selDate != null
+                              ? AppColors.primaryLight
+                              : AppColors.textSecondary,
+                        )),
+                  ]),
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              // Time picker
+              _sectionLabel('START TIME *'),
+              const SizedBox(height: 8),
+              GestureDetector(
+                onTap: _pickTime,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: _selTime != null
+                        ? const Color(0xFFEFF6FF)
+                        : AppColors.background,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: _selTime != null
+                          ? AppColors.primaryLight
+                          : AppColors.border,
+                      width: _selTime != null ? 1.5 : 1,
+                    ),
+                  ),
+                  child: Row(children: [
+                    Icon(Icons.access_time_rounded,
+                        size: 18,
+                        color: _selTime != null
+                            ? AppColors.primaryLight
+                            : AppColors.textSecondary),
+                    const SizedBox(width: 10),
+                    Text(
+                        _selTime != null
+                            ? _selTime!.format(context)
+                            : 'Tap to select time',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: _selTime != null
+                              ? AppColors.primaryLight
+                              : AppColors.textSecondary,
+                        )),
+                  ]),
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              // Meeting Link
+              _sectionLabel('MEETING LINK *'),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _linkCtrl,
+                keyboardType: TextInputType.url,
+                onChanged: (_) {
+                  if (_err.isNotEmpty) setState(() => _err = '');
+                },
+                decoration: InputDecoration(
+                  hintText: 'https://meet.jit.si/your-room',
+                  hintStyle: const TextStyle(color: AppColors.textMuted),
+                  prefixIcon: const Icon(Icons.videocam_outlined,
+                      color: AppColors.textSecondary),
+                  filled: true,
+                  fillColor: AppColors.background,
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: AppColors.border)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: AppColors.border)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(
+                          color: AppColors.primaryLight, width: 1.5)),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              // Meeting ID
+              _sectionLabel('MEETING ID *'),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _meetIdCtrl,
+                onChanged: (_) {
+                  if (_err.isNotEmpty) setState(() => _err = '');
+                },
+                decoration: InputDecoration(
+                  hintText: 'e.g. your-room-id',
+                  hintStyle: const TextStyle(color: AppColors.textMuted),
+                  prefixIcon: const Icon(Icons.tag_rounded,
+                      color: AppColors.textSecondary),
+                  filled: true,
+                  fillColor: AppColors.background,
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: AppColors.border)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: AppColors.border)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(
+                          color: AppColors.primaryLight, width: 1.5)),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // Submit button
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _saving ? null : _submit,
+                  icon: _saving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                              color: Colors.white, strokeWidth: 2))
+                      : const Icon(Icons.check_circle_outline_rounded,
+                          color: Colors.white, size: 18),
+                  label: Text(_saving ? 'Assigning…' : 'Confirm & Assign Slot',
+                      style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryLight,
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    disabledBackgroundColor:
+                        AppColors.primaryLight.withOpacity(0.5),
+                  ),
+                ),
+              ),
+            ]),
+      ),
+    );
+  }
+
+  Widget _sectionLabel(String text) => Text(text,
+      style: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          color: AppColors.textSecondary,
+          letterSpacing: 0.5));
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// RESCHEDULE SLOT SHEET — Change date/time for a CONFIRMED special booking
+// PUT /api/special-bookings/{id}/reschedule
+// ════════════════════════════════════════════════════════════════════════════
+
+class _RescheduleSlotSheet extends StatefulWidget {
+  final int bookingId;
+  final String currentDate;
+  final String currentTime;
+  final VoidCallback onSaved;
+  const _RescheduleSlotSheet({
+    required this.bookingId,
+    required this.currentDate,
+    required this.currentTime,
+    required this.onSaved,
+  });
+  @override
+  State<_RescheduleSlotSheet> createState() => _RescheduleSlotSheetState();
+}
+
+class _RescheduleSlotSheetState extends State<_RescheduleSlotSheet> {
+  final _svc = BookingService();
+  DateTime? _selDate;
+  TimeOfDay? _selTime;
+  bool _saving = false;
+  String _err = '';
+
+  @override
+  void initState() {
+    super.initState();
+    // Pre-fill with existing scheduled date/time
+    try {
+      if (widget.currentDate.isNotEmpty) {
+        _selDate = DateTime.parse(widget.currentDate);
+      }
+    } catch (_) {}
+    try {
+      if (widget.currentTime.isNotEmpty) {
+        final parts = widget.currentTime.split(':');
+        if (parts.length >= 2) {
+          _selTime =
+              TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selDate ?? DateTime.now().add(const Duration(days: 1)),
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 90)),
+      builder: (ctx, child) => Theme(
+        data: Theme.of(ctx).copyWith(
+            colorScheme:
+                const ColorScheme.light(primary: AppColors.primaryLight)),
+        child: child!,
+      ),
+    );
+    if (picked != null)
+      setState(() {
+        _selDate = picked;
+        _err = '';
+      });
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _selTime ?? const TimeOfDay(hour: 10, minute: 0),
+      builder: (ctx, child) => Theme(
+        data: Theme.of(ctx).copyWith(
+            colorScheme:
+                const ColorScheme.light(primary: AppColors.primaryLight)),
+        child: child!,
+      ),
+    );
+    if (picked != null)
+      setState(() {
+        _selTime = picked;
+        _err = '';
+      });
+  }
+
+  Future<void> _submit() async {
+    if (_selDate == null) {
+      setState(() => _err = 'Please select a new date.');
+      return;
+    }
+    if (_selTime == null) {
+      setState(() => _err = 'Please select a new time.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _err = '';
+    });
+
+    final dateStr =
+        '${_selDate!.year}-${_selDate!.month.toString().padLeft(2, '0')}-${_selDate!.day.toString().padLeft(2, '0')}';
+    final timeStr =
+        '${_selTime!.hour.toString().padLeft(2, '0')}:${_selTime!.minute.toString().padLeft(2, '0')}:00';
+
+    final ok = await _svc.rescheduleSpecialBooking(
+      widget.bookingId,
+      newDate: dateStr,
+      newTime: timeStr,
+    );
+
+    if (mounted) {
+      setState(() => _saving = false);
+      if (ok) {
+        widget.onSaved();
+      } else {
+        setState(() => _err = 'Failed to reschedule. Please try again.');
+      }
+    }
+  }
+
+  String _fmtDate(DateTime d) {
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
+    return '${d.day} ${months[d.month - 1]} ${d.year}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 24),
+      child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+                child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                  color: const Color(0xFFE2E8F0),
+                  borderRadius: BorderRadius.circular(2)),
+            )),
+            const SizedBox(height: 16),
+
+            Row(children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.warning.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.edit_calendar_rounded,
+                    color: AppColors.warning, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    const Text('Reschedule Session',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w800)),
+                    Text('Booking #${widget.bookingId}',
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.textSecondary)),
+                  ])),
+            ]),
+            const SizedBox(height: 20),
+
+            if (_err.isNotEmpty)
+              Container(
+                margin: const EdgeInsets.only(bottom: 14),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.danger.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.danger.withOpacity(0.3)),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.warning_rounded,
+                      size: 16, color: AppColors.danger),
+                  const SizedBox(width: 8),
+                  Expanded(
+                      child: Text(_err,
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.danger))),
+                ]),
+              ),
+
+            // New Date
+            const Text('NEW DATE *',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textSecondary,
+                    letterSpacing: 0.5)),
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: _pickDate,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                decoration: BoxDecoration(
+                  color: _selDate != null
+                      ? const Color(0xFFEFF6FF)
+                      : AppColors.background,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: _selDate != null
+                        ? AppColors.primaryLight
+                        : AppColors.border,
+                    width: _selDate != null ? 1.5 : 1,
+                  ),
+                ),
+                child: Row(children: [
+                  Icon(Icons.calendar_today_rounded,
+                      size: 18,
+                      color: _selDate != null
+                          ? AppColors.primaryLight
+                          : AppColors.textSecondary),
+                  const SizedBox(width: 10),
+                  Text(
+                      _selDate != null
+                          ? _fmtDate(_selDate!)
+                          : 'Select new date',
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: _selDate != null
+                              ? AppColors.primaryLight
+                              : AppColors.textSecondary)),
+                ]),
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // New Time
+            const Text('NEW TIME *',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textSecondary,
+                    letterSpacing: 0.5)),
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: _pickTime,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                decoration: BoxDecoration(
+                  color: _selTime != null
+                      ? const Color(0xFFEFF6FF)
+                      : AppColors.background,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: _selTime != null
+                        ? AppColors.primaryLight
+                        : AppColors.border,
+                    width: _selTime != null ? 1.5 : 1,
+                  ),
+                ),
+                child: Row(children: [
+                  Icon(Icons.access_time_rounded,
+                      size: 18,
+                      color: _selTime != null
+                          ? AppColors.primaryLight
+                          : AppColors.textSecondary),
+                  const SizedBox(width: 10),
+                  Text(
+                      _selTime != null
+                          ? _selTime!.format(context)
+                          : 'Select new time',
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: _selTime != null
+                              ? AppColors.primaryLight
+                              : AppColors.textSecondary)),
+                ]),
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _saving ? null : _submit,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.check_circle_outline_rounded,
+                        color: Colors.white, size: 18),
+                label: Text(_saving ? 'Saving…' : 'Confirm Reschedule',
+                    style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.warning,
+                  padding: const EdgeInsets.symmetric(vertical: 15),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  disabledBackgroundColor: AppColors.warning.withOpacity(0.5),
+                ),
+              ),
+            ),
+          ]),
+    );
+  }
+}
+
 class _ConsultantTicketsTab extends StatefulWidget {
   final int consultantId;
   final int userId;
-  const _ConsultantTicketsTab({required this.consultantId, required this.userId});
+  const _ConsultantTicketsTab(
+      {required this.consultantId, required this.userId});
   @override
   State<_ConsultantTicketsTab> createState() => _ConsultantTicketsTabState();
 }
@@ -910,7 +2258,10 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
   static const _filters = ['ALL', 'NEW', 'OPEN', 'IN_PROGRESS', 'RESOLVED'];
 
   @override
-  void initState() { super.initState(); _load(); }
+  void initState() {
+    super.initState();
+    _load();
+  }
 
   Future<void> _load() async {
     setState(() => _loading = true);
@@ -923,9 +2274,9 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
       : _tickets.where((t) => t.status.toUpperCase() == _filter).toList();
 
   int get _slaRiskCount => _tickets.where((t) {
-    final s = _computeSla(t);
-    return s?.state == _SlaState.breached || s?.state == _SlaState.warning;
-  }).length;
+        final s = _computeSla(t);
+        return s?.state == _SlaState.breached || s?.state == _SlaState.warning;
+      }).length;
 
   void _openDetail(Ticket t) {
     showModalBottomSheet(
@@ -935,20 +2286,29 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.92, maxChildSize: 0.95, minChildSize: 0.6,
+        initialChildSize: 0.92,
+        maxChildSize: 0.95,
+        minChildSize: 0.6,
         expand: false,
         builder: (_, sc) => _TicketDetailSheet(
-          ticket: t, consultantId: widget.consultantId,
+          ticket: t,
+          consultantId: widget.consultantId,
           scrollController: sc,
           onStatusChanged: (newStatus) {
             setState(() {
               final idx = _tickets.indexWhere((x) => x.id == t.id);
               if (idx != -1) {
                 _tickets[idx] = Ticket(
-                  id: t.id, category: t.category, description: t.description,
-                  status: newStatus, priority: t.priority, userId: t.userId,
-                  consultantId: t.consultantId, userName: t.userName,
-                  slaRespondBy: t.slaRespondBy, slaResolveBy: t.slaResolveBy,
+                  id: t.id,
+                  category: t.category,
+                  description: t.description,
+                  status: newStatus,
+                  priority: t.priority,
+                  userId: t.userId,
+                  consultantId: t.consultantId,
+                  userName: t.userName,
+                  slaRespondBy: t.slaRespondBy,
+                  slaResolveBy: t.slaResolveBy,
                   createdAt: t.createdAt,
                 );
               }
@@ -967,12 +2327,16 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           color: AppColors.danger.withValues(alpha: 0.1),
           child: Row(children: [
-            const Icon(Icons.warning_rounded, color: AppColors.danger, size: 16),
+            const Icon(Icons.warning_rounded,
+                color: AppColors.danger, size: 16),
             const SizedBox(width: 8),
-            Expanded(child: Text(
+            Expanded(
+                child: Text(
               '$_slaRiskCount ticket${_slaRiskCount > 1 ? 's' : ''} at SLA risk — respond now',
-              style: const TextStyle(color: AppColors.danger,
-                  fontSize: 12, fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                  color: AppColors.danger,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600),
             )),
           ]),
         ),
@@ -981,7 +2345,8 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: SingleChildScrollView(
           scrollDirection: Axis.horizontal,
-          child: Row(children: _filters.map((f) {
+          child: Row(
+              children: _filters.map((f) {
             final count = f == 'ALL'
                 ? _tickets.length
                 : _tickets.where((t) => t.status.toUpperCase() == f).length;
@@ -989,13 +2354,17 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
             return Padding(
               padding: const EdgeInsets.only(right: 8),
               child: ChoiceChip(
-                label: Text('$f ($count)', style: TextStyle(fontSize: 12,
-                    color: active ? Colors.white : AppColors.textSecondary)),
+                label: Text('$f ($count)',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color:
+                            active ? Colors.white : AppColors.textSecondary)),
                 selected: active,
                 selectedColor: AppColors.primaryLight,
                 backgroundColor: AppColors.surfaceVariant,
                 onSelected: (_) => setState(() => _filter = f),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20)),
                 side: BorderSide.none,
               ),
             );
@@ -1007,8 +2376,8 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
         child: _loading
             ? const Center(child: CircularProgressIndicator())
             : _filtered.isEmpty
-                ? const EmptyState(icon: Icons.inbox_outlined,
-                    title: 'No tickets assigned')
+                ? const EmptyState(
+                    icon: Icons.inbox_outlined, title: 'No tickets assigned')
                 : RefreshIndicator(
                     onRefresh: _load,
                     child: ListView.builder(
@@ -1017,7 +2386,8 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
                       itemBuilder: (_, i) {
                         final t = _filtered[i];
                         return _TicketListCard(
-                          ticket: t, sla: _computeSla(t),
+                          ticket: t,
+                          sla: _computeSla(t),
                           onTap: () => _openDetail(t),
                         );
                       },
@@ -1032,7 +2402,8 @@ class _TicketListCard extends StatelessWidget {
   final Ticket ticket;
   final _SlaInfo? sla;
   final VoidCallback onTap;
-  const _TicketListCard({required this.ticket, required this.sla, required this.onTap});
+  const _TicketListCard(
+      {required this.ticket, required this.sla, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -1046,53 +2417,74 @@ class _TicketListCard extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(16),
         child: Column(children: [
-          if (sla != null)
-            Container(height: 3, color: _slaColor(sla!.state)),
+          if (sla != null) Container(height: 3, color: _slaColor(sla!.state)),
           Padding(
             padding: const EdgeInsets.all(14),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
-                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('#${ticket.id}  ${ticket.category.isEmpty ? "General" : ticket.category}',
-                      style: AppTextStyles.h4, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  if (ticket.description != null)
-                    Text(ticket.description!, style: AppTextStyles.caption,
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
-                ])),
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Text(
+                          '#${ticket.id}  ${ticket.category.isEmpty ? "General" : ticket.category}',
+                          style: AppTextStyles.h4,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
+                      if (ticket.description != null)
+                        Text(ticket.description!,
+                            style: AppTextStyles.caption,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                    ])),
                 const SizedBox(width: 8),
                 Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
                         color: sc.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(8)),
                     child: Text(ticket.status,
-                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: sc)),
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: sc)),
                   ),
                   const SizedBox(height: 4),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
                         color: pc.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(6)),
                     child: Text(ticket.priority,
-                        style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: pc)),
+                        style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                            color: pc)),
                   ),
                 ]),
               ]),
               const SizedBox(height: 8),
               Row(children: [
-                const Icon(Icons.person_outline, size: 13, color: AppColors.textMuted),
+                const Icon(Icons.person_outline,
+                    size: 13, color: AppColors.textMuted),
                 const SizedBox(width: 4),
                 Text(ticket.userName ?? 'User', style: AppTextStyles.caption),
                 const Spacer(),
-                if (sla != null) Row(children: [
-                  Icon(slaBreached ? Icons.alarm_off : Icons.timer_outlined,
-                      size: 12, color: _slaColor(sla!.state)),
-                  const SizedBox(width: 3),
-                  Text(sla!.label, style: TextStyle(fontSize: 10,
-                      color: _slaColor(sla!.state), fontWeight: FontWeight.w700)),
-                ]),
+                if (sla != null)
+                  Row(children: [
+                    Icon(slaBreached ? Icons.alarm_off : Icons.timer_outlined,
+                        size: 12, color: _slaColor(sla!.state)),
+                    const SizedBox(width: 3),
+                    Text(sla!.label,
+                        style: TextStyle(
+                            fontSize: 10,
+                            color: _slaColor(sla!.state),
+                            fontWeight: FontWeight.w700)),
+                  ]),
               ]),
             ]),
           ),
@@ -1107,8 +2499,11 @@ class _TicketDetailSheet extends StatefulWidget {
   final int consultantId;
   final ScrollController scrollController;
   final Function(String) onStatusChanged;
-  const _TicketDetailSheet({required this.ticket, required this.consultantId,
-      required this.scrollController, required this.onStatusChanged});
+  const _TicketDetailSheet(
+      {required this.ticket,
+      required this.consultantId,
+      required this.scrollController,
+      required this.onStatusChanged});
   @override
   State<_TicketDetailSheet> createState() => _TicketDetailSheetState();
 }
@@ -1128,12 +2523,19 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
   final _replyCtrl = TextEditingController();
   final _noteCtrl = TextEditingController();
   final _scrollToBottom = ScrollController();
-  static const _statuses = ['NEW', 'OPEN', 'IN_PROGRESS', 'PENDING', 'RESOLVED', 'CLOSED'];
+  static const _statuses = [
+    'NEW',
+    'OPEN',
+    'IN_PROGRESS',
+    'PENDING',
+    'RESOLVED',
+    'CLOSED'
+  ];
 
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 3, vsync: this);
+    _tabs = TabController(length: 4, vsync: this);
     _localStatus = widget.ticket.status;
     _loadComments();
     _loadNotes();
@@ -1141,8 +2543,10 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
 
   @override
   void dispose() {
-    _tabs.dispose(); _replyCtrl.dispose();
-    _noteCtrl.dispose(); _scrollToBottom.dispose();
+    _tabs.dispose();
+    _replyCtrl.dispose();
+    _noteCtrl.dispose();
+    _scrollToBottom.dispose();
     super.dispose();
   }
 
@@ -1168,17 +2572,22 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
     final msg = _replyCtrl.text.trim();
     setState(() => _sendingReply = true);
     final saved = await _postComment(
-      ticketId: widget.ticket.id, senderId: widget.consultantId,
-      isConsultantReply: true, message: msg,
+      ticketId: widget.ticket.id,
+      senderId: widget.consultantId,
+      isConsultantReply: true,
+      message: msg,
     );
     if (mounted) {
       if (saved != null) {
         _replyCtrl.clear();
-        setState(() { _comments.add(saved); });
+        setState(() {
+          _comments.add(saved);
+        });
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_scrollToBottom.hasClients) {
             _scrollToBottom.animateTo(_scrollToBottom.position.maxScrollExtent,
-                duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOut);
           }
         });
         if (_localStatus.toUpperCase() == 'NEW') await _changeStatus('OPEN');
@@ -1193,12 +2602,16 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
     if (_noteCtrl.text.trim().isEmpty) return;
     final txt = _noteCtrl.text.trim();
     setState(() => _sendingNote = true);
-    final saved = await _postNote(ticketId: widget.ticket.id,
-        authorId: widget.consultantId, noteText: txt);
+    final saved = await _postNote(
+        ticketId: widget.ticket.id,
+        authorId: widget.consultantId,
+        noteText: txt);
     if (mounted) {
       if (saved != null) {
         _noteCtrl.clear();
-        setState(() { _notes.add(saved); });
+        setState(() {
+          _notes.add(saved);
+        });
         _snack('🔒 Note saved', true);
       } else {
         _snack('Failed to save note', false);
@@ -1210,7 +2623,8 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
   Future<void> _changeStatus(String newStatus) async {
     if (_updatingStatus || _localStatus == newStatus) return;
     setState(() => _updatingStatus = true);
-    final ok = await TicketService().updateTicketStatus(widget.ticket.id, newStatus);
+    final ok =
+        await TicketService().updateTicketStatus(widget.ticket.id, newStatus);
     if (mounted) {
       if (ok) {
         setState(() => _localStatus = newStatus);
@@ -1231,18 +2645,25 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Escalate Ticket'),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text('Provide a reason for escalation:', style: TextStyle(fontSize: 13)),
+          const Text('Provide a reason for escalation:',
+              style: TextStyle(fontSize: 13)),
           const SizedBox(height: 12),
-          TextField(controller: ctrl, maxLines: 3,
+          TextField(
+              controller: ctrl,
+              maxLines: 3,
               decoration: const InputDecoration(
-                  hintText: 'Why is this being escalated?', border: OutlineInputBorder())),
+                  hintText: 'Why is this being escalated?',
+                  border: OutlineInputBorder())),
         ]),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
             onPressed: () => Navigator.pop(context, ctrl.text.trim()),
-            child: const Text('Escalate', style: TextStyle(color: Colors.white)),
+            child:
+                const Text('Escalate', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -1276,40 +2697,57 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
   Widget build(BuildContext context) {
     final sc = _statusColor(_localStatus);
     final pc = _priorityColor(widget.ticket.priority);
-    final slaTicket = Ticket(id: widget.ticket.id, category: widget.ticket.category,
-        description: widget.ticket.description, status: _localStatus,
-        priority: widget.ticket.priority, userId: widget.ticket.userId,
-        consultantId: widget.ticket.consultantId, userName: widget.ticket.userName,
-        slaRespondBy: widget.ticket.slaRespondBy, slaResolveBy: widget.ticket.slaResolveBy,
+    final slaTicket = Ticket(
+        id: widget.ticket.id,
+        category: widget.ticket.category,
+        description: widget.ticket.description,
+        status: _localStatus,
+        priority: widget.ticket.priority,
+        userId: widget.ticket.userId,
+        consultantId: widget.ticket.consultantId,
+        userName: widget.ticket.userName,
+        slaRespondBy: widget.ticket.slaRespondBy,
+        slaResolveBy: widget.ticket.slaResolveBy,
         createdAt: widget.ticket.createdAt);
     final sla = _computeSla(slaTicket);
 
     return Column(children: [
-      Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: _handleBar()),
+      Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: _handleBar()),
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('#${widget.ticket.id}  ${widget.ticket.category}', style: AppTextStyles.h3),
-              if (widget.ticket.userName != null)
-                Text('Client: ${widget.ticket.userName}', style: AppTextStyles.caption),
-            ])),
+            Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text('#${widget.ticket.id}  ${widget.ticket.category}',
+                      style: AppTextStyles.h3),
+                  if (widget.ticket.userName != null)
+                    Text('Client: ${widget.ticket.userName}',
+                        style: AppTextStyles.caption),
+                ])),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(color: sc.withValues(alpha: 0.12),
+              decoration: BoxDecoration(
+                  color: sc.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: sc.withValues(alpha: 0.4))),
               child: Text(_localStatus,
-                  style: TextStyle(color: sc, fontWeight: FontWeight.w700, fontSize: 12)),
+                  style: TextStyle(
+                      color: sc, fontWeight: FontWeight.w700, fontSize: 12)),
             ),
             const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              decoration: BoxDecoration(color: pc.withValues(alpha: 0.1),
+              decoration: BoxDecoration(
+                  color: pc.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(10)),
               child: Text(widget.ticket.priority,
-                  style: TextStyle(color: pc, fontWeight: FontWeight.w700, fontSize: 11)),
+                  style: TextStyle(
+                      color: pc, fontWeight: FontWeight.w700, fontSize: 11)),
             ),
           ]),
           if (sla != null) ...[
@@ -1319,20 +2757,29 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
               decoration: BoxDecoration(
                   color: _slaColor(sla.state).withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _slaColor(sla.state).withValues(alpha: 0.3))),
+                  border: Border.all(
+                      color: _slaColor(sla.state).withValues(alpha: 0.3))),
               child: Row(children: [
-                Icon(sla.state == _SlaState.breached ? Icons.alarm_off : Icons.timer_outlined,
-                    size: 14, color: _slaColor(sla.state)),
+                Icon(
+                    sla.state == _SlaState.breached
+                        ? Icons.alarm_off
+                        : Icons.timer_outlined,
+                    size: 14,
+                    color: _slaColor(sla.state)),
                 const SizedBox(width: 6),
-                Text(sla.label, style: TextStyle(fontSize: 11,
-                    color: _slaColor(sla.state), fontWeight: FontWeight.w700)),
+                Text(sla.label,
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: _slaColor(sla.state),
+                        fontWeight: FontWeight.w700)),
               ]),
             ),
           ],
           const SizedBox(height: 12),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            child: Row(children: _statuses.map((s) {
+            child: Row(
+                children: _statuses.map((s) {
               final active = _localStatus.toUpperCase() == s;
               final c = _statusColor(s);
               return Padding(
@@ -1341,34 +2788,48 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
                   onTap: active ? null : () => _changeStatus(s),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
-                        color: active ? c.withValues(alpha: 0.15) : c.withValues(alpha: 0.06),
+                        color: active
+                            ? c.withValues(alpha: 0.15)
+                            : c.withValues(alpha: 0.06),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
                             color: active ? c : c.withValues(alpha: 0.3),
                             width: active ? 2 : 1)),
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      if (active && !_updatingStatus) Icon(Icons.check, size: 12, color: c),
+                      if (active && !_updatingStatus)
+                        Icon(Icons.check, size: 12, color: c),
                       if (_updatingStatus && active)
-                        SizedBox(width: 12, height: 12,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: c)),
+                        SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: c)),
                       if (active) const SizedBox(width: 4),
-                      Text(s, style: TextStyle(color: c, fontWeight: FontWeight.w700, fontSize: 12)),
+                      Text(s,
+                          style: TextStyle(
+                              color: c,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12)),
                     ]),
                   ),
                 ),
               );
             }).toList()),
           ),
-          if (!['RESOLVED', 'CLOSED', 'ESCALATED'].contains(_localStatus.toUpperCase())) ...[
+          if (!['RESOLVED', 'CLOSED', 'ESCALATED']
+              .contains(_localStatus.toUpperCase())) ...[
             const SizedBox(height: 8),
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
                 onPressed: _escalating ? null : _showEscalateDialog,
                 icon: _escalating
-                    ? const SizedBox(width: 14, height: 14,
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
                         child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.call_missed_outgoing_rounded,
                         size: 16, color: AppColors.danger),
@@ -1402,8 +2863,9 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
               child: _loadingComments
                   ? const Center(child: CircularProgressIndicator())
                   : _comments.isEmpty
-                      ? const Center(child: Text('No messages yet',
-                          style: TextStyle(color: AppColors.textMuted)))
+                      ? const Center(
+                          child: Text('No messages yet',
+                              style: TextStyle(color: AppColors.textMuted)))
                       : ListView.builder(
                           controller: _scrollToBottom,
                           padding: const EdgeInsets.all(16),
@@ -1415,39 +2877,55 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
                             return _ChatBubble(
                               message: c['message'] ?? '',
                               isAgent: isAgent,
-                              senderName: isAgent ? 'You' : (widget.ticket.userName ?? 'Client'),
+                              senderName: isAgent
+                                  ? 'You'
+                                  : (widget.ticket.userName ?? 'Client'),
                               time: c['createdAt'] != null
                                   ? DateFormat('d MMM HH:mm').format(
-                                      DateTime.tryParse(c['createdAt']) ?? DateTime.now())
+                                      DateTime.tryParse(c['createdAt']) ??
+                                          DateTime.now())
                                   : '',
                             );
                           }),
             ),
             Container(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppColors.border))),
+              decoration: const BoxDecoration(
+                  border: Border(top: BorderSide(color: AppColors.border))),
               child: Row(children: [
-                Expanded(child: TextField(
-                  controller: _replyCtrl, maxLines: null,
+                Expanded(
+                    child: TextField(
+                  controller: _replyCtrl,
+                  maxLines: null,
                   decoration: InputDecoration(
-                    hintText: 'Type reply…', filled: true, fillColor: AppColors.background,
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(24),
+                    hintText: 'Type reply…',
+                    filled: true,
+                    fillColor: AppColors.background,
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
                         borderSide: BorderSide.none),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
                   ),
                 )),
                 const SizedBox(width: 8),
                 GestureDetector(
                   onTap: _sendingReply ? null : _sendReply,
                   child: Container(
-                    width: 44, height: 44,
+                    width: 44,
+                    height: 44,
                     decoration: BoxDecoration(
-                        color: _sendingReply ? AppColors.textMuted : AppColors.accent,
+                        color: _sendingReply
+                            ? AppColors.textMuted
+                            : AppColors.accent,
                         shape: BoxShape.circle),
                     child: _sendingReply
-                        ? const Padding(padding: EdgeInsets.all(12),
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Icon(Icons.send_rounded, color: Colors.white, size: 20),
+                        ? const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.send_rounded,
+                            color: Colors.white, size: 20),
                   ),
                 ),
               ]),
@@ -1460,8 +2938,9 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
               child: _loadingNotes
                   ? const Center(child: CircularProgressIndicator())
                   : _notes.isEmpty
-                      ? const Center(child: Text('No internal notes',
-                          style: TextStyle(color: AppColors.textMuted)))
+                      ? const Center(
+                          child: Text('No internal notes',
+                              style: TextStyle(color: AppColors.textMuted)))
                       : ListView.builder(
                           padding: const EdgeInsets.all(16),
                           itemCount: _notes.length,
@@ -1471,56 +2950,80 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
                               margin: const EdgeInsets.only(bottom: 10),
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                  color: AppColors.warning.withValues(alpha: 0.08),
+                                  color:
+                                      AppColors.warning.withValues(alpha: 0.08),
                                   borderRadius: BorderRadius.circular(12),
                                   border: Border.all(
-                                      color: AppColors.warning.withValues(alpha: 0.25))),
-                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                Row(children: [
-                                  const Icon(Icons.lock_outline, size: 13, color: AppColors.warning),
-                                  const SizedBox(width: 4),
-                                  const Text('Internal Note', style: TextStyle(
-                                      fontSize: 10, color: AppColors.warning, fontWeight: FontWeight.w700)),
-                                  const Spacer(),
-                                  if (n['createdAt'] != null)
-                                    Text(DateFormat('d MMM HH:mm').format(
-                                        DateTime.tryParse(n['createdAt']) ?? DateTime.now()),
-                                        style: AppTextStyles.caption),
-                                ]),
-                                const SizedBox(height: 6),
-                                Text(n['noteText'] ?? '', style: AppTextStyles.body),
-                              ]),
+                                      color: AppColors.warning
+                                          .withValues(alpha: 0.25))),
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(children: [
+                                      const Icon(Icons.lock_outline,
+                                          size: 13, color: AppColors.warning),
+                                      const SizedBox(width: 4),
+                                      const Text('Internal Note',
+                                          style: TextStyle(
+                                              fontSize: 10,
+                                              color: AppColors.warning,
+                                              fontWeight: FontWeight.w700)),
+                                      const Spacer(),
+                                      if (n['createdAt'] != null)
+                                        Text(
+                                            DateFormat('d MMM HH:mm').format(
+                                                DateTime.tryParse(
+                                                        n['createdAt']) ??
+                                                    DateTime.now()),
+                                            style: AppTextStyles.caption),
+                                    ]),
+                                    const SizedBox(height: 6),
+                                    Text(n['noteText'] ?? '',
+                                        style: AppTextStyles.body),
+                                  ]),
                             );
                           }),
             ),
             Container(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppColors.border))),
+              decoration: const BoxDecoration(
+                  border: Border(top: BorderSide(color: AppColors.border))),
               child: Row(children: [
-                const Icon(Icons.lock_outline, size: 16, color: AppColors.warning),
+                const Icon(Icons.lock_outline,
+                    size: 16, color: AppColors.warning),
                 const SizedBox(width: 8),
-                Expanded(child: TextField(
+                Expanded(
+                    child: TextField(
                   controller: _noteCtrl,
                   decoration: InputDecoration(
-                    hintText: 'Add private note…', filled: true,
+                    hintText: 'Add private note…',
+                    filled: true,
                     fillColor: AppColors.warning.withValues(alpha: 0.05),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(24),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
                         borderSide: BorderSide.none),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
                   ),
                 )),
                 const SizedBox(width: 8),
                 GestureDetector(
                   onTap: _sendingNote ? null : _saveNote,
                   child: Container(
-                    width: 44, height: 44,
+                    width: 44,
+                    height: 44,
                     decoration: BoxDecoration(
-                        color: _sendingNote ? AppColors.textMuted : AppColors.warning,
+                        color: _sendingNote
+                            ? AppColors.textMuted
+                            : AppColors.warning,
                         shape: BoxShape.circle),
                     child: _sendingNote
-                        ? const Padding(padding: EdgeInsets.all(12),
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Icon(Icons.save_outlined, color: Colors.white, size: 20),
+                        ? const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.save_outlined,
+                            color: Colors.white, size: 20),
                   ),
                 ),
               ]),
@@ -1528,79 +3031,106 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
           ]),
 
           // Details
-          ListView(controller: widget.scrollController, padding: const EdgeInsets.all(16), children: [
-            _detailRow('Ticket #', '${widget.ticket.id}'),
-            if (widget.ticket.ticketNumber != null)
-              _detailRow('Ticket No.', widget.ticket.ticketNumber!),
-            _detailRow('Category', widget.ticket.category),
-            _detailRow('Priority', widget.ticket.priority),
-            _detailRow('Status', _localStatus),
-            if (widget.ticket.userName != null) _detailRow('Client', widget.ticket.userName!),
-            if (widget.ticket.description != null) ...[
-              const SizedBox(height: 8),
-              const Text('Description', style: TextStyle(fontSize: 11,
-                  fontWeight: FontWeight.w700, color: AppColors.textMuted)),
-              const SizedBox(height: 4),
-              Container(
-                width: double.infinity, padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: AppColors.background,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: AppColors.border)),
-                child: Text(widget.ticket.description!, style: AppTextStyles.body),
-              ),
-            ],
-            if (widget.ticket.attachmentUrl != null) ...[
-              const SizedBox(height: 12),
-              GestureDetector(
-                onTap: () {
-                  Clipboard.setData(ClipboardData(text: widget.ticket.attachmentUrl!));
-                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Attachment URL copied'),
-                          behavior: SnackBarBehavior.floating));
-                },
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: AppColors.info.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(10)),
-                  child: Row(children: [
-                    const Icon(Icons.attach_file_rounded, size: 16, color: AppColors.info),
-                    const SizedBox(width: 8),
-                    const Text('View Attachment',
-                        style: TextStyle(color: AppColors.info, fontWeight: FontWeight.w600)),
-                    const Spacer(),
-                    const Icon(Icons.copy_rounded, size: 14, color: AppColors.info),
-                  ]),
-                ),
-              ),
-            ],
-            if (widget.ticket.slaResolveBy != null) ...[
-              const SizedBox(height: 12),
-              _detailRow('SLA Deadline', () {
-                try { return DateFormat('d MMM yyyy, HH:mm')
-                    .format(DateTime.parse(widget.ticket.slaResolveBy!)); }
-                catch (_) { return widget.ticket.slaResolveBy!; }
-              }()),
-            ],
-            if (widget.ticket.createdAt != null)
-              _detailRow('Created', () {
-                try { return DateFormat('d MMM yyyy, HH:mm')
-                    .format(DateTime.parse(widget.ticket.createdAt!)); }
-                catch (_) { return widget.ticket.createdAt!; }
-              }()),
-          ]),
+          ListView(
+              controller: widget.scrollController,
+              padding: const EdgeInsets.all(16),
+              children: [
+                _detailRow('Ticket #', '${widget.ticket.id}'),
+                if (widget.ticket.ticketNumber != null)
+                  _detailRow('Ticket No.', widget.ticket.ticketNumber!),
+                _detailRow('Category', widget.ticket.category),
+                _detailRow('Priority', widget.ticket.priority),
+                _detailRow('Status', _localStatus),
+                if (widget.ticket.userName != null)
+                  _detailRow('Client', widget.ticket.userName!),
+                if (widget.ticket.description != null) ...[
+                  const SizedBox(height: 8),
+                  const Text('Description',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textMuted)),
+                  const SizedBox(height: 4),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                        color: AppColors.background,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppColors.border)),
+                    child: Text(widget.ticket.description!,
+                        style: AppTextStyles.body),
+                  ),
+                ],
+                if (widget.ticket.attachmentUrl != null) ...[
+                  const SizedBox(height: 12),
+                  GestureDetector(
+                    onTap: () {
+                      Clipboard.setData(
+                          ClipboardData(text: widget.ticket.attachmentUrl!));
+                      if (mounted)
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                                content: Text('Attachment URL copied'),
+                                behavior: SnackBarBehavior.floating));
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                          color: AppColors.info.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(10)),
+                      child: Row(children: [
+                        const Icon(Icons.attach_file_rounded,
+                            size: 16, color: AppColors.info),
+                        const SizedBox(width: 8),
+                        const Text('View Attachment',
+                            style: TextStyle(
+                                color: AppColors.info,
+                                fontWeight: FontWeight.w600)),
+                        const Spacer(),
+                        const Icon(Icons.copy_rounded,
+                            size: 14, color: AppColors.info),
+                      ]),
+                    ),
+                  ),
+                ],
+                if (widget.ticket.slaResolveBy != null) ...[
+                  const SizedBox(height: 12),
+                  _detailRow('SLA Deadline', () {
+                    try {
+                      return DateFormat('d MMM yyyy, HH:mm')
+                          .format(DateTime.parse(widget.ticket.slaResolveBy!));
+                    } catch (_) {
+                      return widget.ticket.slaResolveBy!;
+                    }
+                  }()),
+                ],
+                if (widget.ticket.createdAt != null)
+                  _detailRow('Created', () {
+                    try {
+                      return DateFormat('d MMM yyyy, HH:mm')
+                          .format(DateTime.parse(widget.ticket.createdAt!));
+                    } catch (_) {
+                      return widget.ticket.createdAt!;
+                    }
+                  }()),
+              ]),
         ]),
       ),
     ]);
   }
 
   Widget _detailRow(String label, String value) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Row(children: [
-      SizedBox(width: 110, child: Text(label, style: AppTextStyles.caption)),
-      Expanded(child: Text(value,
-          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
-    ]),
-  );
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(children: [
+          SizedBox(
+              width: 110, child: Text(label, style: AppTextStyles.caption)),
+          Expanded(
+              child: Text(value,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w600, fontSize: 13))),
+        ]),
+      );
 }
 
 class _ChatBubble extends StatelessWidget {
@@ -1608,8 +3138,11 @@ class _ChatBubble extends StatelessWidget {
   final bool isAgent;
   final String senderName;
   final String time;
-  const _ChatBubble({required this.message, required this.isAgent,
-      required this.senderName, required this.time});
+  const _ChatBubble(
+      {required this.message,
+      required this.isAgent,
+      required this.senderName,
+      required this.time});
 
   @override
   Widget build(BuildContext context) {
@@ -1619,28 +3152,36 @@ class _ChatBubble extends StatelessWidget {
       alignment: isAgent ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+        constraints:
+            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
         child: Column(
-            crossAxisAlignment: isAgent ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+            crossAxisAlignment:
+                isAgent ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             children: [
-          Text(senderName, style: const TextStyle(fontSize: 10,
-              color: AppColors.textMuted, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 2),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-                color: bgColor,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(isAgent ? 16 : 4),
-                  bottomRight: Radius.circular(isAgent ? 4 : 16),
-                )),
-            child: Text(message, style: TextStyle(fontSize: 14, color: textColor, height: 1.4)),
-          ),
-          const SizedBox(height: 2),
-          Text(time, style: AppTextStyles.caption),
-        ]),
+              Text(senderName,
+                  style: const TextStyle(
+                      fontSize: 10,
+                      color: AppColors.textMuted,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(height: 2),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                    color: bgColor,
+                    borderRadius: BorderRadius.only(
+                      topLeft: const Radius.circular(16),
+                      topRight: const Radius.circular(16),
+                      bottomLeft: Radius.circular(isAgent ? 16 : 4),
+                      bottomRight: Radius.circular(isAgent ? 4 : 16),
+                    )),
+                child: Text(message,
+                    style:
+                        TextStyle(fontSize: 14, color: textColor, height: 1.4)),
+              ),
+              const SizedBox(height: 2),
+              Text(time, style: AppTextStyles.caption),
+            ]),
       ),
     );
   }
@@ -1659,12 +3200,17 @@ class _ConsultantScheduleTab extends StatefulWidget {
 
 class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
   final _svc = ConsultantService();
+  ConsultantModel? _consultant;
   List<TimeSlot> _allSlots = [];
-  List<dynamic> _masterSlots = [];
+  List<_ScheduleMasterSlot> _masterSlots = [];
+  Set<String> _specialDays = <String>{};
+  Set<String> _selectedSlotKeys = <String>{};
   bool _loading = true;
+  bool _saving = false;
   String _selectedDate = '';
 
-  List<DateTime> get _days => List.generate(30, (i) => DateTime.now().add(Duration(days: i)));
+  List<DateTime> get _days =>
+      List.generate(30, (i) => DateTime.now().add(Duration(days: i)));
   String _dateKey(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
@@ -1679,61 +3225,178 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
     setState(() => _loading = true);
     final results = await Future.wait([
       _svc.getSlotsByConsultant(widget.consultantId),
-      _getMasterSlots(),
+      _svc.getMasterSlots(widget.consultantId),
+      _svc.getConsultantById(widget.consultantId),
+      _svc.getSpecialDaysByConsultant(widget.consultantId),
     ]);
     if (mounted) {
       setState(() {
         _allSlots = results[0] as List<TimeSlot>;
-        _masterSlots = results[1] as List<dynamic>;
+        _consultant = results[2] as ConsultantModel?;
+        _masterSlots =
+            _normalizeMasterSlots(results[1] as List<dynamic>, _consultant);
+        _specialDays = _normalizeSpecialDays(results[3] as List<dynamic>);
+        _selectedSlotKeys = {};
         _loading = false;
       });
     }
   }
 
-  List<TimeSlot> get _slotsForDate =>
-      _allSlots.where((s) => s.slotDate == _selectedDate).toList();
-
-  Future<void> _toggleSlot(TimeSlot slot) async {
-    final newStatus = slot.status == 'UNAVAILABLE' ? 'AVAILABLE' : 'UNAVAILABLE';
-    final ok = await _svc.updateTimeSlot(slot.id, {
-      'status': newStatus, 'consultantId': widget.consultantId,
-      'slotDate': slot.slotDate, 'masterTimeSlotId': slot.masterTimeSlotId,
-      'durationMinutes': 60,
-    });
-    if (mounted) {
-      _snack(ok ? (newStatus == 'UNAVAILABLE' ? 'Slot blocked' : 'Slot restored') : 'Update failed', ok);
-      if (ok) _load();
+  Set<String> _normalizeSpecialDays(List<dynamic> rows) {
+    final dates = <String>{};
+    for (final row in rows) {
+      if (row is String && row.trim().isNotEmpty) {
+        dates.add(row.trim());
+        continue;
+      }
+      if (row is Map) {
+        final value = (row['specialDate'] ??
+                row['special_date'] ??
+                row['date'] ??
+                row['slotDate'] ??
+                '')
+            .toString()
+            .trim();
+        if (value.isNotEmpty) dates.add(value);
+      }
     }
+    return dates;
   }
 
-  void _openMasterSlots() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.7, maxChildSize: 0.95, minChildSize: 0.4,
-        expand: false,
-        builder: (_, sc) => _MasterSlotsSheet(
-          masterSlots: _masterSlots, scrollController: sc, onChanged: _load),
-      ),
+  int? _parseMinutes(dynamic raw) {
+    if (raw == null) return null;
+    final value = raw.toString().trim().toUpperCase();
+    if (value.isEmpty) return null;
+
+    final hhmm = RegExp(r'^(\d{1,2}):(\d{2})').firstMatch(value);
+    if (hhmm != null) {
+      final hour = int.tryParse(hhmm.group(1) ?? '');
+      final minute = int.tryParse(hhmm.group(2) ?? '');
+      if (hour == null || minute == null) return null;
+      return hour * 60 + minute;
+    }
+
+    final ampm =
+        RegExp(r'^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$').firstMatch(value);
+    if (ampm != null) {
+      var hour = int.tryParse(ampm.group(1) ?? '') ?? 0;
+      final minute = int.tryParse(ampm.group(2) ?? '0') ?? 0;
+      final period = ampm.group(3) ?? 'AM';
+      if (period == 'PM' && hour != 12) hour += 12;
+      if (period == 'AM' && hour == 12) hour = 0;
+      return hour * 60 + minute;
+    }
+    return null;
+  }
+
+  String _minutesLabel(int totalMinutes) {
+    final normalized = ((totalMinutes % 1440) + 1440) % 1440;
+    final hour24 = normalized ~/ 60;
+    final minute = normalized % 60;
+    final suffix = hour24 >= 12 ? 'PM' : 'AM';
+    final hour12 = hour24 % 12 == 0 ? 12 : hour24 % 12;
+    return '$hour12:${minute.toString().padLeft(2, '0')} $suffix';
+  }
+
+  _ScheduleMasterSlot? _toMasterSlot(
+      dynamic raw, ConsultantModel? consultant, int fallbackMinutes) {
+    if (raw is! Map) return null;
+    final map = Map<String, dynamic>.from(raw);
+    final id = (map['id'] as num?)?.toInt() ??
+        int.tryParse('${map['id'] ?? ''}') ??
+        0;
+    final timeRange = (map['timeRange'] ?? '').toString().trim();
+    if (id <= 0 || timeRange.isEmpty) return null;
+
+    final parts = timeRange.split(RegExp(r'\s*[-–]\s*'));
+    if (parts.length < 2) return null;
+    final startMinutes = _parseMinutes(parts.first);
+    final endMinutes = _parseMinutes(parts.last);
+    if (startMinutes == null || endMinutes == null) return null;
+
+    var durationMinutes =
+        (map['durationMinutes'] as num?)?.toInt() ??
+            (map['duration'] as num?)?.toInt() ??
+            (map['durationInMinutes'] as num?)?.toInt() ??
+            (endMinutes - startMinutes);
+    if (durationMinutes <= 0) {
+      durationMinutes = fallbackMinutes > 0 ? fallbackMinutes : 60;
+    }
+
+    final shiftStart = _parseMinutes(consultant?.shiftStart);
+    final shiftEnd = _parseMinutes(consultant?.shiftEnd);
+    final withinShift = shiftStart == null ||
+        shiftEnd == null ||
+        (startMinutes >= shiftStart && endMinutes <= shiftEnd);
+    if (!withinShift) return null;
+
+    return _ScheduleMasterSlot(
+      id: id,
+      timeRange: timeRange,
+      startMinutes: startMinutes,
+      endMinutes: endMinutes,
+      durationMinutes: durationMinutes,
     );
   }
 
-  void _openFullManager() async {
-    await Navigator.push(context, MaterialPageRoute(
-        builder: (_) => ConsultantTimeslotManager(consultantId: widget.consultantId)));
-    _load();
+  List<_ScheduleMasterSlot> _normalizeMasterSlots(
+      List<dynamic> rows, ConsultantModel? consultant) {
+    final fallbackMinutes = consultant?.slotsDuration ?? 60;
+    final slots = rows
+        .map((row) => _toMasterSlot(row, consultant, fallbackMinutes))
+        .whereType<_ScheduleMasterSlot>()
+        .toList()
+      ..sort((a, b) => a.startMinutes.compareTo(b.startMinutes));
+    return slots;
   }
 
+  String _slotStartKey(String value) {
+    final parts = value.split(RegExp(r'\s*[-–]\s*'));
+    final start = parts.isEmpty ? value : parts.first;
+    final minutes = _parseMinutes(start);
+    if (minutes == null) return value;
+    final hour = (minutes ~/ 60).toString().padLeft(2, '0');
+    final minute = (minutes % 60).toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  String _masterSlotKey(_ScheduleMasterSlot slot) =>
+      '${(slot.startMinutes ~/ 60).toString().padLeft(2, '0')}:${(slot.startMinutes % 60).toString().padLeft(2, '0')}';
+
+  _ScheduleDisplaySlot _displaySlotFor(_ScheduleMasterSlot master) {
+    TimeSlot? existing;
+    for (final slot in _allSlots) {
+      if (slot.slotDate != _selectedDate) continue;
+      final matchesMaster = slot.masterTimeSlotId == master.id;
+      final matchesStart = _slotStartKey(slot.timeRange) == _masterSlotKey(master);
+      if (matchesMaster || matchesStart) {
+        existing = slot;
+        break;
+      }
+    }
+
+    return _ScheduleDisplaySlot(
+      master: master,
+      existing: existing,
+      status: existing?.status.toUpperCase() ?? 'AVAILABLE',
+    );
+  }
+
+  List<_ScheduleDisplaySlot> get _slotsForDate =>
+      _masterSlots.map(_displaySlotFor).toList();
+
+  bool get _isSpecialDay => _specialDays.contains(_selectedDate);
+
   Color _slotColor(String status) {
-    switch (status) {
-      case 'AVAILABLE':   return AppColors.success;
-      case 'BOOKED':      return AppColors.primaryLight;
-      case 'UNAVAILABLE': return AppColors.textMuted;
-      default:            return AppColors.textMuted;
+    switch (status.toUpperCase()) {
+      case 'AVAILABLE':
+        return AppColors.success;
+      case 'BOOKED':
+        return AppColors.primaryLight;
+      case 'UNAVAILABLE':
+        return AppColors.warning;
+      default:
+        return AppColors.textMuted;
     }
   }
 
@@ -1742,34 +3405,130 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
       backgroundColor: ok ? AppColors.success : AppColors.danger,
-      behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 2),
+      behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 2),
     ));
+  }
+
+  Future<void> _toggleDisplaySlot(_ScheduleDisplaySlot slot) async {
+    if (slot.status == 'BOOKED') {
+      _snack('Booked slots cannot be changed.', false);
+      return;
+    }
+
+    setState(() => _saving = true);
+    final targetStatus =
+        slot.status == 'UNAVAILABLE' ? 'AVAILABLE' : 'UNAVAILABLE';
+    bool ok;
+    if (slot.existing != null) {
+      ok = await _svc.updateTimeSlot(slot.existing!.id, {
+        'status': targetStatus,
+        'consultantId': widget.consultantId,
+        'slotDate': slot.existing!.slotDate,
+        'masterTimeSlotId': slot.existing!.masterTimeSlotId,
+        'durationMinutes': slot.existing!.durationMinutes,
+      });
+    } else {
+      ok = targetStatus == 'UNAVAILABLE' &&
+          await _svc.addCustomSlot(
+                consultantId: widget.consultantId,
+                slotDate: _selectedDate,
+                masterTimeSlotId: slot.master.id,
+                durationMinutes: slot.master.durationMinutes,
+                status: 'UNAVAILABLE',
+              ) !=
+              null;
+    }
+
+    if (mounted) {
+      setState(() => _saving = false);
+      _snack(
+        ok
+            ? (targetStatus == 'UNAVAILABLE' ? 'Slot blocked' : 'Slot restored')
+            : 'Update failed',
+        ok,
+      );
+      if (ok) _load();
+    }
+  }
+
+  Future<void> _toggleSelectedSlots(String targetStatus) async {
+    if (_selectedSlotKeys.isEmpty) return;
+    setState(() => _saving = true);
+    var allOk = true;
+    for (final slot in _slotsForDate) {
+      if (!_selectedSlotKeys.contains(slot.key) || slot.status == 'BOOKED') {
+        continue;
+      }
+
+      bool ok;
+      if (slot.existing != null) {
+        ok = await _svc.updateTimeSlot(slot.existing!.id, {
+          'status': targetStatus,
+          'consultantId': widget.consultantId,
+          'slotDate': slot.existing!.slotDate,
+          'masterTimeSlotId': slot.existing!.masterTimeSlotId,
+          'durationMinutes': slot.existing!.durationMinutes,
+        });
+      } else {
+        ok = targetStatus == 'UNAVAILABLE' &&
+            await _svc.addCustomSlot(
+                  consultantId: widget.consultantId,
+                  slotDate: _selectedDate,
+                  masterTimeSlotId: slot.master.id,
+                  durationMinutes: slot.master.durationMinutes,
+                  status: 'UNAVAILABLE',
+                ) !=
+                null;
+      }
+      allOk = allOk && ok;
+    }
+
+    if (mounted) {
+      setState(() {
+        _saving = false;
+        _selectedSlotKeys = {};
+      });
+      _snack(
+        allOk
+            ? (targetStatus == 'UNAVAILABLE'
+                ? 'Selected slots blocked'
+                : 'Selected slots restored')
+            : 'Some slots could not be updated',
+        allOk,
+      );
+      await _load();
+    }
+  }
+
+  Future<void> _toggleSpecialDay() async {
+    setState(() => _saving = true);
+    final ok = _isSpecialDay
+        ? await _svc.unpublishSpecialDay(widget.consultantId, _selectedDate)
+        : await _svc.publishSpecialDay(widget.consultantId, _selectedDate);
+    if (mounted) {
+      setState(() => _saving = false);
+      _snack(
+        ok
+            ? (_isSpecialDay
+                ? 'Special day removed'
+                : 'Date published as special day')
+            : 'Failed to update special day',
+        ok,
+      );
+      if (ok) _load();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final available = _allSlots.where((s) => s.status == 'AVAILABLE').length;
-    final booked = _allSlots.where((s) => s.status == 'BOOKED').length;
-    final blocked = _allSlots.where((s) => s.status == 'UNAVAILABLE').length;
+    final available = _slotsForDate.where((s) => s.status == 'AVAILABLE').length;
+    final booked = _slotsForDate.where((s) => s.status == 'BOOKED').length;
+    final blocked =
+        _slotsForDate.where((s) => s.status == 'UNAVAILABLE').length;
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      floatingActionButton: Column(mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.end, children: [
-        FloatingActionButton.small(
-          heroTag: 'masterSlots', onPressed: _openMasterSlots,
-          backgroundColor: AppColors.warning, tooltip: 'Master Time Ranges',
-          child: const Icon(Icons.access_time_rounded, color: Colors.white, size: 20),
-        ),
-        const SizedBox(height: 8),
-        FloatingActionButton.extended(
-          heroTag: 'manageSchedule', onPressed: _openFullManager,
-          backgroundColor: AppColors.primaryLight,
-          icon: const Icon(Icons.tune_rounded, color: Colors.white),
-          label: const Text('Manage Schedule',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-        ),
-      ]),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
@@ -1777,51 +3536,98 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
               child: Column(children: [
                 Container(
                   color: AppColors.surface,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   child: Row(children: [
                     _statPill(available, AppColors.success, 'Available'),
                     const SizedBox(width: 8),
                     _statPill(booked, AppColors.info, 'Booked'),
                     const SizedBox(width: 8),
-                    _statPill(blocked, AppColors.textMuted, 'Blocked'),
+                    _statPill(blocked, AppColors.warning, 'Blocked'),
+                    const SizedBox(width: 8),
+                    _statPill(_specialDays.length, AppColors.warning, 'Special'),
                     const Spacer(),
-                    Text('${_allSlots.length} total', style: AppTextStyles.caption),
+                    Text(_consultant?.shiftTimingsDisplay ?? '—',
+                        style: AppTextStyles.caption),
                   ]),
                 ),
+                if (_saving)
+                  const LinearProgressIndicator(color: AppColors.accent),
                 const Divider(height: 1),
                 Container(
-                  color: AppColors.surface, height: 74,
+                  color: AppColors.surface,
+                  height: 74,
                   child: ListView.builder(
                     scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     itemCount: _days.length,
                     itemBuilder: (_, i) {
                       final d = _days[i];
                       final key = _dateKey(d);
                       final isSelected = key == _selectedDate;
-                      final slotCount = _allSlots.where((s) => s.slotDate == key).length;
+                      final slotCount = _masterSlots.length;
+                      final isSpecial = _specialDays.contains(key);
                       return GestureDetector(
-                        onTap: () => setState(() => _selectedDate = key),
+                        onTap: () => setState(() {
+                          _selectedDate = key;
+                          _selectedSlotKeys = {};
+                        }),
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 200),
-                          margin: const EdgeInsets.only(right: 8), width: 52,
+                          margin: const EdgeInsets.only(right: 8),
+                          width: 52,
                           decoration: BoxDecoration(
-                              color: isSelected ? AppColors.accent : AppColors.background,
+                              color: isSelected
+                                  ? (isSpecial
+                                      ? AppColors.warning
+                                      : AppColors.accent)
+                                  : AppColors.background,
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
-                                  color: isSelected ? AppColors.accent : AppColors.border)),
-                          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                            Text(DateFormat('EEE').format(d).toUpperCase(),
-                                style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700,
-                                    color: isSelected ? Colors.white70 : AppColors.textMuted)),
-                            Text('${d.day}', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
-                                color: isSelected ? Colors.white : AppColors.textPrimary)),
-                            if (slotCount > 0)
-                              Container(width: 16, height: 3,
-                                  decoration: BoxDecoration(
-                                      color: isSelected ? Colors.white54 : AppColors.accent,
-                                      borderRadius: BorderRadius.circular(2))),
-                          ]),
+                                  color: isSelected
+                                      ? (isSpecial
+                                          ? AppColors.warning
+                                          : AppColors.accent)
+                                      : AppColors.border)),
+                          child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(DateFormat('EEE').format(d).toUpperCase(),
+                                    style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w700,
+                                        color: isSelected
+                                            ? Colors.white70
+                                            : AppColors.textMuted)),
+                                Text('${d.day}',
+                                    style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w800,
+                                        color: isSelected
+                                            ? Colors.white
+                                            : AppColors.textPrimary)),
+                                if (isSpecial)
+                                  Container(
+                                      width: 16,
+                                      height: 3,
+                                      decoration: BoxDecoration(
+                                          color: isSelected
+                                              ? Colors.white54
+                                              : AppColors.warning,
+                                          borderRadius:
+                                              BorderRadius.circular(2)))
+                                else if (slotCount > 0)
+                                  Container(
+                                      width: 16,
+                                      height: 3,
+                                      decoration: BoxDecoration(
+                                          color: isSelected
+                                              ? Colors.white54
+                                              : AppColors.accent,
+                                          borderRadius:
+                                              BorderRadius.circular(2))),
+                              ]),
                         ),
                       );
                     },
@@ -1829,66 +3635,280 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
                 ),
                 const Divider(height: 1),
                 Expanded(
-                  child: _slotsForDate.isEmpty
-                      ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                          const Icon(Icons.calendar_today_outlined, size: 48, color: AppColors.textMuted),
-                          const SizedBox(height: 12),
-                          Text('No slots for ${DateFormat('d MMM').format(DateTime.parse(_selectedDate))}',
-                              style: AppTextStyles.body),
-                          const SizedBox(height: 8),
-                          OutlinedButton(onPressed: _openFullManager, child: const Text('Add Slots')),
-                        ]))
-                      : ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
-                          itemCount: _slotsForDate.length,
-                          itemBuilder: (_, i) {
-                            final s = _slotsForDate[i];
-                            final c = _slotColor(s.status);
-                            final isBooked = s.status == 'BOOKED';
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 8),
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                              decoration: BoxDecoration(
-                                  color: c.withValues(alpha: 0.07),
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(color: c.withValues(alpha: 0.3))),
-                              child: Row(children: [
-                                Container(width: 4, height: 40, margin: const EdgeInsets.only(right: 12),
-                                    decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(2))),
-                                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                  Text(s.timeRange, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: c)),
-                                  Text(s.status, style: TextStyle(fontSize: 11, color: c.withValues(alpha: 0.8))),
-                                ])),
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: _isSpecialDay
+                              ? AppColors.warning.withOpacity(0.08)
+                              : AppColors.surface,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: _isSpecialDay
+                                ? AppColors.warning.withOpacity(0.32)
+                                : AppColors.border,
+                          ),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              _isSpecialDay
+                                  ? Icons.star_rounded
+                                  : Icons.event_available_rounded,
+                              color: _isSpecialDay
+                                  ? AppColors.warning
+                                  : AppColors.primaryLight,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    _isSpecialDay
+                                        ? 'Special Day'
+                                        : 'Standard Day',
+                                    style: AppTextStyles.h4,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _isSpecialDay
+                                        ? 'Users can request special bookings for this date. Standard master slots are hidden until you remove special-day mode.'
+                                        : 'Only admin master slots that fit your shift hours are shown here. Consultants can block or restore them, but cannot add their own master ranges.',
+                                    style: AppTextStyles.caption,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            FilledButton(
+                              style: FilledButton.styleFrom(
+                                backgroundColor: _isSpecialDay
+                                    ? AppColors.warning
+                                    : AppColors.primaryLight,
+                              ),
+                              onPressed: _saving ? null : _toggleSpecialDay,
+                              child: Text(
+                                _isSpecialDay
+                                    ? 'Remove Special'
+                                    : 'Publish as Special',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      if (_isSpecialDay)
+                        Container(
+                          padding: const EdgeInsets.all(18),
+                          decoration: BoxDecoration(
+                            color: AppColors.surface,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: AppColors.border),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Special bookings enabled',
+                                  style: AppTextStyles.h4),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Customers can now submit special-booking requests for ${DateFormat('d MMM').format(DateTime.parse(_selectedDate))}. Exact slot confirmation happens from your special bookings list.',
+                                style: AppTextStyles.body,
+                              ),
+                            ],
+                          ),
+                        )
+                      else if (_masterSlots.isEmpty)
+                        Center(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 48),
+                            child: Column(
+                              children: [
+                                const Icon(Icons.calendar_today_outlined,
+                                    size: 48, color: AppColors.textMuted),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'No admin master slots fall inside your shift hours.',
+                                  style: AppTextStyles.body,
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
+                      else ...[
+                        Row(
+                          children: [
+                            Text('Step 2 — Select Time',
+                                style: AppTextStyles.label),
+                            const Spacer(),
+                            OutlinedButton(
+                              onPressed: () {
+                                final keys = _slotsForDate
+                                    .where((slot) => slot.status != 'BOOKED')
+                                    .map((slot) => slot.key)
+                                    .toSet();
+                                setState(() {
+                                  _selectedSlotKeys =
+                                      _selectedSlotKeys.length == keys.length
+                                          ? <String>{}
+                                          : keys;
+                                });
+                              },
+                              child: Text(
+                                _selectedSlotKeys.isEmpty
+                                    ? 'Select All'
+                                    : 'Deselect All',
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        if (_selectedSlotKeys.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: FilledButton(
+                                    style: FilledButton.styleFrom(
+                                        backgroundColor: AppColors.warning),
+                                    onPressed: _saving
+                                        ? null
+                                        : () => _toggleSelectedSlots(
+                                            'UNAVAILABLE'),
+                                    child: const Text('Block Selected'),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: FilledButton(
+                                    style: FilledButton.styleFrom(
+                                        backgroundColor: AppColors.success),
+                                    onPressed: _saving
+                                        ? null
+                                        : () =>
+                                            _toggleSelectedSlots('AVAILABLE'),
+                                    child: const Text('Restore Selected'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ..._slotsForDate.map((slot) {
+                          final c = _slotColor(slot.status);
+                          final isBooked = slot.status == 'BOOKED';
+                          final isSelected =
+                              _selectedSlotKeys.contains(slot.key) && !isBooked;
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: c.withValues(alpha: 0.07),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                  color: isSelected
+                                      ? AppColors.accent
+                                      : c.withValues(alpha: 0.3),
+                                  width: isSelected ? 1.5 : 1),
+                            ),
+                            child: Row(
+                              children: [
+                                if (!isBooked)
+                                  Checkbox(
+                                    value: isSelected,
+                                    onChanged: (_) {
+                                      setState(() {
+                                        if (isSelected) {
+                                          _selectedSlotKeys.remove(slot.key);
+                                        } else {
+                                          _selectedSlotKeys.add(slot.key);
+                                        }
+                                      });
+                                    },
+                                  ),
+                                Container(
+                                  width: 4,
+                                  height: 40,
+                                  margin: const EdgeInsets.only(right: 12),
+                                  decoration: BoxDecoration(
+                                      color: c,
+                                      borderRadius: BorderRadius.circular(2)),
+                                ),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(slot.master.timeRange,
+                                          style: TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                              fontSize: 14,
+                                              color: c)),
+                                      Text(slot.status,
+                                          style: TextStyle(
+                                              fontSize: 11,
+                                              color: c.withValues(alpha: 0.8))),
+                                    ],
+                                  ),
+                                ),
                                 if (!isBooked)
                                   GestureDetector(
-                                    onTap: () => _toggleSlot(s),
+                                    onTap: _saving
+                                        ? null
+                                        : () => _toggleDisplaySlot(slot),
                                     child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 12, vertical: 6),
                                       decoration: BoxDecoration(
-                                          color: s.status == 'UNAVAILABLE'
-                                              ? AppColors.success.withValues(alpha: 0.1)
-                                              : AppColors.warning.withValues(alpha: 0.1),
-                                          borderRadius: BorderRadius.circular(8),
+                                          color: slot.status == 'UNAVAILABLE'
+                                              ? AppColors.success
+                                                  .withValues(alpha: 0.1)
+                                              : AppColors.warning
+                                                  .withValues(alpha: 0.1),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
                                           border: Border.all(
-                                              color: s.status == 'UNAVAILABLE'
-                                                  ? AppColors.success : AppColors.warning)),
-                                      child: Text(s.status == 'UNAVAILABLE' ? 'Restore' : 'Block',
-                                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                                              color: s.status == 'UNAVAILABLE' ? AppColors.success : AppColors.warning)),
+                                              color: slot.status == 'UNAVAILABLE'
+                                                  ? AppColors.success
+                                                  : AppColors.warning)),
+                                      child: Text(
+                                          slot.status == 'UNAVAILABLE'
+                                              ? 'Restore'
+                                              : 'Block',
+                                          style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
+                                              color: slot.status == 'UNAVAILABLE'
+                                                  ? AppColors.success
+                                                  : AppColors.warning)),
                                     ),
                                   )
                                 else
                                   Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                    decoration: BoxDecoration(color: AppColors.info.withValues(alpha: 0.1),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                        color: AppColors.info
+                                            .withValues(alpha: 0.1),
                                         borderRadius: BorderRadius.circular(8)),
-                                    child: const Text('Booked', style: TextStyle(fontSize: 11,
-                                        color: AppColors.info, fontWeight: FontWeight.w700)),
+                                    child: const Text('Booked',
+                                        style: TextStyle(
+                                            fontSize: 11,
+                                            color: AppColors.info,
+                                            fontWeight: FontWeight.w700)),
                                   ),
-                              ]),
-                            );
-                          },
-                        ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
+                    ],
+                  ),
                 ),
               ]),
             ),
@@ -1896,146 +3916,44 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
   }
 
   Widget _statPill(int count, Color color, String label) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-    decoration: BoxDecoration(color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(20)),
-    child: Text('$count $label', style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
-  );
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(20)),
+        child: Text('$count $label',
+            style: TextStyle(
+                fontSize: 11, color: color, fontWeight: FontWeight.w600)),
+      );
 }
 
-class _MasterSlotsSheet extends StatefulWidget {
-  final List<dynamic> masterSlots;
-  final ScrollController scrollController;
-  final VoidCallback onChanged;
-  const _MasterSlotsSheet({required this.masterSlots,
-      required this.scrollController, required this.onChanged});
-  @override
-  State<_MasterSlotsSheet> createState() => _MasterSlotsSheetState();
+class _ScheduleMasterSlot {
+  final int id;
+  final String timeRange;
+  final int startMinutes;
+  final int endMinutes;
+  final int durationMinutes;
+
+  const _ScheduleMasterSlot({
+    required this.id,
+    required this.timeRange,
+    required this.startMinutes,
+    required this.endMinutes,
+    required this.durationMinutes,
+  });
 }
 
-class _MasterSlotsSheetState extends State<_MasterSlotsSheet> {
-  late List<dynamic> _slots;
-  bool _saving = false;
+class _ScheduleDisplaySlot {
+  final _ScheduleMasterSlot master;
+  final TimeSlot? existing;
+  final String status;
 
-  @override
-  void initState() { super.initState(); _slots = List.from(widget.masterSlots); }
+  const _ScheduleDisplaySlot({
+    required this.master,
+    required this.existing,
+    required this.status,
+  });
 
-  void _showAddEdit({Map<String, dynamic>? slot}) {
-    final ctrl = TextEditingController(text: slot != null ? slot['timeRange'] : '');
-    final isEdit = slot != null;
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(isEdit ? 'Edit Time Range' : 'Add Time Range'),
-        content: TextField(controller: ctrl,
-            decoration: const InputDecoration(
-                labelText: 'Time Range', hintText: 'e.g. 10:00 AM – 11:00 AM')),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final val = ctrl.text.trim();
-              if (val.isEmpty) return;
-              Navigator.pop(context);
-              setState(() => _saving = true);
-              bool ok = isEdit
-                  ? await _updateMasterSlotApi(slot!['id'] as int, val)
-                  : await _createMasterSlot(val);
-              if (ok) {
-                widget.onChanged();
-                final fresh = await _getMasterSlots();
-                if (mounted) setState(() { _slots = fresh; _saving = false; });
-              } else {
-                if (mounted) setState(() => _saving = false);
-              }
-            },
-            child: Text(isEdit ? 'Save' : 'Add', style: const TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _delete(Map<String, dynamic> slot) async {
-    final ok = await showDialog<bool>(context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('Delete Time Range?'),
-          content: Text('Delete "${slot['timeRange']}"?'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Delete', style: TextStyle(color: Colors.white)),
-            ),
-          ],
-        ));
-    if (ok != true) return;
-    setState(() => _saving = true);
-    final deleted = await _deleteMasterSlotApi(slot['id'] as int);
-    if (deleted) {
-      widget.onChanged();
-      final fresh = await _getMasterSlots();
-      if (mounted) setState(() { _slots = fresh; _saving = false; });
-    } else {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-        child: Row(children: [
-          _handleBar(), const Spacer(),
-          Text('Master Time Ranges', style: AppTextStyles.h3),
-          const Spacer(),
-          IconButton(icon: const Icon(Icons.add_circle_outline, color: AppColors.accent),
-              onPressed: () => _showAddEdit(), tooltip: 'Add time range'),
-        ]),
-      ),
-      const Divider(height: 1),
-      if (_saving) const LinearProgressIndicator(color: AppColors.accent),
-      Expanded(
-        child: _slots.isEmpty
-            ? const Center(child: Text('No master time ranges yet',
-                style: TextStyle(color: AppColors.textMuted)))
-            : ListView.builder(
-                controller: widget.scrollController,
-                padding: const EdgeInsets.all(16),
-                itemCount: _slots.length,
-                itemBuilder: (_, i) {
-                  final s = _slots[i] as Map<String, dynamic>;
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    decoration: BoxDecoration(color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppColors.border)),
-                    child: Row(children: [
-                      const Icon(Icons.access_time_rounded, size: 18, color: AppColors.accent),
-                      const SizedBox(width: 12),
-                      Expanded(child: Text(s['timeRange'] ?? '',
-                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14))),
-                      IconButton(
-                        icon: const Icon(Icons.edit_outlined, size: 18, color: AppColors.textSecondary),
-                        onPressed: () => _showAddEdit(slot: s),
-                        padding: EdgeInsets.zero, constraints: const BoxConstraints(),
-                      ),
-                      const SizedBox(width: 12),
-                      IconButton(
-                        icon: const Icon(Icons.delete_outline, size: 18, color: AppColors.danger),
-                        onPressed: () => _delete(s),
-                        padding: EdgeInsets.zero, constraints: const BoxConstraints(),
-                      ),
-                    ]),
-                  );
-                }),
-      ),
-    ]);
-  }
+  String get key => '${master.id}|${master.startMinutes}';
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2046,7 +3964,8 @@ class _ConsultantFeedbacksTab extends StatefulWidget {
   final int consultantId;
   const _ConsultantFeedbacksTab({required this.consultantId});
   @override
-  State<_ConsultantFeedbacksTab> createState() => _ConsultantFeedbacksTabState();
+  State<_ConsultantFeedbacksTab> createState() =>
+      _ConsultantFeedbacksTabState();
 }
 
 class _ConsultantFeedbacksTabState extends State<_ConsultantFeedbacksTab> {
@@ -2054,28 +3973,39 @@ class _ConsultantFeedbacksTabState extends State<_ConsultantFeedbacksTab> {
   bool _loading = true;
 
   @override
-  void initState() { super.initState(); _load(); }
+  void initState() {
+    super.initState();
+    _load();
+  }
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    _feedbacks = await FeedbackService().getFeedbacksByConsultant(widget.consultantId);
+    _feedbacks =
+        await FeedbackService().getFeedbacksByConsultant(widget.consultantId);
     if (mounted) setState(() => _loading = false);
   }
 
-  double get _avg => _feedbacks.isEmpty ? 0 :
-      _feedbacks.fold(0.0, (s, f) => s + f.rating) / _feedbacks.length;
+  double get _avg => _feedbacks.isEmpty
+      ? 0
+      : _feedbacks.fold(0.0, (s, f) => s + f.rating) / _feedbacks.length;
 
   Map<int, int> get _distribution {
     final m = <int, int>{1: 0, 2: 0, 3: 0, 4: 0, 5: 0};
-    for (final f in _feedbacks) { final r = f.rating.clamp(1, 5); m[r] = (m[r] ?? 0) + 1; }
+    for (final f in _feedbacks) {
+      final r = f.rating.clamp(1, 5);
+      m[r] = (m[r] ?? 0) + 1;
+    }
     return m;
   }
 
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
-    if (_feedbacks.isEmpty) return const EmptyState(icon: Icons.star_outline,
-        title: 'No feedback yet', subtitle: 'Client reviews from completed sessions appear here');
+    if (_feedbacks.isEmpty)
+      return const EmptyState(
+          icon: Icons.star_outline,
+          title: 'No feedback yet',
+          subtitle: 'Client reviews from completed sessions appear here');
 
     return RefreshIndicator(
       onRefresh: _load,
@@ -2083,43 +4013,67 @@ class _ConsultantFeedbacksTabState extends State<_ConsultantFeedbacksTab> {
         Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [AppColors.primary, AppColors.primaryLight]),
+              gradient: const LinearGradient(
+                  colors: [AppColors.primary, AppColors.primaryLight]),
               borderRadius: BorderRadius.circular(20)),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('Average Rating', style: TextStyle(color: Colors.white70, fontSize: 13)),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Average Rating',
+                style: TextStyle(color: Colors.white70, fontSize: 13)),
             const SizedBox(height: 4),
             Row(children: [
-              Text(_avg.toStringAsFixed(1), style: const TextStyle(color: Colors.white,
-                  fontSize: 48, fontWeight: FontWeight.w800)),
+              Text(_avg.toStringAsFixed(1),
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 48,
+                      fontWeight: FontWeight.w800)),
               const SizedBox(width: 12),
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: List.generate(5, (i) => Icon(
-                  i < _avg.round() ? Icons.star_rounded : Icons.star_border_rounded,
-                  color: AppColors.gold, size: 22))),
+                Row(
+                    children: List.generate(
+                        5,
+                        (i) => Icon(
+                            i < _avg.round()
+                                ? Icons.star_rounded
+                                : Icons.star_border_rounded,
+                            color: AppColors.gold,
+                            size: 22))),
                 const SizedBox(height: 4),
                 Text('${_feedbacks.length} reviews',
-                    style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                    style:
+                        const TextStyle(color: Colors.white60, fontSize: 12)),
               ]),
             ]),
             const SizedBox(height: 16),
             ...[5, 4, 3, 2, 1].map((star) {
               final count = _distribution[star] ?? 0;
-              final ratio = _feedbacks.isEmpty ? 0.0 : count / _feedbacks.length;
+              final ratio =
+                  _feedbacks.isEmpty ? 0.0 : count / _feedbacks.length;
               return Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Row(children: [
-                  Text('$star', style: const TextStyle(color: Colors.white60,
-                      fontSize: 11, fontWeight: FontWeight.w600)),
+                  Text('$star',
+                      style: const TextStyle(
+                          color: Colors.white60,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600)),
                   const SizedBox(width: 6),
-                  const Icon(Icons.star_rounded, color: AppColors.gold, size: 11),
+                  const Icon(Icons.star_rounded,
+                      color: AppColors.gold, size: 11),
                   const SizedBox(width: 6),
-                  Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(value: ratio,
-                          backgroundColor: Colors.white12,
-                          valueColor: const AlwaysStoppedAnimation(AppColors.gold),
-                          minHeight: 6))),
+                  Expanded(
+                      child: ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                              value: ratio,
+                              backgroundColor: Colors.white12,
+                              valueColor:
+                                  const AlwaysStoppedAnimation(AppColors.gold),
+                              minHeight: 6))),
                   const SizedBox(width: 8),
-                  Text('$count', style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                  Text('$count',
+                      style:
+                          const TextStyle(color: Colors.white60, fontSize: 11)),
                 ]),
               );
             }),
@@ -2127,37 +4081,472 @@ class _ConsultantFeedbacksTabState extends State<_ConsultantFeedbacksTab> {
         ),
         const SizedBox(height: 20),
         ..._feedbacks.map((f) => Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(color: AppColors.surface,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.border)),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              CircleAvatar(radius: 18,
-                  backgroundColor: AppColors.primaryLight.withValues(alpha: 0.15),
-                  child: Text((f.clientName ?? 'C')[0].toUpperCase(),
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold,
-                          color: AppColors.primaryLight))),
-              const SizedBox(width: 10),
-              Expanded(child: Text(f.clientName ?? 'Client', style: AppTextStyles.h4)),
-              Row(children: List.generate(5, (i) => Icon(
-                i < f.rating ? Icons.star_rounded : Icons.star_border_rounded,
-                color: AppColors.gold, size: 16))),
-            ]),
-            if (f.comments != null && f.comments!.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              Text(f.comments!, style: AppTextStyles.body.copyWith(color: AppColors.textSecondary)),
-            ],
-            if (f.createdAt != null) ...[
-              const SizedBox(height: 8),
-              Text(f.createdAt!, style: AppTextStyles.caption),
-            ],
-          ]),
-        )),
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AppColors.border)),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      CircleAvatar(
+                          radius: 18,
+                          backgroundColor:
+                              AppColors.primaryLight.withValues(alpha: 0.15),
+                          child: Text((f.clientName ?? 'C')[0].toUpperCase(),
+                              style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.primaryLight))),
+                      const SizedBox(width: 10),
+                      Expanded(
+                          child: Text(f.clientName ?? 'Client',
+                              style: AppTextStyles.h4)),
+                      Row(
+                          children: List.generate(
+                              5,
+                              (i) => Icon(
+                                  i < f.rating
+                                      ? Icons.star_rounded
+                                      : Icons.star_border_rounded,
+                                  color: AppColors.gold,
+                                  size: 16))),
+                    ]),
+                    if (f.comments != null && f.comments!.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Text(f.comments!,
+                          style: AppTextStyles.body
+                              .copyWith(color: AppColors.textSecondary)),
+                    ],
+                    if (f.createdAt != null) ...[
+                      const SizedBox(height: 8),
+                      Text(f.createdAt!, style: AppTextStyles.caption),
+                    ],
+                  ]),
+            )),
       ]),
     );
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// OFFERS TAB — Consultant's own offers management
+// ════════════════════════════════════════════════════════════════════════════
+
+class _ConsultantOffersTab extends StatefulWidget {
+  final int consultantId;
+  const _ConsultantOffersTab({required this.consultantId});
+  @override
+  State<_ConsultantOffersTab> createState() => _ConsultantOffersTabState();
+}
+
+class _ConsultantOffersTabState extends State<_ConsultantOffersTab> {
+  List<dynamic> _offers = [];
+  bool _loading = true;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      _offers = await _offerService.getMyOffers();
+    } catch (_) {
+      _offers = [];
+    }
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _delete(int id) async {
+    final ok = await _offerService.deleteOffer(id);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(ok ? 'Offer deleted' : 'Failed to delete'),
+        backgroundColor: ok ? AppColors.success : AppColors.danger,
+        behavior: SnackBarBehavior.floating,
+      ));
+      if (ok) _load();
+    }
+  }
+
+  void _openForm([Map<String, dynamic>? existing]) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (_) => _OfferForm(
+        offer: existing,
+        consultantId: widget.consultantId,
+        onSaved: () {
+          Navigator.pop(context);
+          _load();
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        automaticallyImplyLeading: false,
+        title: const Text('My Offers'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.add_rounded),
+            onPressed: () => _openForm(),
+            tooltip: 'Create offer',
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _offers.isEmpty
+              ? Center(
+                  child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                      Container(
+                          width: 72,
+                          height: 72,
+                          decoration: BoxDecoration(
+                              color: AppColors.surfaceVariant,
+                              borderRadius: BorderRadius.circular(20)),
+                          child: const Icon(Icons.local_offer_outlined,
+                              size: 32, color: AppColors.textSecondary)),
+                      const SizedBox(height: 16),
+                      const Text('No Offers Yet',
+                          style: TextStyle(
+                              fontSize: 17, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 8),
+                      Text('Create offers to attract more clients',
+                          style: TextStyle(
+                              fontSize: 13, color: AppColors.textSecondary)),
+                      const SizedBox(height: 24),
+                      ElevatedButton.icon(
+                        onPressed: () => _openForm(),
+                        icon: const Icon(Icons.add_rounded),
+                        label: const Text('Create First Offer'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primaryLight,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ]))
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _offers.length,
+                    itemBuilder: (ctx, i) {
+                      final o = _offers[i] as Map<String, dynamic>;
+                      final id = (o['id'] as num?)?.toInt() ?? 0;
+                      final title = o['title']?.toString() ?? 'Offer';
+                      final disc = o['discount']?.toString() ?? '';
+                      final isActive =
+                          o['active'] == true || o['isActive'] == true;
+                      final desc = o['description']?.toString() ?? '';
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                              color: isActive
+                                  ? AppColors.primaryLight.withOpacity(0.4)
+                                  : AppColors.border),
+                          boxShadow: [
+                            BoxShadow(
+                                color: Colors.black.withOpacity(0.04),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2))
+                          ],
+                        ),
+                        child: ListTile(
+                          contentPadding:
+                              const EdgeInsets.fromLTRB(16, 10, 12, 10),
+                          leading: Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: isActive
+                                  ? AppColors.primaryLight.withOpacity(0.1)
+                                  : AppColors.surfaceVariant,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(Icons.local_offer_rounded,
+                                color: isActive
+                                    ? AppColors.primaryLight
+                                    : AppColors.textSecondary,
+                                size: 22),
+                          ),
+                          title: Text(title,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w700, fontSize: 14)),
+                          subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (disc.isNotEmpty)
+                                  Text(disc,
+                                      style: TextStyle(
+                                          color: AppColors.gold,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 12)),
+                                if (desc.isNotEmpty)
+                                  Text(desc,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          color: AppColors.textSecondary,
+                                          fontSize: 12)),
+                                Container(
+                                  margin: const EdgeInsets.only(top: 4),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: isActive
+                                        ? AppColors.accent.withOpacity(0.1)
+                                        : AppColors.surfaceVariant,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(isActive ? 'ACTIVE' : 'INACTIVE',
+                                      style: TextStyle(
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.w800,
+                                          color: isActive
+                                              ? AppColors.accent
+                                              : AppColors.textSecondary)),
+                                ),
+                              ]),
+                          trailing:
+                              Row(mainAxisSize: MainAxisSize.min, children: [
+                            IconButton(
+                                icon: const Icon(Icons.edit_outlined,
+                                    size: 18, color: AppColors.primaryLight),
+                                onPressed: () => _openForm(o)),
+                            IconButton(
+                                icon: const Icon(Icons.delete_outline_rounded,
+                                    size: 18, color: AppColors.danger),
+                                onPressed: () async {
+                                  final ok = await showDialog<bool>(
+                                      context: context,
+                                      builder: (_) => AlertDialog(
+                                            title: const Text('Delete Offer?'),
+                                            content: Text('Delete "$title"?'),
+                                            actions: [
+                                              TextButton(
+                                                  onPressed: () =>
+                                                      Navigator.pop(
+                                                          context, false),
+                                                  child: const Text('Cancel')),
+                                              TextButton(
+                                                  onPressed: () =>
+                                                      Navigator.pop(
+                                                          context, true),
+                                                  child: const Text('Delete',
+                                                      style: TextStyle(
+                                                          color: AppColors
+                                                              .danger))),
+                                            ],
+                                          ));
+                                  if (ok == true) _delete(id);
+                                }),
+                          ]),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+    );
+  }
+}
+
+// ── Offer Form ─────────────────────────────────────────────────────────────────
+class _OfferForm extends StatefulWidget {
+  final Map<String, dynamic>? offer;
+  final int consultantId;
+  final VoidCallback onSaved;
+  const _OfferForm(
+      {this.offer, required this.consultantId, required this.onSaved});
+  @override
+  State<_OfferForm> createState() => _OfferFormState();
+}
+
+class _OfferFormState extends State<_OfferForm> {
+  final _titleCtrl = TextEditingController();
+  final _discCtrl = TextEditingController();
+  final _descCtrl = TextEditingController();
+  bool _active = true;
+  bool _saving = false;
+  String _err = '';
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.offer != null) {
+      _titleCtrl.text = widget.offer!['title']?.toString() ?? '';
+      _discCtrl.text = widget.offer!['discount']?.toString() ?? '';
+      _descCtrl.text = widget.offer!['description']?.toString() ?? '';
+      _active =
+          widget.offer!['active'] == true || widget.offer!['isActive'] == true;
+    }
+  }
+
+  @override
+  void dispose() {
+    _titleCtrl.dispose();
+    _discCtrl.dispose();
+    _descCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_titleCtrl.text.trim().isEmpty) {
+      setState(() => _err = 'Title is required.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _err = '';
+    });
+    final data = {
+      'title': _titleCtrl.text.trim(),
+      'discount': _discCtrl.text.trim(),
+      'description': _descCtrl.text.trim(),
+      'active': _active,
+      'consultantId': widget.consultantId,
+    };
+    final id = (widget.offer?['id'] as num?)?.toInt();
+    final result = id != null
+        ? (await _offerService.updateOffer(id, data) ? data : null)
+        : (await _offerService.createOffer(data) ? data : null);
+    if (mounted) {
+      setState(() => _saving = false);
+      if (result != null) {
+        widget.onSaved();
+      } else {
+        setState(() => _err = 'Failed to save offer. Please try again.');
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 20),
+        child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Expanded(
+                    child: Text(
+                        widget.offer != null ? 'Edit Offer' : 'New Offer',
+                        style: const TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.w800))),
+                IconButton(
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: () => Navigator.pop(context)),
+              ]),
+              if (_err.isNotEmpty)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                      color: AppColors.danger.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Text(_err,
+                      style: const TextStyle(
+                          color: AppColors.danger,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600)),
+                ),
+              _field('Title *', _titleCtrl, 'e.g. Early Bird Discount'),
+              const SizedBox(height: 12),
+              _field('Discount', _discCtrl, 'e.g. 20% off, ₹500 off'),
+              const SizedBox(height: 12),
+              _field('Description', _descCtrl, 'Brief description (optional)'),
+              const SizedBox(height: 14),
+              Row(children: [
+                const Text('Active',
+                    style:
+                        TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                const Spacer(),
+                Switch(
+                    value: _active,
+                    onChanged: (v) => setState(() => _active = v),
+                    activeColor: AppColors.primaryLight),
+              ]),
+              const SizedBox(height: 16),
+              SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _saving ? null : _save,
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primaryLight,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12))),
+                    child: _saving
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                                color: Colors.white, strokeWidth: 2))
+                        : Text(
+                            widget.offer != null
+                                ? 'Update Offer'
+                                : 'Create Offer',
+                            style: const TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w700)),
+                  )),
+            ]),
+      );
+
+  Widget _field(String label, TextEditingController ctrl, String hint) =>
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label.toUpperCase(),
+              style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textSecondary,
+                  letterSpacing: 0.5)),
+          const SizedBox(height: 6),
+          TextField(
+            controller: ctrl,
+            decoration: InputDecoration(
+                hintText: hint,
+                hintStyle: const TextStyle(color: AppColors.textMuted),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: AppColors.border)),
+                enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: AppColors.border)),
+                focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide:
+                        const BorderSide(color: AppColors.primaryLight)),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                filled: true,
+                fillColor: AppColors.background),
+          ),
+        ],
+      );
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2174,25 +4563,27 @@ class _ConsultantProfileTab extends StatefulWidget {
 class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
     with SingleTickerProviderStateMixin {
   late TabController _tabs;
+  final _adminService = AdminService();
+  final _analyticsService = AnalyticsService();
   ConsultantModel? _profile;
   bool _loading = true;
-  String? _errorMsg;       // ← NEW: error state
+  String? _errorMsg; // ← NEW: error state
   bool _editMode = false;
   bool _saving = false;
 
   // Form controllers
-  final _nameCtrl      = TextEditingController();
-  final _designCtrl    = TextEditingController();
-  final _feeCtrl       = TextEditingController();
-  final _descCtrl      = TextEditingController();
-  final _skillsCtrl    = TextEditingController();
+  final _nameCtrl = TextEditingController();
+  final _designCtrl = TextEditingController();
+  final _feeCtrl = TextEditingController();
+  final _descCtrl = TextEditingController();
+  final _skillsCtrl = TextEditingController();
   final _shiftStartCtrl = TextEditingController();
-  final _shiftEndCtrl  = TextEditingController();
-  final _expCtrl       = TextEditingController();
+  final _shiftEndCtrl = TextEditingController();
+  final _expCtrl = TextEditingController();
 
   // Photo
-  File? _photoFile;           // selected from gallery
-  String? _photoUrl;           // existing photo from API
+  File? _photoFile; // selected from gallery
+  String? _photoUrl; // existing photo from API
 
   // Offers
   List<dynamic> _offers = [];
@@ -2209,9 +4600,14 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
   @override
   void dispose() {
     _tabs.dispose();
-    _nameCtrl.dispose(); _designCtrl.dispose(); _feeCtrl.dispose();
-    _descCtrl.dispose(); _skillsCtrl.dispose(); _shiftStartCtrl.dispose();
-    _shiftEndCtrl.dispose(); _expCtrl.dispose();
+    _nameCtrl.dispose();
+    _designCtrl.dispose();
+    _feeCtrl.dispose();
+    _descCtrl.dispose();
+    _skillsCtrl.dispose();
+    _shiftStartCtrl.dispose();
+    _shiftEndCtrl.dispose();
+    _expCtrl.dispose();
     super.dispose();
   }
 
@@ -2219,9 +4615,13 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
 
   Future<void> _loadProfile() async {
     if (!mounted) return;
-    setState(() { _loading = true; _errorMsg = null; });
+    setState(() {
+      _loading = true;
+      _errorMsg = null;
+    });
     try {
-      final profile = await ConsultantService().getConsultantById(widget.consultantId);
+      final profile =
+          await ConsultantService().getConsultantById(widget.consultantId);
       if (!mounted) return;
       if (profile != null) {
         _profile = profile;
@@ -2235,23 +4635,26 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() { _loading = false; _errorMsg = 'Error: $e'; });
+      setState(() {
+        _loading = false;
+        _errorMsg = 'Error: $e';
+      });
     }
   }
 
   /// Populate all form controllers safely from profile data
   void _populateControllers(ConsultantModel p) {
     try {
-      _nameCtrl.text   = p.name ?? '';
+      _nameCtrl.text = p.name ?? '';
       _designCtrl.text = p.designation ?? '';
-      _feeCtrl.text    = (p.charges ?? 0).toStringAsFixed(0);
-      _descCtrl.text   = p.description ?? '';
+      _feeCtrl.text = (p.charges ?? 0).toStringAsFixed(0);
+      _descCtrl.text = p.description ?? '';
       _skillsCtrl.text = p.skills.join(', ');
       // FIXED: use extension methods that safely parse LocalTime Maps
       _shiftStartCtrl.text = p.shiftStart;
-      _shiftEndCtrl.text   = p.shiftEnd;
-      _expCtrl.text        = p.experience.toStringAsFixed(0);
-      _photoUrl            = p.profilePhotoUrl;
+      _shiftEndCtrl.text = p.shiftEnd;
+      _expCtrl.text = p.experience.toStringAsFixed(0);
+      _photoUrl = p.profilePhotoUrl;
     } catch (e) {
       // Even if population throws, loading is still done
       debugPrint('Profile controller populate error: $e');
@@ -2270,7 +4673,7 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
     try {
       final picker = ImagePicker();
       final xFile = await picker.pickImage(
-        source: ImageSource.gallery, imageQuality: 80, maxWidth: 800);
+          source: ImageSource.gallery, imageQuality: 80, maxWidth: 800);
       if (xFile == null) return;
       setState(() => _photoFile = File(xFile.path));
     } catch (e) {
@@ -2309,9 +4712,9 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
   // ── Save profile ──────────────────────────────────────────────────────────
 
   Future<void> _saveProfile() async {
-    final name   = _nameCtrl.text.trim();
+    final name = _nameCtrl.text.trim();
     final design = _designCtrl.text.trim();
-    final fee    = double.tryParse(_feeCtrl.text.trim()) ?? 0;
+    final fee = double.tryParse(_feeCtrl.text.trim()) ?? 0;
     if (name.isEmpty || design.isEmpty || fee <= 0) {
       _snack('Name, designation and fee are required', false);
       return;
@@ -2319,7 +4722,10 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
     setState(() => _saving = true);
     try {
       final skills = _skillsCtrl.text
-          .split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+          .split(',')
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
       final data = {
         'name': name,
         'designation': design,
@@ -2328,7 +4734,7 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
         'skills': skills,
         'email': _profile?.email ?? '',
         'shiftStartTime': _shiftStartCtrl.text.trim(),
-        'shiftEndTime':   _shiftEndCtrl.text.trim(),
+        'shiftEndTime': _shiftEndCtrl.text.trim(),
         'yearsOfExperience': double.tryParse(_expCtrl.text.trim()) ?? 0,
       };
 
@@ -2340,11 +4746,16 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
         );
       }
 
-      final ok = await ConsultantService()
-          .updateProfile(widget.consultantId, data, profilePhoto: photoMultipart);
+      final ok = await _consultantService.updateProfile(
+          widget.consultantId, data,
+          profilePhoto: photoMultipart);
       if (!mounted) return;
       if (ok) {
-        setState(() { _editMode = false; _saving = false; _photoFile = null; });
+        setState(() {
+          _editMode = false;
+          _saving = false;
+          _photoFile = null;
+        });
         _snack('Profile saved ✓', true);
         _loadProfile();
       } else {
@@ -2362,15 +4773,20 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
 
   void _openOfferForm({Map<String, dynamic>? existing}) {
     final isEdit = existing != null;
-    final titleCtrl = TextEditingController(text: isEdit ? existing['title'] : '');
-    final descCtrl  = TextEditingController(text: isEdit ? existing['description'] : '');
-    final discCtrl  = TextEditingController(text: isEdit ? existing['discount'] : '');
-    final fromCtrl  = TextEditingController(
+    final titleCtrl =
+        TextEditingController(text: isEdit ? existing['title'] : '');
+    final descCtrl =
+        TextEditingController(text: isEdit ? existing['description'] : '');
+    final discCtrl =
+        TextEditingController(text: isEdit ? existing['discount'] : '');
+    final fromCtrl = TextEditingController(
         text: isEdit && existing['validFrom'] != null
-            ? existing['validFrom'].toString().substring(0, 10) : '');
-    final toCtrl    = TextEditingController(
+            ? existing['validFrom'].toString().substring(0, 10)
+            : '');
+    final toCtrl = TextEditingController(
         text: isEdit && existing['validTo'] != null
-            ? existing['validTo'].toString().substring(0, 10) : '');
+            ? existing['validTo'].toString().substring(0, 10)
+            : '');
 
     showModalBottomSheet(
       context: context,
@@ -2379,107 +4795,143 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => Padding(
-        padding: EdgeInsets.only(left: 20, right: 20, top: 20,
+        padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
             bottom: MediaQuery.of(ctx).viewInsets.bottom + 24),
         child: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start, children: [
-            _handleBar(),
-            Text(isEdit ? 'Edit Offer' : 'New Offer', style: AppTextStyles.h3),
-            const SizedBox(height: 16),
-            _field(titleCtrl, 'Title *', hintText: 'e.g. Summer Special'),
-            const SizedBox(height: 12),
-            _field(descCtrl, 'Description',
-                hintText: 'What does this offer include?', maxLines: 2),
-            const SizedBox(height: 12),
-            _field(discCtrl, 'Discount *', hintText: 'e.g. 20% OFF or ₹500 off'),
-            const SizedBox(height: 12),
-            // Info about approval
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: AppColors.info.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(10)),
-              child: const Row(children: [
-                Icon(Icons.info_outline, size: 16, color: AppColors.info),
-                SizedBox(width: 8),
-                Expanded(child: Text(
-                  'Offers are submitted to admin for approval before going live.',
-                  style: TextStyle(fontSize: 12, color: AppColors.info),
-                )),
-              ]),
-            ),
-            const SizedBox(height: 12),
-            Row(children: [
-              Expanded(child: _field(fromCtrl, 'Valid From', hintText: 'YYYY-MM-DD',
-                  onTap: () async {
-                    final d = await showDatePicker(context: ctx,
-                        initialDate: DateTime.now(), firstDate: DateTime.now(),
-                        lastDate: DateTime.now().add(const Duration(days: 365)));
-                    if (d != null) fromCtrl.text = DateFormat('yyyy-MM-dd').format(d);
-                  })),
-              const SizedBox(width: 12),
-              Expanded(child: _field(toCtrl, 'Valid To', hintText: 'YYYY-MM-DD',
-                  onTap: () async {
-                    final d = await showDatePicker(context: ctx,
-                        initialDate: DateTime.now().add(const Duration(days: 7)),
+          child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _handleBar(),
+                Text(isEdit ? 'Edit Offer' : 'New Offer',
+                    style: AppTextStyles.h3),
+                const SizedBox(height: 16),
+                _field(titleCtrl, 'Title *', hintText: 'e.g. Summer Special'),
+                const SizedBox(height: 12),
+                _field(descCtrl, 'Description',
+                    hintText: 'What does this offer include?', maxLines: 2),
+                const SizedBox(height: 12),
+                _field(discCtrl, 'Discount *',
+                    hintText: 'e.g. 20% OFF or ₹500 off'),
+                const SizedBox(height: 12),
+                // Info about approval
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                      color: AppColors.info.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10)),
+                  child: const Row(children: [
+                    Icon(Icons.info_outline, size: 16, color: AppColors.info),
+                    SizedBox(width: 8),
+                    Expanded(
+                        child: Text(
+                      'Offers are submitted to admin for approval before going live.',
+                      style: TextStyle(fontSize: 12, color: AppColors.info),
+                    )),
+                  ]),
+                ),
+                const SizedBox(height: 12),
+                Row(children: [
+                  Expanded(
+                      child: _field(fromCtrl, 'Valid From',
+                          hintText: 'YYYY-MM-DD', onTap: () async {
+                    final d = await showDatePicker(
+                        context: ctx,
+                        initialDate: DateTime.now(),
                         firstDate: DateTime.now(),
-                        lastDate: DateTime.now().add(const Duration(days: 730)));
-                    if (d != null) toCtrl.text = DateFormat('yyyy-MM-dd').format(d);
+                        lastDate:
+                            DateTime.now().add(const Duration(days: 365)));
+                    if (d != null)
+                      fromCtrl.text = DateFormat('yyyy-MM-dd').format(d);
                   })),
-            ]),
-            const SizedBox(height: 20),
-            SizedBox(width: double.infinity, height: 48,
-              child: ElevatedButton(
-                onPressed: () async {
-                  final title = titleCtrl.text.trim();
-                  final disc = discCtrl.text.trim();
-                  if (title.isEmpty || disc.isEmpty) {
-                    ScaffoldMessenger.of(ctx).showSnackBar(
-                        const SnackBar(content: Text('Title and discount are required')));
-                    return;
-                  }
-                  Navigator.pop(ctx);
-                  final payload = <String, dynamic>{
-                    'title': title, 'description': descCtrl.text.trim(),
-                    'discount': disc, 'consultantId': widget.consultantId, 'active': true,
-                    if (fromCtrl.text.isNotEmpty) 'validFrom': '${fromCtrl.text}T00:00:00',
-                    if (toCtrl.text.isNotEmpty)   'validTo':   '${toCtrl.text}T00:00:00',
-                  };
-                  final saved = await _saveOffer(payload,
-                      id: isEdit ? (existing['id'] as int?) : null);
-                  _snack(saved != null
-                      ? (isEdit ? 'Offer updated' : 'Offer submitted for approval')
-                      : 'Save failed', saved != null);
-                  _loadOffers();
-                },
-                child: Text(isEdit ? 'Save Changes' : 'Submit for Approval',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-              ),
-            ),
-          ]),
+                  const SizedBox(width: 12),
+                  Expanded(
+                      child: _field(toCtrl, 'Valid To', hintText: 'YYYY-MM-DD',
+                          onTap: () async {
+                    final d = await showDatePicker(
+                        context: ctx,
+                        initialDate:
+                            DateTime.now().add(const Duration(days: 7)),
+                        firstDate: DateTime.now(),
+                        lastDate:
+                            DateTime.now().add(const Duration(days: 730)));
+                    if (d != null)
+                      toCtrl.text = DateFormat('yyyy-MM-dd').format(d);
+                  })),
+                ]),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      final title = titleCtrl.text.trim();
+                      final disc = discCtrl.text.trim();
+                      if (title.isEmpty || disc.isEmpty) {
+                        ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+                            content: Text('Title and discount are required')));
+                        return;
+                      }
+                      Navigator.pop(ctx);
+                      final payload = <String, dynamic>{
+                        'title': title,
+                        'description': descCtrl.text.trim(),
+                        'discount': disc,
+                        'consultantId': widget.consultantId,
+                        'active': true,
+                        if (fromCtrl.text.isNotEmpty)
+                          'validFrom': '${fromCtrl.text}T00:00:00',
+                        if (toCtrl.text.isNotEmpty)
+                          'validTo': '${toCtrl.text}T00:00:00',
+                      };
+                      final saved = await _saveOffer(payload,
+                          id: isEdit ? (existing['id'] as int?) : null);
+                      _snack(
+                          saved != null
+                              ? (isEdit
+                                  ? 'Offer updated'
+                                  : 'Offer submitted for approval')
+                              : 'Save failed',
+                          saved != null);
+                      _loadOffers();
+                    },
+                    child: Text(isEdit ? 'Save Changes' : 'Submit for Approval',
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ]),
         ),
       ),
     );
   }
 
   Future<void> _confirmDeleteOffer(Map<String, dynamic> offer) async {
-    final ok = await showDialog<bool>(context: context,
+    final ok = await showDialog<bool>(
+        context: context,
         builder: (_) => AlertDialog(
-          title: const Text('Delete Offer?'),
-          content: Text('Delete "${offer['title']}"?'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel')),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Delete', style: TextStyle(color: Colors.white)),
-            ),
-          ],
-        ));
+              title: const Text('Delete Offer?'),
+              content: Text('Delete "${offer['title']}"?'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('Cancel')),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.danger),
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Delete',
+                      style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            ));
     if (ok != true) return;
     final id = offer['id'];
-    final deleted = await _deleteOffer(id is int ? id : int.tryParse(id.toString()) ?? 0);
+    final deleted =
+        await _deleteOffer(id is int ? id : int.tryParse(id.toString()) ?? 0);
     _snack(deleted ? 'Offer deleted' : 'Delete failed', deleted);
     if (deleted) _loadOffers();
   }
@@ -2489,7 +4941,8 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
       backgroundColor: ok ? AppColors.success : AppColors.danger,
-      behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 2),
+      behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 2),
     ));
   }
 
@@ -2508,10 +4961,13 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
         child: Padding(
           padding: const EdgeInsets.all(32),
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            const Icon(Icons.person_off_outlined, size: 64, color: AppColors.textMuted),
+            const Icon(Icons.person_off_outlined,
+                size: 64, color: AppColors.textMuted),
             const SizedBox(height: 16),
-            Text(_errorMsg!, textAlign: TextAlign.center,
-                style: const TextStyle(color: AppColors.textSecondary, fontSize: 14)),
+            Text(_errorMsg!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: AppColors.textSecondary, fontSize: 14)),
             const SizedBox(height: 24),
             ElevatedButton.icon(
               onPressed: _loadProfile,
@@ -2532,113 +4988,150 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
         tabs: const [Tab(text: 'Profile'), Tab(text: 'Offers')],
       ),
       const Divider(height: 1),
-      Expanded(child: TabBarView(controller: _tabs, children: [
+      Expanded(
+          child: TabBarView(controller: _tabs, children: [
         // ── Profile tab ───────────────────────────────────────────────────
         RefreshIndicator(
           onRefresh: _loadProfile,
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(16),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               // Profile hero — FIXED: shows actual photo
               Container(
-                width: double.infinity, padding: const EdgeInsets.all(20),
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                     gradient: const LinearGradient(
                         colors: [Color(0xFF1E3A5F), AppColors.primaryLight]),
                     borderRadius: BorderRadius.circular(20)),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                  // Avatar / Photo
-                  GestureDetector(
-                    onTap: _editMode ? _pickPhoto : null,
-                    child: Stack(children: [
-                      CircleAvatar(
-                        radius: 40,
-                        backgroundColor: Colors.white24,
-                        backgroundImage: _photoFile != null
-                            ? FileImage(_photoFile!) as ImageProvider
-                            : (_photoUrl != null && _photoUrl!.isNotEmpty)
-                                ? NetworkImage(_photoUrl!)
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // Avatar / Photo
+                      GestureDetector(
+                        onTap: _editMode ? _pickPhoto : null,
+                        child: Stack(children: [
+                          CircleAvatar(
+                            radius: 40,
+                            backgroundColor: Colors.white24,
+                            backgroundImage: _photoFile != null
+                                ? FileImage(_photoFile!) as ImageProvider
+                                : (_photoUrl != null && _photoUrl!.isNotEmpty)
+                                    ? NetworkImage(_photoUrl!)
+                                    : null,
+                            child: (_photoFile == null &&
+                                    (_photoUrl == null || _photoUrl!.isEmpty))
+                                ? Text((_profile?.name ?? 'C')[0].toUpperCase(),
+                                    style: const TextStyle(
+                                        fontSize: 30,
+                                        fontWeight: FontWeight.w800,
+                                        color: Colors.white))
                                 : null,
-                        child: (_photoFile == null &&
-                            (_photoUrl == null || _photoUrl!.isEmpty))
-                            ? Text((_profile?.name ?? 'C')[0].toUpperCase(),
-                                style: const TextStyle(fontSize: 30,
-                                    fontWeight: FontWeight.w800, color: Colors.white))
-                            : null,
-                        onBackgroundImageError: (_photoUrl != null && _photoUrl!.isNotEmpty)
-                            ? (_, __) {}  // silent fallback
-                            : null,
-                      ),
-                      if (_editMode)
-                        Positioned(bottom: 0, right: 0,
-                          child: Container(
-                            width: 28, height: 28,
-                            decoration: BoxDecoration(color: AppColors.accent,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.white, width: 2)),
-                            child: const Icon(Icons.camera_alt_outlined,
-                                size: 14, color: Colors.white),
+                            onBackgroundImageError:
+                                (_photoUrl != null && _photoUrl!.isNotEmpty)
+                                    ? (_, __) {} // silent fallback
+                                    : null,
                           ),
-                        ),
-                    ]),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(_profile?.name ?? '', style: const TextStyle(
-                      fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white)),
-                  Text(_profile?.designation ?? '',
-                      style: const TextStyle(fontSize: 13, color: Colors.white70)),
-                  const SizedBox(height: 8),
-                  Row(mainAxisAlignment: MainAxisAlignment.center,
-                      children: List.generate(5, (i) => Icon(
-                    i < (_profile?.rating ?? 0).round()
-                        ? Icons.star_rounded : Icons.star_border_rounded,
-                    color: AppColors.gold, size: 20))),
-                  const SizedBox(height: 12),
-                  Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(10)),
-                      child: Text('₹${(_profile?.charges ?? 0).toStringAsFixed(0)} / session',
-                          style: const TextStyle(color: Colors.white,
-                              fontSize: 14, fontWeight: FontWeight.w700)),
-                    ),
-                    const SizedBox(width: 8),
-                    // DisplayPrice: charges + 200 (what customer sees)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.white24)),
-                      child: Text(
-                        'Customer sees: ₹${((_profile?.charges ?? 0) + 200).toStringAsFixed(0)}',
-                        style: const TextStyle(color: Colors.white60, fontSize: 11),
+                          if (_editMode)
+                            Positioned(
+                              bottom: 0,
+                              right: 0,
+                              child: Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                    color: AppColors.accent,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                        color: Colors.white, width: 2)),
+                                child: const Icon(Icons.camera_alt_outlined,
+                                    size: 14, color: Colors.white),
+                              ),
+                            ),
+                        ]),
                       ),
-                    ),
-                  ]),
-                ]),
+                      const SizedBox(height: 12),
+                      Text(_profile?.name ?? '',
+                          style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white)),
+                      Text(_profile?.designation ?? '',
+                          style: const TextStyle(
+                              fontSize: 13, color: Colors.white70)),
+                      const SizedBox(height: 8),
+                      Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: List.generate(
+                              5,
+                              (i) => Icon(
+                                  i < (_profile?.rating ?? 0).round()
+                                      ? Icons.star_rounded
+                                      : Icons.star_border_rounded,
+                                  color: AppColors.gold,
+                                  size: 20))),
+                      const SizedBox(height: 12),
+                      Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 8),
+                              decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(10)),
+                              child: Text(
+                                  '₹${(_profile?.charges ?? 0).toStringAsFixed(0)} / session',
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700)),
+                            ),
+                            const SizedBox(width: 8),
+                            // DisplayPrice: charges + 200 (what customer sees)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 8),
+                              decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(color: Colors.white24)),
+                              child: Text(
+                                'Customer sees: ₹${((_profile?.charges ?? 0) + 200).toStringAsFixed(0)}',
+                                style: const TextStyle(
+                                    color: Colors.white60, fontSize: 11),
+                              ),
+                            ),
+                          ]),
+                    ]),
               ),
               const SizedBox(height: 20),
 
               // Edit/View toggle
               Row(children: [
                 const Text('Profile Details',
-                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                    style:
+                        TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
                 const Spacer(),
                 if (_errorMsg != null)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(color: AppColors.warning.withValues(alpha: 0.1),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                        color: AppColors.warning.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(8)),
                     child: const Text('Partial load',
-                        style: TextStyle(fontSize: 11, color: AppColors.warning)),
+                        style:
+                            TextStyle(fontSize: 11, color: AppColors.warning)),
                   ),
                 TextButton.icon(
-                  onPressed: _saving ? null : () => setState(() => _editMode = !_editMode),
-                  icon: Icon(_editMode ? Icons.close : Icons.edit_outlined, size: 16),
+                  onPressed: _saving
+                      ? null
+                      : () => setState(() => _editMode = !_editMode),
+                  icon: Icon(_editMode ? Icons.close : Icons.edit_outlined,
+                      size: 16),
                   label: Text(_editMode ? 'Cancel' : 'Edit'),
                 ),
               ]),
@@ -2648,36 +5141,57 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
                 // View mode
                 _infoCard([
                   _infoRow('Email', _profile?.email ?? '—'),
-                  _infoRow('Experience', '${_profile?.experience.toStringAsFixed(0) ?? 0} years'),
-                  _infoRow('Availability', _profile?.shiftTimingsDisplay ?? '—'),
+                  _infoRow('Experience',
+                      '${_profile?.experience.toStringAsFixed(0) ?? 0} years'),
+                  _infoRow(
+                      'Availability', _profile?.shiftTimingsDisplay ?? '—'),
                 ]),
-                if (_profile?.description != null && _profile!.description!.isNotEmpty) ...[
+                if (_profile?.description != null &&
+                    _profile!.description!.isNotEmpty) ...[
                   const SizedBox(height: 12),
-                  const Text('About', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                  const Text('About',
+                      style:
+                          TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
                   const SizedBox(height: 6),
                   Container(
-                    width: double.infinity, padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(color: AppColors.surface,
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                        color: AppColors.surface,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: AppColors.border)),
                     child: Text(_profile!.description!,
-                        style: AppTextStyles.body.copyWith(color: AppColors.textSecondary)),
+                        style: AppTextStyles.body
+                            .copyWith(color: AppColors.textSecondary)),
                   ),
                 ],
                 if (_profile!.skills.isNotEmpty) ...[
                   const SizedBox(height: 12),
-                  const Text('Skills', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                  const Text('Skills',
+                      style:
+                          TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
                   const SizedBox(height: 6),
-                  Wrap(spacing: 8, runSpacing: 8,
-                      children: _profile!.skills.map((s) => Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                            color: AppColors.accent.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: AppColors.accent.withValues(alpha: 0.3))),
-                        child: Text(s, style: const TextStyle(
-                            color: AppColors.accent, fontWeight: FontWeight.w600, fontSize: 12)),
-                      )).toList()),
+                  Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _profile!.skills
+                          .map((s) => Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 6),
+                                decoration: BoxDecoration(
+                                    color:
+                                        AppColors.accent.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                        color: AppColors.accent
+                                            .withValues(alpha: 0.3))),
+                                child: Text(s,
+                                    style: const TextStyle(
+                                        color: AppColors.accent,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 12)),
+                              ))
+                          .toList()),
                 ],
               ] else ...[
                 // Edit mode
@@ -2690,14 +5204,18 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
                         color: AppColors.success.withValues(alpha: 0.08),
                         borderRadius: BorderRadius.circular(10)),
                     child: Row(children: [
-                      const Icon(Icons.check_circle_outline, size: 16, color: AppColors.success),
+                      const Icon(Icons.check_circle_outline,
+                          size: 16, color: AppColors.success),
                       const SizedBox(width: 8),
-                      Text('Photo selected: ${_photoFile!.path.split('/').last}',
-                          style: const TextStyle(fontSize: 12, color: AppColors.success)),
+                      Text(
+                          'Photo selected: ${_photoFile!.path.split('/').last}',
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.success)),
                       const Spacer(),
                       GestureDetector(
                         onTap: () => setState(() => _photoFile = null),
-                        child: const Icon(Icons.close, size: 16, color: AppColors.textMuted),
+                        child: const Icon(Icons.close,
+                            size: 16, color: AppColors.textMuted),
                       ),
                     ]),
                   ),
@@ -2713,25 +5231,30 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
                 const SizedBox(height: 12),
                 _field(_designCtrl, 'Designation *'),
                 const SizedBox(height: 12),
-                _field(_feeCtrl, 'Fee (₹) *', keyboardType: TextInputType.number),
+                _field(_feeCtrl, 'Fee (₹) *',
+                    keyboardType: TextInputType.number),
                 // Display price hint
-                if (_feeCtrl.text.isNotEmpty) Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    '✓ Customer sees: ₹${((double.tryParse(_feeCtrl.text) ?? 0) + 200).toStringAsFixed(0)} (fee + ₹200)',
-                    style: const TextStyle(fontSize: 11, color: AppColors.success),
+                if (_feeCtrl.text.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      '✓ Customer sees: ₹${((double.tryParse(_feeCtrl.text) ?? 0) + 200).toStringAsFixed(0)} (fee + ₹200)',
+                      style: const TextStyle(
+                          fontSize: 11, color: AppColors.success),
+                    ),
                   ),
-                ),
                 const SizedBox(height: 12),
                 // FIXED: Shift times use Flutter's showTimePicker
                 Row(children: [
-                  Expanded(child: _field(_shiftStartCtrl, 'Shift Start',
-                      hintText: 'e.g. 09:00',
-                      onTap: () => _pickTime(_shiftStartCtrl))),
+                  Expanded(
+                      child: _field(_shiftStartCtrl, 'Shift Start',
+                          hintText: 'e.g. 09:00',
+                          onTap: () => _pickTime(_shiftStartCtrl))),
                   const SizedBox(width: 12),
-                  Expanded(child: _field(_shiftEndCtrl, 'Shift End',
-                      hintText: 'e.g. 18:00',
-                      onTap: () => _pickTime(_shiftEndCtrl))),
+                  Expanded(
+                      child: _field(_shiftEndCtrl, 'Shift End',
+                          hintText: 'e.g. 18:00',
+                          onTap: () => _pickTime(_shiftEndCtrl))),
                 ]),
                 const SizedBox(height: 4),
                 const Text('  Tap the fields above to open time picker',
@@ -2743,17 +5266,24 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
                 _field(_skillsCtrl, 'Skills (comma separated)',
                     hintText: 'e.g. Tax Planning, Investments'),
                 const SizedBox(height: 12),
-                _field(_descCtrl, 'Description', maxLines: 4,
-                    hintText: 'About yourself…'),
+                _field(_descCtrl, 'Description',
+                    maxLines: 4, hintText: 'About yourself…'),
                 const SizedBox(height: 20),
-                SizedBox(width: double.infinity, height: 48,
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
                   child: ElevatedButton(
                     onPressed: _saving ? null : _saveProfile,
                     child: _saving
-                        ? const SizedBox(width: 20, height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
                         : const Text('Save Profile',
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700)),
                   ),
                 ),
               ],
@@ -2775,7 +5305,8 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
                 icon: const Icon(Icons.add, size: 16),
                 label: const Text('New Offer', style: TextStyle(fontSize: 13)),
                 style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 8)),
               ),
             ]),
           ),
@@ -2789,7 +5320,8 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
             child: const Row(children: [
               Icon(Icons.verified_outlined, size: 15, color: AppColors.info),
               SizedBox(width: 8),
-              Expanded(child: Text(
+              Expanded(
+                  child: Text(
                 'Offers you create are submitted to admin. Once approved, they appear on the booking page.',
                 style: TextStyle(fontSize: 11, color: AppColors.info),
               )),
@@ -2801,7 +5333,8 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
             child: _loadingOffers
                 ? const Center(child: CircularProgressIndicator())
                 : _offers.isEmpty
-                    ? const EmptyState(icon: Icons.local_offer_outlined,
+                    ? const EmptyState(
+                        icon: Icons.local_offer_outlined,
                         title: 'No offers yet',
                         subtitle: 'Create special offers for your clients')
                     : RefreshIndicator(
@@ -2811,67 +5344,99 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
                           itemCount: _offers.length,
                           itemBuilder: (_, i) {
                             final o = _offers[i] as Map<String, dynamic>;
-                            final status = (o['status'] ?? 'PENDING').toString();
+                            final status =
+                                (o['status'] ?? 'PENDING').toString();
                             final isApproved = status == 'APPROVED';
                             final isRejected = status == 'REJECTED';
-                            final statusColor = isApproved ? AppColors.success
-                                : isRejected ? AppColors.danger : AppColors.warning;
+                            final statusColor = isApproved
+                                ? AppColors.success
+                                : isRejected
+                                    ? AppColors.danger
+                                    : AppColors.warning;
                             return Card(
                               margin: const EdgeInsets.only(bottom: 12),
                               child: Padding(
                                 padding: const EdgeInsets.all(14),
-                                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                  Row(children: [
-                                    Expanded(child: Text(o['title'] ?? '', style: AppTextStyles.h4)),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                          color: statusColor.withValues(alpha: 0.1),
-                                          borderRadius: BorderRadius.circular(8)),
-                                      child: Text(status, style: TextStyle(
-                                          fontSize: 10, color: statusColor, fontWeight: FontWeight.w700)),
-                                    ),
-                                  ]),
-                                  if (o['description'] != null && (o['description'] as String).isNotEmpty) ...[
-                                    const SizedBox(height: 4),
-                                    Text(o['description'].toString(), style: AppTextStyles.caption),
-                                  ],
-                                  const SizedBox(height: 8),
-                                  Row(children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                      decoration: BoxDecoration(
-                                          color: AppColors.success.withValues(alpha: 0.1),
-                                          borderRadius: BorderRadius.circular(8)),
-                                      child: Text(o['discount'] ?? '', style: const TextStyle(
-                                          color: AppColors.success,
-                                          fontWeight: FontWeight.w700, fontSize: 13)),
-                                    ),
-                                    const Spacer(),
-                                    IconButton(
-                                      icon: const Icon(Icons.edit_outlined, size: 18,
-                                          color: AppColors.textSecondary),
-                                      onPressed: () => _openOfferForm(existing: o),
-                                      padding: EdgeInsets.zero, constraints: const BoxConstraints(),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    IconButton(
-                                      icon: const Icon(Icons.delete_outline, size: 18,
-                                          color: AppColors.danger),
-                                      onPressed: () => _confirmDeleteOffer(o),
-                                      padding: EdgeInsets.zero, constraints: const BoxConstraints(),
-                                    ),
-                                  ]),
-                                  if (o['validFrom'] != null || o['validTo'] != null) ...[
-                                    const SizedBox(height: 6),
-                                    Text([
-                                      if (o['validFrom'] != null)
-                                        'From: ${o['validFrom'].toString().substring(0, 10)}',
-                                      if (o['validTo'] != null)
-                                        'To: ${o['validTo'].toString().substring(0, 10)}',
-                                    ].join('  ·  '), style: AppTextStyles.caption),
-                                  ],
-                                ]),
+                                child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(children: [
+                                        Expanded(
+                                            child: Text(o['title'] ?? '',
+                                                style: AppTextStyles.h4)),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 8, vertical: 4),
+                                          decoration: BoxDecoration(
+                                              color: statusColor.withValues(
+                                                  alpha: 0.1),
+                                              borderRadius:
+                                                  BorderRadius.circular(8)),
+                                          child: Text(status,
+                                              style: TextStyle(
+                                                  fontSize: 10,
+                                                  color: statusColor,
+                                                  fontWeight: FontWeight.w700)),
+                                        ),
+                                      ]),
+                                      if (o['description'] != null &&
+                                          (o['description'] as String)
+                                              .isNotEmpty) ...[
+                                        const SizedBox(height: 4),
+                                        Text(o['description'].toString(),
+                                            style: AppTextStyles.caption),
+                                      ],
+                                      const SizedBox(height: 8),
+                                      Row(children: [
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 10, vertical: 4),
+                                          decoration: BoxDecoration(
+                                              color: AppColors.success
+                                                  .withValues(alpha: 0.1),
+                                              borderRadius:
+                                                  BorderRadius.circular(8)),
+                                          child: Text(o['discount'] ?? '',
+                                              style: const TextStyle(
+                                                  color: AppColors.success,
+                                                  fontWeight: FontWeight.w700,
+                                                  fontSize: 13)),
+                                        ),
+                                        const Spacer(),
+                                        IconButton(
+                                          icon: const Icon(Icons.edit_outlined,
+                                              size: 18,
+                                              color: AppColors.textSecondary),
+                                          onPressed: () =>
+                                              _openOfferForm(existing: o),
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        IconButton(
+                                          icon: const Icon(Icons.delete_outline,
+                                              size: 18,
+                                              color: AppColors.danger),
+                                          onPressed: () =>
+                                              _confirmDeleteOffer(o),
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(),
+                                        ),
+                                      ]),
+                                      if (o['validFrom'] != null ||
+                                          o['validTo'] != null) ...[
+                                        const SizedBox(height: 6),
+                                        Text(
+                                            [
+                                              if (o['validFrom'] != null)
+                                                'From: ${o['validFrom'].toString().substring(0, 10)}',
+                                              if (o['validTo'] != null)
+                                                'To: ${o['validTo'].toString().substring(0, 10)}',
+                                            ].join('  ·  '),
+                                            style: AppTextStyles.caption),
+                                      ],
+                                    ]),
                               ),
                             );
                           },
@@ -2884,36 +5449,47 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
   }
 
   Widget _infoCard(List<Widget> rows) => Container(
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(color: AppColors.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.border)),
-    child: Column(children: rows),
-  );
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.border)),
+        child: Column(children: rows),
+      );
 
   Widget _infoRow(String label, String value) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 6),
-    child: Row(children: [
-      SizedBox(width: 100, child: Text(label, style: AppTextStyles.caption)),
-      Expanded(child: Text(value,
-          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
-    ]),
-  );
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(children: [
+          SizedBox(
+              width: 100, child: Text(label, style: AppTextStyles.caption)),
+          Expanded(
+              child: Text(value,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w600, fontSize: 13))),
+        ]),
+      );
 
   Widget _field(TextEditingController ctrl, String label,
-      {String? hintText, int maxLines = 1,
-        TextInputType keyboardType = TextInputType.text,
-        VoidCallback? onTap}) {
+      {String? hintText,
+      int maxLines = 1,
+      TextInputType keyboardType = TextInputType.text,
+      VoidCallback? onTap}) {
     return TextField(
-      controller: ctrl, maxLines: maxLines, keyboardType: keyboardType,
-      readOnly: onTap != null, onTap: onTap,
+      controller: ctrl,
+      maxLines: maxLines,
+      keyboardType: keyboardType,
+      readOnly: onTap != null,
+      onTap: onTap,
       decoration: InputDecoration(
-        labelText: label, hintText: hintText,
+        labelText: label,
+        hintText: hintText,
         border: const OutlineInputBorder(),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         isDense: true,
         suffixIcon: onTap != null
-            ? const Icon(Icons.access_time_rounded, size: 18) : null,
+            ? const Icon(Icons.access_time_rounded, size: 18)
+            : null,
       ),
     );
   }
@@ -2926,7 +5502,8 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
 class _NotificationPanel extends StatelessWidget {
   final ScrollController scrollController;
   final VoidCallback onClose;
-  const _NotificationPanel({required this.scrollController, required this.onClose});
+  const _NotificationPanel(
+      {required this.scrollController, required this.onClose});
 
   @override
   Widget build(BuildContext context) {
@@ -2934,14 +5511,16 @@ class _NotificationPanel extends StatelessWidget {
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
         child: Row(children: [
-          _handleBar(), const Spacer(),
+          _handleBar(),
+          const Spacer(),
           const Text('Notifications',
               style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
           const Spacer(),
           Consumer<NotificationService>(
             builder: (_, svc, __) => TextButton(
               onPressed: svc.unreadCount > 0 ? svc.markAllRead : null,
-              child: const Text('Mark all read', style: TextStyle(fontSize: 12)),
+              child:
+                  const Text('Mark all read', style: TextStyle(fontSize: 12)),
             ),
           ),
         ]),
@@ -2950,19 +5529,24 @@ class _NotificationPanel extends StatelessWidget {
       Expanded(
         child: Consumer<NotificationService>(
           builder: (_, svc, __) {
-            if (svc.isLoading) return const Center(child: CircularProgressIndicator());
+            if (svc.isLoading)
+              return const Center(child: CircularProgressIndicator());
             if (svc.notifications.isEmpty) {
-              return const Center(child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center, children: [
-                Icon(Icons.notifications_none_outlined, size: 48, color: AppColors.textMuted),
-                SizedBox(height: 12),
-                Text('No notifications yet',
-                    style: TextStyle(color: AppColors.textMuted)),
-                SizedBox(height: 6),
-                Text('New bookings and ticket updates will appear here.',
-                    style: TextStyle(color: AppColors.textMuted, fontSize: 12),
-                    textAlign: TextAlign.center),
-              ]));
+              return const Center(
+                  child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                    Icon(Icons.notifications_none_outlined,
+                        size: 48, color: AppColors.textMuted),
+                    SizedBox(height: 12),
+                    Text('No notifications yet',
+                        style: TextStyle(color: AppColors.textMuted)),
+                    SizedBox(height: 6),
+                    Text('New bookings and ticket updates will appear here.',
+                        style:
+                            TextStyle(color: AppColors.textMuted, fontSize: 12),
+                        textAlign: TextAlign.center),
+                  ]));
             }
             return RefreshIndicator(
               onRefresh: svc.refresh,
@@ -2970,35 +5554,45 @@ class _NotificationPanel extends StatelessWidget {
                 controller: scrollController,
                 padding: const EdgeInsets.all(12),
                 itemCount: svc.notifications.length,
-                separatorBuilder: (_, __) => const Divider(height: 1, indent: 56),
+                separatorBuilder: (_, __) =>
+                    const Divider(height: 1, indent: 56),
                 itemBuilder: (_, i) {
                   final n = svc.notifications[i];
                   final color = _notifColor(n);
                   final icon = _notifIcon(n);
                   return ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     leading: Container(
-                      width: 40, height: 40,
+                      width: 40,
+                      height: 40,
                       decoration: BoxDecoration(
-                          color: color.withValues(alpha: 0.1), shape: BoxShape.circle),
+                          color: color.withValues(alpha: 0.1),
+                          shape: BoxShape.circle),
                       child: Icon(icon, color: color, size: 20),
                     ),
                     title: Text(_safeGet(n, 'title', 'Notification'),
                         style: TextStyle(
                             fontWeight: _safeRead<bool>(n, 'isRead') == true
-                                ? FontWeight.w400 : FontWeight.w700,
+                                ? FontWeight.w400
+                                : FontWeight.w700,
                             fontSize: 13)),
                     subtitle: Text(_notifSubtitle(n),
                         style: const TextStyle(fontSize: 12),
-                        maxLines: 2, overflow: TextOverflow.ellipsis),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis),
                     trailing: _safeRead<bool>(n, 'isRead') != true
-                        ? Container(width: 8, height: 8,
+                        ? Container(
+                            width: 8,
+                            height: 8,
                             decoration: const BoxDecoration(
-                                color: AppColors.accent, shape: BoxShape.circle))
+                                color: AppColors.accent,
+                                shape: BoxShape.circle))
                         : null,
                     onTap: () {
                       final rawId = _safeRead(n, 'id');
-                      final int parsedId = int.tryParse(rawId?.toString() ?? '') ?? 0;
+                      final int parsedId =
+                          int.tryParse(rawId?.toString() ?? '') ?? 0;
                       if (parsedId > 0) svc.markAsRead(parsedId);
                     },
                   );
@@ -3015,20 +5609,32 @@ class _NotificationPanel extends StatelessWidget {
 Color _notifColor(dynamic n) {
   final type = _safeGet(n, 'type', '');
   switch (type) {
-    case 'success': case 'TICKET_UPDATED': return AppColors.success;
-    case 'error':   case 'ESCALATION':     return AppColors.danger;
-    case 'warning':                         return AppColors.warning;
-    default:                                return AppColors.info;
+    case 'success':
+    case 'TICKET_UPDATED':
+      return AppColors.success;
+    case 'error':
+    case 'ESCALATION':
+      return AppColors.danger;
+    case 'warning':
+      return AppColors.warning;
+    default:
+      return AppColors.info;
   }
 }
 
 IconData _notifIcon(dynamic n) {
   final type = _safeGet(n, 'type', '');
   switch (type) {
-    case 'success': case 'TICKET_UPDATED': return Icons.check_circle_outline;
-    case 'error':   case 'ESCALATION':     return Icons.error_outline;
-    case 'NEW_ASSIGNMENT':                  return Icons.assignment_ind_outlined;
-    default:                                return Icons.info_outline;
+    case 'success':
+    case 'TICKET_UPDATED':
+      return Icons.check_circle_outline;
+    case 'error':
+    case 'ESCALATION':
+      return Icons.error_outline;
+    case 'NEW_ASSIGNMENT':
+      return Icons.assignment_ind_outlined;
+    default:
+      return Icons.info_outline;
   }
 }
 
@@ -3044,12 +5650,19 @@ String _safeGet(dynamic obj, String key, String fallback) =>
     _safeRead<String>(obj, key) ?? fallback;
 
 T? _safeRead<T>(dynamic obj, String key) {
-  try { return (obj as dynamic)[key] as T?; } catch (_) { return null; }
+  try {
+    return (obj as dynamic)[key] as T?;
+  } catch (_) {
+    return null;
+  }
 }
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
-Widget _handleBar() => Center(child: Container(
-  width: 40, height: 4,
-  decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2)),
-));
+Widget _handleBar() => Center(
+        child: Container(
+      width: 40,
+      height: 4,
+      decoration: BoxDecoration(
+          color: AppColors.border, borderRadius: BorderRadius.circular(2)),
+    ));

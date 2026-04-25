@@ -1,66 +1,98 @@
-// lib/core/services/ticket_service.dart
-// ════════════════════════════════════════════════════════════════════════════
-// Swagger spec ke exact endpoints:
-//   GET  /api/tickets              (paginated, ?sortBy)
-//   GET  /api/tickets/{id}
-//   GET  /api/tickets/user/{userId}
-//   GET  /api/tickets/consultant/{consultantId}
-//   GET  /api/tickets/sla-breached
-//   GET  /api/tickets/escalated
-//   GET  /api/tickets/unique-categories
-//   GET  /api/tickets/{ticketId}/comments
-//   POST /api/tickets              (multipart: ticketData + file)
-//   POST /api/tickets/{id}/escalate   body: { reason }
-//   POST /api/tickets/{id}/notes      body: { authorId, noteText }  ← noteText nahi content
-//   POST /api/tickets/comments        body: { ticketId, senderId, message, isConsultantReply }
-//   POST /api/tickets/{id}/feedback   body: map
-//   PATCH /api/tickets/{id}/status    ?status=  ← query param, body nahi!
-//   PATCH /api/tickets/{id}/priority  body: { priority: string }
-//   PUT   /api/tickets/{id}/assign    body: map (consultantId)
-//   DELETE /api/tickets/{id}
-//   GET  /api/admin/config/canned-responses
-// ════════════════════════════════════════════════════════════════════════════
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:finadvise/api_client.dart';
+
 import '../models/models.dart';
+
+List<dynamic> _extractArray(dynamic data,
+    {List<String> keys = const ['content', 'data', 'items']}) {
+  if (data is List) return data;
+  if (data is Map) {
+    for (final key in keys) {
+      final candidate = data[key];
+      if (candidate is List) return candidate;
+    }
+  }
+  return const [];
+}
+
+int? _toInt(dynamic value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return int.tryParse('${value ?? ''}');
+}
 
 class TicketService {
   final ApiClient _apiClient = ApiClient();
 
-  // ── READ ─────────────────────────────────────────────────────────────────
+  Future<int?> _resolveCategoryId(String categoryName) async {
+    final normalized = categoryName.trim().toLowerCase();
+    if (normalized.isEmpty) return null;
 
-  /// GET /api/tickets — Sab tickets (paginated)
-  /// Swagger mein status/priority query filter nahi hai — sirf page, size, sortBy
-  Future<List<Ticket>> getAllTickets({
-    int page = 0,
-    int size = 10,
-    String sortBy = 'createdAt',
-  }) async {
     try {
-      final response = await _apiClient.dio.get(
-        '/api/tickets',
-        queryParameters: {'page': page, 'size': size, 'sortBy': sortBy},
+      final response = await _apiClient.dio.get('/api/admin/config/categories');
+      final list = _extractArray(
+        response.data,
+        keys: const ['content', 'data', 'items', 'categories'],
       );
-      final data = response.data;
-      final list = data is Map ? (data['content'] ?? data['data'] ?? []) : data;
-      return (list as List).map((e) => Ticket.fromJson(e)).toList();
-    } catch (e) {
-      return [];
-    }
-  }
 
-  /// GET /api/tickets/{id}
-  Future<Ticket?> getTicketById(int ticketId) async {
-    try {
-      final response = await _apiClient.dio.get('/api/tickets/$ticketId');
-      return Ticket.fromJson(response.data);
-    } catch (e) {
+      int? firstActiveId;
+      for (final raw in list.whereType<Map>()) {
+        final item = Map<String, dynamic>.from(raw);
+        final id =
+            _toInt(item['id'] ?? item['categoryId'] ?? item['category_id']);
+        final name =
+            (item['name'] ?? item['categoryName'] ?? item['category'] ?? '')
+                .toString()
+                .trim()
+                .toLowerCase();
+        final isActive = item['isActive'] ?? item['active'] ?? true;
+        if (id != null && isActive != false && firstActiveId == null) {
+          firstActiveId = id;
+        }
+        if (id != null && isActive != false && name == normalized) {
+          return id;
+        }
+      }
+      return firstActiveId;
+    } catch (_) {
       return null;
     }
   }
 
-  /// GET /api/tickets/user/{userId}
+  Future<List<Ticket>> getAllTickets({
+    int page = 0,
+    int size = 10,
+    String sortBy = 'createdAt',
+    bool useAnalytics = false,
+  }) async {
+    try {
+      final endpoint = useAnalytics ? '/api/analytics/tickets/all' : '/api/tickets';
+      final response = await _apiClient.dio.get(
+        endpoint,
+        queryParameters: useAnalytics ? {} : {'page': page, 'size': size, 'sortBy': sortBy},
+      );
+      final list = _extractArray(response.data,
+          keys: const ['content', 'data', 'items', 'tickets']);
+      return list
+          .whereType<Map>()
+          .map((e) => Ticket.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<Ticket?> getTicketById(int ticketId) async {
+    try {
+      final response = await _apiClient.dio.get('/api/tickets/$ticketId');
+      return Ticket.fromJson(response.data);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<List<Ticket>> getTicketsByUser(
     int userId, {
     int page = 0,
@@ -72,15 +104,17 @@ class TicketService {
         '/api/tickets/user/$userId',
         queryParameters: {'page': page, 'size': size, 'sortBy': sortBy},
       );
-      final data = response.data;
-      final list = data is Map ? (data['content'] ?? data['data'] ?? []) : data;
-      return (list as List).map((e) => Ticket.fromJson(e)).toList();
-    } catch (e) {
+      final list = _extractArray(response.data,
+          keys: const ['content', 'data', 'items', 'tickets']);
+      return list
+          .whereType<Map>()
+          .map((e) => Ticket.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    } catch (_) {
       return [];
     }
   }
 
-  /// GET /api/tickets/consultant/{consultantId}
   Future<List<Ticket>> getTicketsByConsultant(
     int consultantId, {
     int page = 0,
@@ -92,64 +126,81 @@ class TicketService {
         '/api/tickets/consultant/$consultantId',
         queryParameters: {'page': page, 'size': size, 'sortBy': sortBy},
       );
-      final data = response.data;
-      final list = data is Map ? (data['content'] ?? data['data'] ?? []) : data;
-      return (list as List).map((e) => Ticket.fromJson(e)).toList();
-    } catch (e) {
+      final list = _extractArray(response.data,
+          keys: const ['content', 'data', 'items', 'tickets']);
+      return list
+          .whereType<Map>()
+          .map((e) => Ticket.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    } catch (_) {
       return [];
     }
   }
 
-  /// GET /api/tickets/sla-breached
   Future<List<Ticket>> getSlaBreachedTickets() async {
     try {
       final response = await _apiClient.dio.get('/api/tickets/sla-breached');
-      final data = response.data;
-      final list = data is Map ? (data['content'] ?? data['data'] ?? []) : data;
-      return (list as List).map((e) => Ticket.fromJson(e)).toList();
-    } catch (e) {
+      final list = _extractArray(response.data,
+          keys: const ['content', 'data', 'items', 'tickets']);
+      return list
+          .whereType<Map>()
+          .map((e) => Ticket.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    } catch (_) {
       return [];
     }
   }
 
-  /// GET /api/tickets/escalated
   Future<List<Ticket>> getEscalatedTickets() async {
     try {
       final response = await _apiClient.dio.get('/api/tickets/escalated');
-      final data = response.data;
-      final list = data is Map ? (data['content'] ?? data['data'] ?? []) : data;
-      return (list as List).map((e) => Ticket.fromJson(e)).toList();
-    } catch (e) {
+      final list = _extractArray(response.data,
+          keys: const ['content', 'data', 'items', 'tickets']);
+      return list
+          .whereType<Map>()
+          .map((e) => Ticket.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    } catch (_) {
       return [];
     }
   }
 
-  /// GET /api/tickets/unique-categories — Available categories ki list
   Future<List<String>> getUniqueCategories() async {
     try {
-      final response = await _apiClient.dio.get('/api/tickets/unique-categories');
-      return List<String>.from(response.data as List);
-    } catch (e) {
+      final response =
+          await _apiClient.dio.get('/api/tickets/unique-categories');
+      final list = _extractArray(response.data,
+          keys: const ['content', 'data', 'items', 'categories']);
+      return list
+          .map((e) {
+            if (e is String) return e.trim();
+            if (e is Map)
+              return (e['name'] ?? e['category'] ?? '').toString().trim();
+            return e.toString().trim();
+          })
+          .where((s) => s.isNotEmpty)
+          .toSet()
+          .toList();
+    } catch (_) {
       return [];
     }
   }
 
-  /// GET /api/tickets/{ticketId}/comments — Ticket ka poora thread
   Future<List<TicketComment>> getTicketComments(int ticketId) async {
     try {
-      final response = await _apiClient.dio.get('/api/tickets/$ticketId/comments');
-      return (response.data as List).map((e) => TicketComment.fromJson(e)).toList();
-    } catch (e) {
+      final response =
+          await _apiClient.dio.get('/api/tickets/$ticketId/comments');
+      final list = _extractArray(response.data,
+          keys: const ['content', 'data', 'items', 'comments']);
+      return list
+          .whereType<Map>()
+          .map((e) => TicketComment.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    } catch (_) {
       return [];
     }
   }
 
-  // ── CREATE ────────────────────────────────────────────────────────────────
-
-  /// POST /api/tickets — Naya ticket (multipart/form-data)
-  /// Form field name: 'ticketData' (nahi 'data')
-  /// TicketRequest required: userId, category, description
-  /// Optional: consultantId, priority (LOW|MEDIUM|HIGH|URGENT|CRITICAL)
   Future<Ticket?> createTicket({
     required int userId,
     required String category,
@@ -159,60 +210,70 @@ class TicketService {
     MultipartFile? attachment,
   }) async {
     try {
+      final resolvedCategory = category.trim();
+      final categoryId = await _resolveCategoryId(resolvedCategory);
+
       final ticketData = <String, dynamic>{
         'userId': userId,
-        'category': category,
+        'category': resolvedCategory,
+        if (categoryId != null) 'categoryId': categoryId,
         'description': description,
-        'priority': priority,
+        'priority': priority.toUpperCase(),
+        'status': 'NEW',
         if (consultantId != null) 'consultantId': consultantId,
       };
       final formData = FormData.fromMap({
-        'ticketData': ticketData,   // ← 'ticketData' field name (swagger spec)
+        'ticketData': MultipartFile.fromString(
+          jsonEncode(ticketData),
+          filename: 'ticket-data.json',
+          contentType: DioMediaType.parse('application/json'),
+        ),
         if (attachment != null) 'file': attachment,
       });
       final response = await _apiClient.dio.post(
         '/api/tickets',
         data: formData,
-        options: Options(contentType: 'multipart/form-data'),
       );
       return Ticket.fromJson(response.data);
-    } catch (e) {
+    } catch (_) {
       return null;
     }
   }
 
-  // ── UPDATE ────────────────────────────────────────────────────────────────
-
-  /// PATCH /api/tickets/{id}/status?status=NEW
-  /// FIX: status query param hai, body mein nahi
-  /// status values: NEW | OPEN | IN_PROGRESS | PENDING | RESOLVED | CLOSED
   Future<bool> updateTicketStatus(int ticketId, String status) async {
     try {
       await _apiClient.dio.patch(
         '/api/tickets/$ticketId/status',
-        queryParameters: {'status': status},   // ← query param, body nahi
+        queryParameters: {'status': status},
       );
       return true;
-    } catch (e) {
+    } catch (_) {
       return false;
     }
   }
 
-  /// PATCH /api/tickets/{id}/priority — Priority update
-  /// body: { "priority": "HIGH" }
   Future<bool> updateTicketPriority(int ticketId, String priority) async {
     try {
+      // Preferred contract in web app: query param based priority patch.
       await _apiClient.dio.patch(
         '/api/tickets/$ticketId/priority',
-        data: {'priority': priority},
+        queryParameters: {'priority': priority},
       );
       return true;
-    } catch (e) {
-      return false;
+    } catch (_) {
+      try {
+        // Fallback for deployments expecting JSON body payload.
+        await _apiClient.dio.patch(
+          '/api/tickets/$ticketId/priority',
+          data: {'priority': priority},
+        );
+        return true;
+      } catch (_) {
+        return false;
+      }
     }
   }
 
-  /// PUT /api/tickets/{id}/assign — Consultant assign karo
   Future<bool> assignTicket(int ticketId, int consultantId) async {
     try {
       await _apiClient.dio.put(
@@ -220,13 +281,11 @@ class TicketService {
         data: {'consultantId': consultantId},
       );
       return true;
-    } catch (e) {
+    } catch (_) {
       return false;
     }
   }
 
-  /// POST /api/tickets/{id}/escalate — Escalate karo
-  /// body: { reason } (required)
   Future<bool> escalateTicket(int ticketId, String reason) async {
     try {
       await _apiClient.dio.post(
@@ -234,27 +293,20 @@ class TicketService {
         data: {'reason': reason},
       );
       return true;
-    } catch (e) {
+    } catch (_) {
       return false;
     }
   }
 
-  // ── DELETE ────────────────────────────────────────────────────────────────
-
-  /// DELETE /api/tickets/{id}
   Future<bool> deleteTicket(int ticketId) async {
     try {
       await _apiClient.dio.delete('/api/tickets/$ticketId');
       return true;
-    } catch (e) {
+    } catch (_) {
       return false;
     }
   }
 
-  // ── COMMENTS ─────────────────────────────────────────────────────────────
-
-  /// POST /api/tickets/comments
-  /// body: { ticketId, senderId, message, isConsultantReply } — sab required
   Future<TicketComment?> addComment(
     int ticketId,
     String message, {
@@ -272,67 +324,64 @@ class TicketService {
         },
       );
       return TicketComment.fromJson(response.data);
-    } catch (e) {
+    } catch (_) {
       return null;
     }
   }
 
-  // ── NOTES (Internal) ─────────────────────────────────────────────────────
-
-  /// GET /api/tickets/{id}/notes
   Future<List<TicketNote>> getNotes(int ticketId) async {
     try {
       final response = await _apiClient.dio.get('/api/tickets/$ticketId/notes');
-      return (response.data as List).map((e) => TicketNote.fromJson(e)).toList();
-    } catch (e) {
+      final list = _extractArray(response.data,
+          keys: const ['content', 'data', 'items', 'notes']);
+      return list
+          .whereType<Map>()
+          .map((e) => TicketNote.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    } catch (_) {
       return [];
     }
   }
 
-  /// POST /api/tickets/{id}/notes
-  /// body: { authorId (required), noteText (required) }
-  /// FIX: 'noteText' field hai, 'content' nahi
-  Future<TicketNote?> addNote(int ticketId, {
+  Future<TicketNote?> addNote(
+    int ticketId, {
     required int authorId,
     required String noteText,
   }) async {
     try {
       final response = await _apiClient.dio.post(
         '/api/tickets/$ticketId/notes',
-        data: {
-          'authorId': authorId,
-          'noteText': noteText,   // ← 'noteText' (swagger spec), 'content' nahi
-        },
+        data: {'authorId': authorId, 'noteText': noteText},
       );
       return TicketNote.fromJson(response.data);
-    } catch (e) {
+    } catch (_) {
       return null;
     }
   }
 
-  // ── FEEDBACK (ticket ke liye) ─────────────────────────────────────────────
-
-  /// POST /api/tickets/{id}/feedback — Ticket specific feedback
-  Future<bool> submitTicketFeedback(int ticketId, Map<String, dynamic> data) async {
+  Future<bool> submitTicketFeedback(
+      int ticketId, Map<String, dynamic> data) async {
     try {
       await _apiClient.dio.post('/api/tickets/$ticketId/feedback', data: data);
       return true;
-    } catch (e) {
+    } catch (_) {
       return false;
     }
   }
 
-  // ── CANNED RESPONSES ─────────────────────────────────────────────────────
-
-  /// GET /api/admin/config/canned-responses?category=optional
   Future<List<CannedResponse>> getCannedResponses({String? category}) async {
     try {
       final response = await _apiClient.dio.get(
         '/api/admin/config/canned-responses',
         queryParameters: {if (category != null) 'category': category},
       );
-      return (response.data as List).map((e) => CannedResponse.fromJson(e)).toList();
-    } catch (e) {
+      final list = _extractArray(response.data,
+          keys: const ['content', 'data', 'items', 'responses']);
+      return list
+          .whereType<Map>()
+          .map((e) => CannedResponse.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    } catch (_) {
       return [];
     }
   }

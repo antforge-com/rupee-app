@@ -18,6 +18,8 @@
 //   incomeItems:[{label,amount}], expenseItems:[{label,amount}]
 // ════════════════════════════════════════════════════════════════════════════
 
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:finadvise/api_client.dart';
 import '../models/models.dart';
@@ -82,13 +84,16 @@ class OnboardingService {
         if (location != null && location.isNotEmpty) 'location': location.trim(),
       };
       final formData = FormData.fromMap({
-        'data': dataMap,
+        'data': MultipartFile.fromString(
+          jsonEncode(dataMap),
+          filename: 'data.json',
+          contentType: DioMediaType.parse('application/json'),
+        ),
         if (profilePhoto != null) 'file': profilePhoto,
       });
       final response = await _apiClient.dio.post(
         '/api/onboarding/admin/member',
         data: formData,
-        options: Options(contentType: 'multipart/form-data'),
       );
       return OnboardingProfile.fromJson(response.data as Map<String, dynamic>);
     } catch (e) {
@@ -116,21 +121,22 @@ class OnboardingService {
   ///   email?, phoneNumber* (required), profileImageUrl?,
   ///   subscriptionPlanId?, incomeItems?, expenseItems?
   Future<bool> updateProfile(
-    int onboardingId, Map<String, String> map, {
-    String? name,
-    String? dob,           // "YYYY-MM-DD"
-    String? identifier,    // PAN: ABCDE1234F ya Aadhaar: 12-digit
-    String? location,
-    String? email,
-    String? phoneNumber,   // Required by API if updating
-    String? profileImageUrl,
-    int? subscriptionPlanId,
-    List<Map<String, dynamic>> incomeItems = const [],
-    List<Map<String, dynamic>> expenseItems = const [],
-    MultipartFile? profilePhoto,
-  }) async {
+      int onboardingId, Map<String, dynamic> map, {
+        String? name,
+        String? dob,           // "YYYY-MM-DD"
+        String? identifier,    // PAN: ABCDE1234F ya Aadhaar: 12-digit
+        String? location,
+        String? email,
+        String? phoneNumber,   // Required by API if updating
+        String? profileImageUrl,
+        int? subscriptionPlanId,
+        List<Map<String, dynamic>> incomeItems = const [],
+        List<Map<String, dynamic>> expenseItems = const [],
+        MultipartFile? profilePhoto,
+      }) async {
     try {
       final dataMap = <String, dynamic>{
+        ...map,
         if (name != null) 'name': name,
         if (dob != null) 'dob': dob,
         if (identifier != null) 'identifier': identifier,
@@ -144,14 +150,17 @@ class OnboardingService {
       };
 
       final formData = FormData.fromMap({
-        'data': dataMap,
+        'data': MultipartFile.fromString(
+          jsonEncode(dataMap),
+          filename: 'data.json',
+          contentType: DioMediaType.parse('application/json'),
+        ),
         if (profilePhoto != null) 'file': profilePhoto,
       });
 
       await _apiClient.dio.put(
         '/api/onboarding/$onboardingId',
         data: formData,
-        options: Options(contentType: 'multipart/form-data'),
       );
       return true;
     } catch (e) {

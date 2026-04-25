@@ -1,4 +1,4 @@
-import 'package:finadvise/auth_service.dart';
+import 'package:finadvise/services/services.dart';
 import 'package:finadvise/login_screen.dart';
 import 'package:flutter/material.dart';
 class DashboardScreen extends StatelessWidget {
@@ -16,9 +16,10 @@ class DashboardScreen extends StatelessWidget {
               // Logout karein aur wapas Login par bhejein
               await AuthService().logout();
               if (context.mounted) {
-                Navigator.pushReplacement(
+                Navigator.pushAndRemoveUntil(
                   context,
                   MaterialPageRoute(builder: (context) => const LoginScreen()),
+                  (route) => false,
                 );
               }
             },

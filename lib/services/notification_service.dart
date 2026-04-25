@@ -30,6 +30,12 @@ class NotificationService extends ChangeNotifier {
   int get unreadCount => _notifications.where((n) => !n.isRead).length;
   bool get isLoading => _isLoading;
 
+  /// Public fetch — refreshes from API and returns the list.
+  Future<List<AppNotification>> getNotifications() async {
+    await _fetchFromApi();
+    return List.unmodifiable(_notifications);
+  }
+
   // ── INIT ──────────────────────────────────────────────────────────────────
 
   void initialize(String role, int userId) {  // FIX: userId int
@@ -43,7 +49,7 @@ class NotificationService extends ChangeNotifier {
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(
       const Duration(seconds: 30),
-      (_) => _fetchFromApi(),
+          (_) => _fetchFromApi(),
     );
   }
 
@@ -135,7 +141,8 @@ class NotificationService extends ChangeNotifier {
     await _saveToStorage();
 
     for (final id in unreadIds) {
-      _apiClient.dio.put('/api/notifications/$id/read').catchError((_) {});
+      // Fire-and-forget — errors silently ignored
+      _apiClient.dio.put('/api/notifications/$id/read').then((_) {}).catchError((_) => null);
     }
   }
 

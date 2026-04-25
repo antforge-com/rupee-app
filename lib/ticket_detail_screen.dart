@@ -1,6 +1,6 @@
 // lib/features/admin/ticket_detail_screen.dart
 import 'package:finadvise/app_theme.dart';
-import 'package:finadvise/auth_service.dart'; // AuthService import kiya senderId ke liye
+import 'package:finadvise/services/services.dart'; // AuthService import kiya senderId ke liye
 import 'package:finadvise/models/models.dart';
 import 'package:finadvise/services/ticket_service.dart';
 import 'package:flutter/material.dart';

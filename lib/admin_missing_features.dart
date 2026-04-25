@@ -26,7 +26,7 @@
 //   • SLA / Escalated cards → dedicated screens
 // ════════════════════════════════════════════════════════════════════════════
 
-// ignore_for_file: use_build_context_synchronously
+// ignore_for_file: curly_braces_in_flow_control_structures, use_build_context_synchronously
 
 import 'dart:convert';
 import 'dart:io';
@@ -60,18 +60,30 @@ void _snack(BuildContext ctx, String msg, {bool error = false}) {
   ));
 }
 
-InputDecoration _inp(String label, {IconData? icon, String? hint, Widget? suffix}) =>
+InputDecoration _inp(String label,
+        {IconData? icon, String? hint, Widget? suffix}) =>
     InputDecoration(
       labelText: label,
       hintText: hint,
-      prefixIcon: icon != null ? Icon(icon, size: 20, color: AppColors.textSecondary) : null,
+      prefixIcon: icon != null
+          ? Icon(icon, size: 20, color: AppColors.textSecondary)
+          : null,
       suffixIcon: suffix,
       filled: true,
       fillColor: AppColors.surfaceVariant,
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.border)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.border)),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.primaryLight, width: 2)),
-      errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.danger)),
+      border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.border)),
+      enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.border)),
+      focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide:
+              const BorderSide(color: AppColors.primaryLight, width: 2)),
+      errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.danger)),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
     );
 
@@ -132,7 +144,8 @@ class AdminProfileSettingsScreen extends StatefulWidget {
   const AdminProfileSettingsScreen({super.key});
 
   @override
-  State<AdminProfileSettingsScreen> createState() => _AdminProfileSettingsScreenState();
+  State<AdminProfileSettingsScreen> createState() =>
+      _AdminProfileSettingsScreenState();
 }
 
 class _AdminProfileSettingsScreenState extends State<AdminProfileSettingsScreen>
@@ -161,22 +174,35 @@ class _AdminProfileSettingsScreenState extends State<AdminProfileSettingsScreen>
         scrolledUnderElevation: 1,
         shadowColor: AppColors.border,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: AppColors.textPrimary),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded,
+              size: 20, color: AppColors.textPrimary),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text('Account Settings', style: TextStyle(color: AppColors.textPrimary, fontSize: 17, fontWeight: FontWeight.w700)),
+        title: const Text('Account Settings',
+            style: TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 17,
+                fontWeight: FontWeight.w700)),
         bottom: TabBar(
           controller: _tabs,
           labelColor: AppColors.primaryLight,
           unselectedLabelColor: AppColors.textMuted,
           indicatorColor: AppColors.primaryLight,
           indicatorWeight: 2.5,
-          labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-          unselectedLabelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w400),
+          labelStyle:
+              const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+          unselectedLabelStyle:
+              const TextStyle(fontSize: 13, fontWeight: FontWeight.w400),
           tabs: const [
-            Tab(icon: Icon(Icons.person_outline_rounded, size: 18), text: 'Profile'),
-            Tab(icon: Icon(Icons.lock_outline_rounded, size: 18), text: 'Security'),
-            Tab(icon: Icon(Icons.notifications_outlined, size: 18), text: 'Alerts'),
+            Tab(
+                icon: Icon(Icons.person_outline_rounded, size: 18),
+                text: 'Profile'),
+            Tab(
+                icon: Icon(Icons.lock_outline_rounded, size: 18),
+                text: 'Security'),
+            Tab(
+                icon: Icon(Icons.notifications_outlined, size: 18),
+                text: 'Alerts'),
           ],
         ),
       ),
@@ -362,15 +388,24 @@ class _ProfileTabState extends State<_ProfileTab> {
                           height: 100,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            border: Border.all(color: AppColors.primaryLight, width: 2.5),
-                            boxShadow: [BoxShadow(color: AppColors.primaryLight.withValues(alpha: 0.2), blurRadius: 16, spreadRadius: 2)],
+                            border: Border.all(
+                                color: AppColors.primaryLight, width: 2.5),
+                            boxShadow: [
+                              BoxShadow(
+                                  color: AppColors.primaryLight
+                                      .withValues(alpha: 0.2),
+                                  blurRadius: 16,
+                                  spreadRadius: 2)
+                            ],
                           ),
                           child: ClipOval(
                             child: _pickedImage != null
                                 ? Image.file(_pickedImage!, fit: BoxFit.cover)
                                 : (_photoUrl != null && _photoUrl!.isNotEmpty
-                                    ? Image.network(_photoUrl!, fit: BoxFit.cover,
-                                        errorBuilder: (_, __, ___) => _avatarFallback())
+                                    ? Image.network(_photoUrl!,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) =>
+                                            _avatarFallback())
                                     : _avatarFallback()),
                           ),
                         ),
@@ -384,16 +419,23 @@ class _ProfileTabState extends State<_ProfileTab> {
                               color: AppColors.primaryLight,
                               shape: BoxShape.circle,
                               border: Border.all(color: Colors.white, width: 2),
-                              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 6)],
+                              boxShadow: [
+                                BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.15),
+                                    blurRadius: 6)
+                              ],
                             ),
-                            child: const Icon(Icons.camera_alt_rounded, size: 16, color: Colors.white),
+                            child: const Icon(Icons.camera_alt_rounded,
+                                size: 16, color: Colors.white),
                           ),
                         ),
                       ],
                     ),
                   ),
                   const SizedBox(height: 10),
-                  Text('Tap to change photo', style: AppTextStyles.caption.copyWith(color: AppColors.primaryLight)),
+                  Text('Tap to change photo',
+                      style: AppTextStyles.caption
+                          .copyWith(color: AppColors.primaryLight)),
                 ],
               ),
             ),
@@ -406,17 +448,21 @@ class _ProfileTabState extends State<_ProfileTab> {
                 TextFormField(
                   controller: _nameCtrl,
                   textCapitalization: TextCapitalization.words,
-                  decoration: _inp('Full Name', icon: Icons.person_outline_rounded),
-                  validator: (v) => (v ?? '').trim().length < 2 ? 'Minimum 2 characters' : null,
+                  decoration:
+                      _inp('Full Name', icon: Icons.person_outline_rounded),
+                  validator: (v) => (v ?? '').trim().length < 2
+                      ? 'Minimum 2 characters'
+                      : null,
                 ),
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _emailCtrl,
                   keyboardType: TextInputType.emailAddress,
                   decoration: _inp('Email Address', icon: Icons.email_outlined),
-                  validator: (v) => RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v ?? '')
-                      ? null
-                      : 'Enter a valid email',
+                  validator: (v) =>
+                      RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v ?? '')
+                          ? null
+                          : 'Enter a valid email',
                 ),
                 const SizedBox(height: 14),
                 TextFormField(
@@ -426,7 +472,8 @@ class _ProfileTabState extends State<_ProfileTab> {
                     FilteringTextInputFormatter.digitsOnly,
                     LengthLimitingTextInputFormatter(10),
                   ],
-                  decoration: _inp('Phone Number', icon: Icons.phone_outlined, hint: '10-digit mobile'),
+                  decoration: _inp('Phone Number',
+                      icon: Icons.phone_outlined, hint: '10-digit mobile'),
                   validator: (v) => RegExp(r'^[6-9]\d{9}$').hasMatch(v ?? '')
                       ? null
                       : 'Enter a valid 10-digit Indian number',
@@ -434,7 +481,8 @@ class _ProfileTabState extends State<_ProfileTab> {
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _locationCtrl,
-                  decoration: _inp('Location', icon: Icons.location_on_outlined, hint: 'City, State'),
+                  decoration: _inp('Location',
+                      icon: Icons.location_on_outlined, hint: 'City, State'),
                 ),
               ],
             ),
@@ -447,15 +495,24 @@ class _ProfileTabState extends State<_ProfileTab> {
               child: ElevatedButton.icon(
                 onPressed: _saving ? null : _save,
                 icon: _saving
-                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.save_outlined, color: Colors.white, size: 18),
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.save_outlined,
+                        color: Colors.white, size: 18),
                 label: Text(
                   _saving ? 'Saving...' : 'Save Profile',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15),
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15),
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primaryLight,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
                   elevation: 0,
                 ),
               ),
@@ -471,7 +528,10 @@ class _ProfileTabState extends State<_ProfileTab> {
         child: Center(
           child: Text(
             _nameCtrl.text.isNotEmpty ? _nameCtrl.text[0].toUpperCase() : 'A',
-            style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w800, color: AppColors.primary),
+            style: const TextStyle(
+                fontSize: 36,
+                fontWeight: FontWeight.w800,
+                color: AppColors.primary),
           ),
         ),
       );
@@ -514,7 +574,8 @@ class _SecurityTabState extends State<_SecurityTab> {
     if (RegExp(r'[0-9]').hasMatch(p)) score++;
     if (RegExp(r'[^A-Za-z0-9]').hasMatch(p)) score++;
     if (score <= 1) return const _PasswordStrength(1, 'Weak', AppColors.danger);
-    if (score == 2) return const _PasswordStrength(2, 'Fair', AppColors.warning);
+    if (score == 2)
+      return const _PasswordStrength(2, 'Fair', AppColors.warning);
     if (score == 3) return const _PasswordStrength(3, 'Good', AppColors.info);
     return const _PasswordStrength(4, 'Strong', AppColors.success);
   }
@@ -533,7 +594,8 @@ class _SecurityTabState extends State<_SecurityTab> {
       _newPassCtrl.clear();
       _confirmCtrl.clear();
       if (mounted) {
-        _snack(context, 'Password changed successfully! Please log in again if prompted.');
+        _snack(context,
+            'Password changed successfully! Please log in again if prompted.');
         setState(() {});
       }
     } on DioException catch (e) {
@@ -541,7 +603,9 @@ class _SecurityTabState extends State<_SecurityTab> {
       final fieldErr = (data is Map)
           ? (data['fieldErrors'] as Map?)?.values.join(', ')
           : null;
-      final msg = fieldErr ?? (data is Map ? data['message'] : null) ?? 'Password change failed';
+      final msg = fieldErr ??
+          (data is Map ? data['message'] : null) ??
+          'Password change failed';
       if (mounted) _snack(context, msg, error: true);
     } catch (_) {
       if (mounted) _snack(context, 'Something went wrong', error: true);
@@ -553,7 +617,8 @@ class _SecurityTabState extends State<_SecurityTab> {
   @override
   Widget build(BuildContext context) {
     final s = _strength(_newPassCtrl.text);
-    final mismatch = _confirmCtrl.text.isNotEmpty && _confirmCtrl.text != _newPassCtrl.text;
+    final mismatch =
+        _confirmCtrl.text.isNotEmpty && _confirmCtrl.text != _newPassCtrl.text;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -568,16 +633,19 @@ class _SecurityTabState extends State<_SecurityTab> {
               decoration: BoxDecoration(
                 color: AppColors.info.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: AppColors.info.withValues(alpha: 0.25)),
+                border:
+                    Border.all(color: AppColors.info.withValues(alpha: 0.25)),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.info_outline_rounded, color: AppColors.info, size: 20),
+                  const Icon(Icons.info_outline_rounded,
+                      color: AppColors.info, size: 20),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       'Choose a strong password. Your session remains active after the change.',
-                      style: AppTextStyles.bodySmall.copyWith(color: AppColors.info),
+                      style: AppTextStyles.bodySmall
+                          .copyWith(color: AppColors.info),
                     ),
                   ),
                 ],
@@ -596,7 +664,8 @@ class _SecurityTabState extends State<_SecurityTab> {
                   decoration: _inp(
                     'New Password',
                     icon: Icons.lock_outline_rounded,
-                    suffix: _eyeBtn(_showNew, () => setState(() => _showNew = !_showNew)),
+                    suffix: _eyeBtn(
+                        _showNew, () => setState(() => _showNew = !_showNew)),
                   ),
                   validator: (v) {
                     if ((v ?? '').length < 8) return 'Minimum 8 characters';
@@ -618,12 +687,15 @@ class _SecurityTabState extends State<_SecurityTab> {
                   decoration: _inp(
                     'Confirm New Password',
                     icon: Icons.lock_outline_rounded,
-                    suffix: _eyeBtn(_showConfirm, () => setState(() => _showConfirm = !_showConfirm)),
+                    suffix: _eyeBtn(_showConfirm,
+                        () => setState(() => _showConfirm = !_showConfirm)),
                   ).copyWith(
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                       borderSide: BorderSide(
-                        color: mismatch ? AppColors.danger : AppColors.primaryLight,
+                        color: mismatch
+                            ? AppColors.danger
+                            : AppColors.primaryLight,
                         width: 2,
                       ),
                     ),
@@ -638,9 +710,12 @@ class _SecurityTabState extends State<_SecurityTab> {
                     padding: const EdgeInsets.only(top: 6, left: 4),
                     child: Row(
                       children: [
-                        const Icon(Icons.warning_amber_rounded, size: 14, color: AppColors.danger),
+                        const Icon(Icons.warning_amber_rounded,
+                            size: 14, color: AppColors.danger),
                         const SizedBox(width: 4),
-                        Text('Passwords do not match', style: AppTextStyles.caption.copyWith(color: AppColors.danger)),
+                        Text('Passwords do not match',
+                            style: AppTextStyles.caption
+                                .copyWith(color: AppColors.danger)),
                       ],
                     ),
                   ),
@@ -656,17 +731,28 @@ class _SecurityTabState extends State<_SecurityTab> {
               width: double.infinity,
               height: 52,
               child: ElevatedButton.icon(
-                onPressed: (_saving || _newPassCtrl.text.length < 8 || mismatch) ? null : _changePassword,
+                onPressed: (_saving || _newPassCtrl.text.length < 8 || mismatch)
+                    ? null
+                    : _changePassword,
                 icon: _saving
-                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.lock_reset_rounded, color: Colors.white, size: 18),
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.lock_reset_rounded,
+                        color: Colors.white, size: 18),
                 label: Text(
                   _saving ? 'Updating...' : 'Update Password',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15),
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15),
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
                   elevation: 0,
                 ),
               ),
@@ -678,8 +764,10 @@ class _SecurityTabState extends State<_SecurityTab> {
   }
 
   Widget _eyeBtn(bool visible, VoidCallback onTap) => IconButton(
-        icon: Icon(visible ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-            color: AppColors.textMuted, size: 20),
+        icon: Icon(
+            visible ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+            color: AppColors.textMuted,
+            size: 20),
         onPressed: onTap,
         splashRadius: 18,
       );
@@ -720,7 +808,8 @@ class _StrengthMeter extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(strength.label,
-                style: AppTextStyles.caption.copyWith(color: strength.color, fontWeight: FontWeight.w700)),
+                style: AppTextStyles.caption.copyWith(
+                    color: strength.color, fontWeight: FontWeight.w700)),
           ),
       ],
     );
@@ -737,7 +826,8 @@ class _PasswordRequirements extends StatelessWidget {
       _Req('At least 8 characters', password.length >= 8),
       _Req('One uppercase letter', RegExp(r'[A-Z]').hasMatch(password)),
       _Req('One number', RegExp(r'[0-9]').hasMatch(password)),
-      _Req('One special character (!@#\$…)', RegExp(r'[^A-Za-z0-9]').hasMatch(password)),
+      _Req('One special character (!@#\$…)',
+          RegExp(r'[^A-Za-z0-9]').hasMatch(password)),
     ];
     return Container(
       padding: const EdgeInsets.all(14),
@@ -749,7 +839,8 @@ class _PasswordRequirements extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Requirements', style: AppTextStyles.label.copyWith(letterSpacing: 0.4)),
+          Text('Requirements',
+              style: AppTextStyles.label.copyWith(letterSpacing: 0.4)),
           const SizedBox(height: 10),
           ...rules.map((r) => Padding(
                 padding: const EdgeInsets.only(bottom: 6),
@@ -758,7 +849,9 @@ class _PasswordRequirements extends StatelessWidget {
                     AnimatedSwitcher(
                       duration: const Duration(milliseconds: 200),
                       child: Icon(
-                        r.met ? Icons.check_circle_rounded : Icons.circle_outlined,
+                        r.met
+                            ? Icons.check_circle_rounded
+                            : Icons.circle_outlined,
                         key: ValueKey(r.met),
                         size: 16,
                         color: r.met ? AppColors.success : AppColors.textMuted,
@@ -767,7 +860,9 @@ class _PasswordRequirements extends StatelessWidget {
                     const SizedBox(width: 8),
                     Text(r.label,
                         style: AppTextStyles.bodySmall.copyWith(
-                            color: r.met ? AppColors.textPrimary : AppColors.textMuted)),
+                            color: r.met
+                                ? AppColors.textPrimary
+                                : AppColors.textMuted)),
                   ],
                 ),
               )),
@@ -852,8 +947,10 @@ class _NotificationsTabState extends State<_NotificationsTab> {
   }
 
   List<Map<String, dynamic>> get _visible {
-    if (_filter == 'unread') return _notifications.where((n) => n['read'] != true).toList();
-    if (_filter == 'escalation') return _notifications.where((n) => n['type'] == 'ESCALATION').toList();
+    if (_filter == 'unread')
+      return _notifications.where((n) => n['read'] != true).toList();
+    if (_filter == 'escalation')
+      return _notifications.where((n) => n['type'] == 'ESCALATION').toList();
     return _notifications;
   }
 
@@ -876,25 +973,34 @@ class _NotificationsTabState extends State<_NotificationsTab> {
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 250),
                   margin: const EdgeInsets.only(bottom: 12),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   decoration: BoxDecoration(
                     color: AppColors.primaryLight.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: AppColors.primaryLight.withValues(alpha: 0.2)),
+                    border: Border.all(
+                        color: AppColors.primaryLight.withValues(alpha: 0.2)),
                   ),
                   child: Row(
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
                         decoration: BoxDecoration(
                           color: AppColors.primaryLight,
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text('$_unreadCount new',
-                            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700)),
                       ),
                       const SizedBox(width: 10),
-                      Expanded(child: Text('unread notification${_unreadCount != 1 ? 's' : ''}', style: AppTextStyles.bodySmall)),
+                      Expanded(
+                          child: Text(
+                              'unread notification${_unreadCount != 1 ? 's' : ''}',
+                              style: AppTextStyles.bodySmall)),
                       TextButton(
                         onPressed: _markAllRead,
                         style: TextButton.styleFrom(
@@ -903,7 +1009,9 @@ class _NotificationsTabState extends State<_NotificationsTab> {
                           minimumSize: Size.zero,
                           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
-                        child: const Text('Mark all read', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                        child: const Text('Mark all read',
+                            style: TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w600)),
                       ),
                     ],
                   ),
@@ -964,10 +1072,14 @@ class _NotificationsTabState extends State<_NotificationsTab> {
         labelStyle: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w600,
-          color: _filter == value ? AppColors.primaryLight : AppColors.textSecondary,
+          color: _filter == value
+              ? AppColors.primaryLight
+              : AppColors.textSecondary,
         ),
         side: BorderSide(
-          color: _filter == value ? AppColors.primaryLight.withValues(alpha: 0.4) : AppColors.border,
+          color: _filter == value
+              ? AppColors.primaryLight.withValues(alpha: 0.4)
+              : AppColors.border,
         ),
       );
 }
@@ -979,17 +1091,23 @@ class _NotifCard extends StatelessWidget {
 
   Color get _typeColor {
     switch (notif['type']) {
-      case 'ESCALATION': return AppColors.danger;
-      case 'NEW_ASSIGNMENT': return AppColors.primaryLight;
-      default: return AppColors.info;
+      case 'ESCALATION':
+        return AppColors.danger;
+      case 'NEW_ASSIGNMENT':
+        return AppColors.primaryLight;
+      default:
+        return AppColors.info;
     }
   }
 
   IconData get _typeIcon {
     switch (notif['type']) {
-      case 'ESCALATION': return Icons.warning_amber_rounded;
-      case 'NEW_ASSIGNMENT': return Icons.assignment_ind_outlined;
-      default: return Icons.confirmation_number_outlined;
+      case 'ESCALATION':
+        return Icons.warning_amber_rounded;
+      case 'NEW_ASSIGNMENT':
+        return Icons.assignment_ind_outlined;
+      default:
+        return Icons.confirmation_number_outlined;
     }
   }
 
@@ -1010,10 +1128,14 @@ class _NotifCard extends StatelessWidget {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
       decoration: BoxDecoration(
-        color: isRead ? AppColors.surface : AppColors.primaryLight.withValues(alpha: 0.04),
+        color: isRead
+            ? AppColors.surface
+            : AppColors.primaryLight.withValues(alpha: 0.04),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: isRead ? AppColors.border : AppColors.primaryLight.withValues(alpha: 0.3),
+          color: isRead
+              ? AppColors.border
+              : AppColors.primaryLight.withValues(alpha: 0.3),
         ),
       ),
       child: InkWell(
@@ -1043,7 +1165,8 @@ class _NotifCard extends StatelessWidget {
                           child: Text(
                             notif['message'] ?? '',
                             style: AppTextStyles.body.copyWith(
-                              fontWeight: isRead ? FontWeight.w400 : FontWeight.w600,
+                              fontWeight:
+                                  isRead ? FontWeight.w400 : FontWeight.w600,
                               height: 1.4,
                             ),
                           ),
@@ -1064,21 +1187,30 @@ class _NotifCard extends StatelessWidget {
                     Row(
                       children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
                             color: _typeColor.withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text(
-                            (notif['type'] ?? 'INFO').toString().replaceAll('_', ' '),
-                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: _typeColor),
+                            (notif['type'] ?? 'INFO')
+                                .toString()
+                                .replaceAll('_', ' '),
+                            style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: _typeColor),
                           ),
                         ),
                         const SizedBox(width: 8),
-                        Text(_fmt(notif['createdAt']), style: AppTextStyles.caption),
+                        Text(_fmt(notif['createdAt']),
+                            style: AppTextStyles.caption),
                         if (notif['ticketId'] != null) ...[
                           const SizedBox(width: 6),
-                          Text('• Ticket #${notif['ticketId']}', style: AppTextStyles.caption.copyWith(color: AppColors.primaryLight)),
+                          Text('• Ticket #${notif['ticketId']}',
+                              style: AppTextStyles.caption
+                                  .copyWith(color: AppColors.primaryLight)),
                         ],
                       ],
                     ),
@@ -1104,7 +1236,8 @@ class AdminUserManagementScreen extends StatefulWidget {
   const AdminUserManagementScreen({super.key});
 
   @override
-  State<AdminUserManagementScreen> createState() => _AdminUserManagementScreenState();
+  State<AdminUserManagementScreen> createState() =>
+      _AdminUserManagementScreenState();
 }
 
 class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
@@ -1114,7 +1247,14 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
   String _search = '';
   int? _deletingId;
 
-  static const _roles = ['ALL', 'MEMBER', 'SUBSCRIBER', 'CONSULTANT', 'ADMIN', 'GUEST'];
+  static const _roles = [
+    'ALL',
+    'MEMBER',
+    'SUBSCRIBER',
+    'CONSULTANT',
+    'ADMIN',
+    'GUEST'
+  ];
 
   @override
   void initState() {
@@ -1128,11 +1268,13 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
       if (_roleFilter == 'ALL') {
         // GET /api/users
         final res = await _dio.get('/api/users');
-        _users = List<Map<String, dynamic>>.from(res.data is List ? res.data : []);
+        _users =
+            List<Map<String, dynamic>>.from(res.data is List ? res.data : []);
       } else {
         // GET /api/users/role/{role}
         final res = await _dio.get('/api/users/role/$_roleFilter');
-        _users = List<Map<String, dynamic>>.from(res.data is List ? res.data : []);
+        _users =
+            List<Map<String, dynamic>>.from(res.data is List ? res.data : []);
       }
     } catch (_) {
       _users = [];
@@ -1145,7 +1287,8 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
       context: context,
       builder: (_) => _ConfirmDialog(
         title: 'Delete User?',
-        body: 'Delete "${user['identifier']}"? This action cannot be undone and will remove all data linked to this account.',
+        body:
+            'Delete "${user['identifier']}"? This action cannot be undone and will remove all data linked to this account.',
         confirmLabel: 'Delete',
         confirmColor: AppColors.danger,
       ),
@@ -1169,20 +1312,26 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
   List<Map<String, dynamic>> get _filtered {
     if (_search.trim().isEmpty) return _users;
     final q = _search.toLowerCase();
-    return _users.where((u) =>
-      (u['identifier'] ?? '').toString().toLowerCase().contains(q) ||
-      (u['id'] ?? '').toString().contains(q) ||
-      (u['role'] ?? '').toString().toLowerCase().contains(q)
-    ).toList();
+    return _users
+        .where((u) =>
+            (u['identifier'] ?? '').toString().toLowerCase().contains(q) ||
+            (u['id'] ?? '').toString().contains(q) ||
+            (u['role'] ?? '').toString().toLowerCase().contains(q))
+        .toList();
   }
 
   Color _roleColor(String role) {
     switch (role) {
-      case 'ADMIN': return AppColors.danger;
-      case 'CONSULTANT': return AppColors.primaryLight;
-      case 'SUBSCRIBER': return AppColors.accent;
-      case 'MEMBER': return AppColors.success;
-      default: return AppColors.textMuted;
+      case 'ADMIN':
+        return AppColors.danger;
+      case 'CONSULTANT':
+        return AppColors.primaryLight;
+      case 'SUBSCRIBER':
+        return AppColors.accent;
+      case 'MEMBER':
+        return AppColors.success;
+      default:
+        return AppColors.textMuted;
     }
   }
 
@@ -1194,11 +1343,15 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
       backgroundColor: AppColors.background,
       appBar: AppBar(
         title: Text('Users (${_users.length})',
-            style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w700)),
+            style: const TextStyle(
+                color: AppColors.textPrimary, fontWeight: FontWeight.w700)),
         backgroundColor: AppColors.surface,
         iconTheme: const IconThemeData(color: AppColors.textPrimary),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh_rounded), onPressed: _load, tooltip: 'Refresh'),
+          IconButton(
+              icon: const Icon(Icons.refresh_rounded),
+              onPressed: _load,
+              tooltip: 'Refresh'),
         ],
       ),
       body: Column(
@@ -1211,7 +1364,8 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
               children: [
                 TextField(
                   onChanged: (v) => setState(() => _search = v),
-                  decoration: _inp('Search by email, ID or role', icon: Icons.search_rounded),
+                  decoration: _inp('Search by email, ID or role',
+                      icon: Icons.search_rounded),
                 ),
                 const SizedBox(height: 10),
                 SizedBox(
@@ -1220,7 +1374,8 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                     scrollDirection: Axis.horizontal,
                     children: _roles.map((r) {
                       final active = _roleFilter == r;
-                      final color = r == 'ALL' ? AppColors.primaryLight : _roleColor(r);
+                      final color =
+                          r == 'ALL' ? AppColors.primaryLight : _roleColor(r);
                       return Padding(
                         padding: const EdgeInsets.only(right: 8),
                         child: GestureDetector(
@@ -1230,12 +1385,17 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                           },
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 150),
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 6),
                             decoration: BoxDecoration(
-                              color: active ? color.withValues(alpha: 0.12) : AppColors.surfaceVariant,
+                              color: active
+                                  ? color.withValues(alpha: 0.12)
+                                  : AppColors.surfaceVariant,
                               borderRadius: BorderRadius.circular(20),
                               border: Border.all(
-                                color: active ? color.withValues(alpha: 0.5) : AppColors.border,
+                                color: active
+                                    ? color.withValues(alpha: 0.5)
+                                    : AppColors.border,
                                 width: active ? 1.5 : 1,
                               ),
                             ),
@@ -1243,7 +1403,8 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                               r,
                               style: TextStyle(
                                 fontSize: 12,
-                                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                                fontWeight:
+                                    active ? FontWeight.w700 : FontWeight.w500,
                                 color: active ? color : AppColors.textSecondary,
                               ),
                             ),
@@ -1285,7 +1446,8 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                             final role = (u['role'] ?? 'GUEST').toString();
                             final id = u['id'] as int?;
                             final identifier = u['identifier'] ?? '—';
-                            final requiresPwChange = u['requiresPasswordChange'] == true;
+                            final requiresPwChange =
+                                u['requiresPasswordChange'] == true;
 
                             return Card(
                               margin: const EdgeInsets.only(bottom: 10),
@@ -1298,12 +1460,15 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                                       width: 44,
                                       height: 44,
                                       decoration: BoxDecoration(
-                                        color: _roleColor(role).withValues(alpha: 0.12),
+                                        color: _roleColor(role)
+                                            .withValues(alpha: 0.12),
                                         shape: BoxShape.circle,
                                       ),
                                       child: Center(
                                         child: Text(
-                                          identifier.isNotEmpty ? identifier[0].toUpperCase() : '?',
+                                          identifier.isNotEmpty
+                                              ? identifier[0].toUpperCase()
+                                              : '?',
                                           style: TextStyle(
                                             fontSize: 18,
                                             fontWeight: FontWeight.w800,
@@ -1315,28 +1480,45 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                                     const SizedBox(width: 12),
                                     Expanded(
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Row(
                                             children: [
                                               Expanded(
                                                 child: Text(identifier,
-                                                    style: AppTextStyles.label.copyWith(
-                                                      fontWeight: FontWeight.w700,
-                                                      color: AppColors.textPrimary,
+                                                    style: AppTextStyles.label
+                                                        .copyWith(
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                      color:
+                                                          AppColors.textPrimary,
                                                     ),
-                                                    overflow: TextOverflow.ellipsis),
+                                                    overflow:
+                                                        TextOverflow.ellipsis),
                                               ),
                                               if (requiresPwChange)
                                                 Container(
-                                                  margin: const EdgeInsets.only(left: 6),
-                                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                  margin: const EdgeInsets.only(
+                                                      left: 6),
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                      horizontal: 6,
+                                                      vertical: 2),
                                                   decoration: BoxDecoration(
-                                                    color: AppColors.warning.withValues(alpha: 0.1),
-                                                    borderRadius: BorderRadius.circular(6),
+                                                    color: AppColors.warning
+                                                        .withValues(alpha: 0.1),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            6),
                                                   ),
                                                   child: const Text('PW Reset',
-                                                      style: TextStyle(fontSize: 9, color: AppColors.warning, fontWeight: FontWeight.w700)),
+                                                      style: TextStyle(
+                                                          fontSize: 9,
+                                                          color:
+                                                              AppColors.warning,
+                                                          fontWeight:
+                                                              FontWeight.w700)),
                                                 ),
                                             ],
                                           ),
@@ -1344,22 +1526,39 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                                           Row(
                                             children: [
                                               Container(
-                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 8,
+                                                        vertical: 2),
                                                 decoration: BoxDecoration(
-                                                  color: _roleColor(role).withValues(alpha: 0.1),
-                                                  borderRadius: BorderRadius.circular(20),
+                                                  color: _roleColor(role)
+                                                      .withValues(alpha: 0.1),
+                                                  borderRadius:
+                                                      BorderRadius.circular(20),
                                                 ),
                                                 child: Text(role,
                                                     style: TextStyle(
-                                                        fontSize: 10, fontWeight: FontWeight.w700, color: _roleColor(role))),
+                                                        fontSize: 10,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        color:
+                                                            _roleColor(role))),
                                               ),
                                               if (id != null) ...[
                                                 const SizedBox(width: 8),
-                                                Text('ID: $id', style: AppTextStyles.caption),
+                                                Text('ID: $id',
+                                                    style:
+                                                        AppTextStyles.caption),
                                               ],
-                                              if (u['consultantId'] != null) ...[
+                                              if (u['consultantId'] !=
+                                                  null) ...[
                                                 const SizedBox(width: 8),
-                                                Text('Cid: ${u['consultantId']}', style: AppTextStyles.caption.copyWith(color: AppColors.primaryLight)),
+                                                Text(
+                                                    'Cid: ${u['consultantId']}',
+                                                    style: AppTextStyles.caption
+                                                        .copyWith(
+                                                            color: AppColors
+                                                                .primaryLight)),
                                               ],
                                             ],
                                           ),
@@ -1372,10 +1571,14 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                                           ? const SizedBox(
                                               width: 36,
                                               height: 36,
-                                              child: CircularProgressIndicator(strokeWidth: 2),
+                                              child: CircularProgressIndicator(
+                                                  strokeWidth: 2),
                                             )
                                           : IconButton(
-                                              icon: const Icon(Icons.delete_outline_rounded, color: AppColors.danger, size: 20),
+                                              icon: const Icon(
+                                                  Icons.delete_outline_rounded,
+                                                  color: AppColors.danger,
+                                                  size: 20),
                                               onPressed: () => _delete(u),
                                               tooltip: 'Delete user',
                                               splashRadius: 20,
@@ -1503,16 +1706,20 @@ class _SlaBreachedScreenState extends State<SlaBreachedScreen> {
               decoration: BoxDecoration(
                   color: AppColors.danger.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8)),
-              child: const Icon(Icons.timer_off_rounded, color: AppColors.danger, size: 18),
+              child: const Icon(Icons.timer_off_rounded,
+                  color: AppColors.danger, size: 18),
             ),
             const SizedBox(width: 10),
             Text('SLA Breached (${_tickets.length})',
-                style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w700)),
+                style: const TextStyle(
+                    color: AppColors.textPrimary, fontWeight: FontWeight.w700)),
           ],
         ),
         backgroundColor: AppColors.surface,
         iconTheme: const IconThemeData(color: AppColors.textPrimary),
-        actions: [IconButton(icon: const Icon(Icons.refresh_rounded), onPressed: _load)],
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh_rounded), onPressed: _load)
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -1521,13 +1728,18 @@ class _SlaBreachedScreenState extends State<SlaBreachedScreen> {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.check_circle_outline_rounded, size: 72,
+                      Icon(Icons.check_circle_outline_rounded,
+                          size: 72,
                           color: AppColors.success.withValues(alpha: 0.6)),
                       const SizedBox(height: 14),
                       const Text('No SLA breaches',
-                          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                          style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textSecondary)),
                       const SizedBox(height: 6),
-                      Text('All active tickets are within SLA windows', style: AppTextStyles.caption),
+                      Text('All active tickets are within SLA windows',
+                          style: AppTextStyles.caption),
                     ],
                   ),
                 )
@@ -1587,10 +1799,14 @@ class _SlaTicketCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('#$id · $category',
-                          style: const TextStyle(fontWeight: FontWeight.w700,
-                              color: AppColors.danger, fontSize: 13)),
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.danger,
+                              fontSize: 13)),
                       const SizedBox(height: 3),
-                      Text(description, maxLines: 2, overflow: TextOverflow.ellipsis,
+                      Text(description,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: AppTextStyles.bodySmall),
                     ],
                   ),
@@ -1598,18 +1814,22 @@ class _SlaTicketCard extends StatelessWidget {
                 const SizedBox(width: 10),
                 if (_hoursAgo().isNotEmpty)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                     decoration: BoxDecoration(
                         color: AppColors.danger.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(20)),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.timer_off_rounded, color: AppColors.danger, size: 13),
+                        const Icon(Icons.timer_off_rounded,
+                            color: AppColors.danger, size: 13),
                         const SizedBox(width: 4),
                         Text(_hoursAgo(),
-                            style: const TextStyle(fontSize: 11,
-                                fontWeight: FontWeight.w700, color: AppColors.danger)),
+                            style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.danger)),
                       ],
                     ),
                   ),
@@ -1628,7 +1848,8 @@ class _SlaTicketCard extends StatelessWidget {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.person_outline, size: 13, color: AppColors.textMuted),
+                      const Icon(Icons.person_outline,
+                          size: 13, color: AppColors.textMuted),
                       const SizedBox(width: 3),
                       Text(userName, style: AppTextStyles.caption),
                     ],
@@ -1644,9 +1865,11 @@ class _SlaTicketCard extends StatelessWidget {
   Widget _pill(String label, Color color) => Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(20)),
+          color: color.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(20)),
       child: Text(label,
-          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color)));
+          style: TextStyle(
+              fontSize: 10, fontWeight: FontWeight.w700, color: color)));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1698,16 +1921,20 @@ class _EscalatedTicketsScreenState extends State<EscalatedTicketsScreen> {
               decoration: BoxDecoration(
                   color: AppColors.danger.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8)),
-              child: const Icon(Icons.warning_amber_rounded, color: AppColors.danger, size: 18),
+              child: const Icon(Icons.warning_amber_rounded,
+                  color: AppColors.danger, size: 18),
             ),
             const SizedBox(width: 10),
             Text('Escalated (${_tickets.length})',
-                style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w700)),
+                style: const TextStyle(
+                    color: AppColors.textPrimary, fontWeight: FontWeight.w700)),
           ],
         ),
         backgroundColor: AppColors.surface,
         iconTheme: const IconThemeData(color: AppColors.textPrimary),
-        actions: [IconButton(icon: const Icon(Icons.refresh_rounded), onPressed: _load)],
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh_rounded), onPressed: _load)
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -1762,7 +1989,8 @@ class _EscalatedCard extends StatelessWidget {
                     color: AppColors.danger.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Icon(Icons.warning_amber_rounded, color: AppColors.danger, size: 20),
+                  child: const Icon(Icons.warning_amber_rounded,
+                      color: AppColors.danger, size: 20),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -1770,16 +1998,22 @@ class _EscalatedCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('#$id — $category',
-                          style: const TextStyle(fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary, fontSize: 14)),
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textPrimary,
+                              fontSize: 14)),
                       const SizedBox(height: 3),
-                      Text(description, maxLines: 2, overflow: TextOverflow.ellipsis,
+                      Text(description,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: AppTextStyles.bodySmall),
                       if (reason != null && reason.isNotEmpty) ...[
                         const SizedBox(height: 4),
                         Text('Reason: $reason',
-                            style: AppTextStyles.caption.copyWith(color: AppColors.danger),
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                            style: AppTextStyles.caption
+                                .copyWith(color: AppColors.danger),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
                       ],
                     ],
                   ),
@@ -1792,22 +2026,28 @@ class _EscalatedCard extends StatelessWidget {
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                       color: AppColors.danger.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(20)),
                   child: const Text('🚨 ESCALATED',
-                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
                           color: AppColors.danger)),
                 ),
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                       color: getPriorityColor(priority).withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(20)),
                   child: Text('⚑ $priority',
-                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
                           color: getPriorityColor(priority))),
                 ),
                 const Spacer(),
@@ -1832,7 +2072,8 @@ class ContactPublicSubmitWidget extends StatefulWidget {
   const ContactPublicSubmitWidget({super.key});
 
   @override
-  State<ContactPublicSubmitWidget> createState() => _ContactPublicSubmitWidgetState();
+  State<ContactPublicSubmitWidget> createState() =>
+      _ContactPublicSubmitWidgetState();
 }
 
 class _ContactPublicSubmitWidgetState extends State<ContactPublicSubmitWidget> {
@@ -1863,7 +2104,9 @@ class _ContactPublicSubmitWidgetState extends State<ContactPublicSubmitWidget> {
       });
       if (mounted) setState(() => _submitted = true);
     } catch (_) {
-      if (mounted) _snack(context, 'Message could not be sent. Please try again.', error: true);
+      if (mounted)
+        _snack(context, 'Message could not be sent. Please try again.',
+            error: true);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -1888,13 +2131,18 @@ class _ContactPublicSubmitWidgetState extends State<ContactPublicSubmitWidget> {
               decoration: BoxDecoration(
                   color: AppColors.success.withValues(alpha: 0.12),
                   shape: BoxShape.circle),
-              child: const Icon(Icons.check_rounded, color: AppColors.success, size: 30),
+              child: const Icon(Icons.check_rounded,
+                  color: AppColors.success, size: 30),
             ),
             const SizedBox(height: 14),
             const Text('Message Sent!',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary)),
             const SizedBox(height: 6),
-            Text('Our team will respond within 24 hours.', style: AppTextStyles.bodySmall, textAlign: TextAlign.center),
+            Text('Our team will respond within 24 hours.',
+                style: AppTextStyles.bodySmall, textAlign: TextAlign.center),
             const SizedBox(height: 18),
             OutlinedButton(
               onPressed: () => setState(() {
@@ -1906,7 +2154,8 @@ class _ContactPublicSubmitWidgetState extends State<ContactPublicSubmitWidget> {
               style: OutlinedButton.styleFrom(
                   foregroundColor: AppColors.primaryLight,
                   side: const BorderSide(color: AppColors.primaryLight),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10))),
               child: const Text('Send Another Message'),
             ),
           ],
@@ -1931,14 +2180,17 @@ class _ContactPublicSubmitWidgetState extends State<ContactPublicSubmitWidget> {
             keyboardType: TextInputType.emailAddress,
             decoration: _inp('Email Address *', icon: Icons.email_outlined),
             validator: (v) =>
-                RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v ?? '') ? null : 'Valid email required',
+                RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v ?? '')
+                    ? null
+                    : 'Valid email required',
           ),
           const SizedBox(height: 12),
           TextFormField(
             controller: _msgCtrl,
             maxLines: 5,
             maxLength: 2000,
-            decoration: _inp('Message *', icon: Icons.message_outlined, hint: 'How can we help you?'),
+            decoration: _inp('Message *',
+                icon: Icons.message_outlined, hint: 'How can we help you?'),
             validator: (v) => (v ?? '').trim().isEmpty ? 'Required' : null,
           ),
           const SizedBox(height: 16),
@@ -1948,13 +2200,22 @@ class _ContactPublicSubmitWidgetState extends State<ContactPublicSubmitWidget> {
             child: ElevatedButton.icon(
               onPressed: _saving ? null : _submit,
               icon: _saving
-                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.send_rounded, color: Colors.white, size: 18),
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.send_rounded,
+                      color: Colors.white, size: 18),
               label: Text(_saving ? 'Sending...' : 'Send Message',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15)),
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primaryLight,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
                 elevation: 0,
               ),
             ),
@@ -1974,10 +2235,12 @@ class AdminOfferApprovalsTabFixed extends StatefulWidget {
   const AdminOfferApprovalsTabFixed({super.key});
 
   @override
-  State<AdminOfferApprovalsTabFixed> createState() => _AdminOfferApprovalsTabFixedState();
+  State<AdminOfferApprovalsTabFixed> createState() =>
+      _AdminOfferApprovalsTabFixedState();
 }
 
-class _AdminOfferApprovalsTabFixedState extends State<AdminOfferApprovalsTabFixed> {
+class _AdminOfferApprovalsTabFixedState
+    extends State<AdminOfferApprovalsTabFixed> {
   List<Map<String, dynamic>> _offers = [];
   bool _loading = true;
   String _filter = 'PENDING';
@@ -1995,13 +2258,15 @@ class _AdminOfferApprovalsTabFixedState extends State<AdminOfferApprovalsTabFixe
       // Try consultant-submitted offers endpoint first
       final res = await _dio.get('/api/offers/consultant-offers');
       final raw = res.data;
-      _offers = List<Map<String, dynamic>>.from(raw is List ? raw : (raw['content'] ?? []));
+      _offers = List<Map<String, dynamic>>.from(
+          raw is List ? raw : (raw['content'] ?? []));
     } catch (_) {
       try {
         // Fallback: all offers, filter by consultantId
         final res = await _dio.get('/api/offers/admin');
         final raw = res.data;
-        final all = List<Map<String, dynamic>>.from(raw is List ? raw : (raw['content'] ?? []));
+        final all = List<Map<String, dynamic>>.from(
+            raw is List ? raw : (raw['content'] ?? []));
         _offers = all.where((o) => o['consultantId'] != null).toList();
       } catch (_) {
         _offers = [];
@@ -2011,8 +2276,9 @@ class _AdminOfferApprovalsTabFixedState extends State<AdminOfferApprovalsTabFixe
   }
 
   String _st(Map o) => (o['status'] ?? 'PENDING').toString().toUpperCase();
-  List<Map<String, dynamic>> get _filtered =>
-      _filter == 'ALL' ? _offers : _offers.where((o) => _st(o) == _filter).toList();
+  List<Map<String, dynamic>> get _filtered => _filter == 'ALL'
+      ? _offers
+      : _offers.where((o) => _st(o) == _filter).toList();
 
   Future<void> _action(int id, String action) async {
     setState(() => _processing = id);
@@ -2024,7 +2290,8 @@ class _AdminOfferApprovalsTabFixedState extends State<AdminOfferApprovalsTabFixe
         queryParameters: {'status': status},
       );
       if (!mounted) return;
-      _snack(context, action == 'approve' ? 'Offer approved ✓' : 'Offer rejected');
+      _snack(
+          context, action == 'approve' ? 'Offer approved ✓' : 'Offer rejected');
       setState(() {
         _offers = _offers
             .map((o) => o['id'] == id ? {...o, 'status': status} : o)
@@ -2053,15 +2320,20 @@ class _AdminOfferApprovalsTabFixedState extends State<AdminOfferApprovalsTabFixe
             decoration: BoxDecoration(
               color: AppColors.warning.withValues(alpha: 0.08),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
+              border:
+                  Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
             ),
             child: Row(
               children: [
-                const Icon(Icons.pending_actions_rounded, color: AppColors.warning, size: 20),
+                const Icon(Icons.pending_actions_rounded,
+                    color: AppColors.warning, size: 20),
                 const SizedBox(width: 10),
                 Text(
                   '$pendingCount offer${pendingCount != 1 ? 's' : ''} awaiting review',
-                  style: const TextStyle(color: AppColors.warning, fontWeight: FontWeight.w600, fontSize: 13),
+                  style: const TextStyle(
+                      color: AppColors.warning,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13),
                 ),
               ],
             ),
@@ -2073,7 +2345,9 @@ class _AdminOfferApprovalsTabFixedState extends State<AdminOfferApprovalsTabFixe
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
           child: Row(
             children: ['PENDING', 'APPROVED', 'REJECTED', 'ALL'].map((f) {
-              final count = f == 'ALL' ? _offers.length : _offers.where((o) => _st(o) == f).length;
+              final count = f == 'ALL'
+                  ? _offers.length
+                  : _offers.where((o) => _st(o) == f).length;
               final color = f == 'APPROVED'
                   ? AppColors.success
                   : f == 'REJECTED'
@@ -2105,7 +2379,9 @@ class _AdminOfferApprovalsTabFixedState extends State<AdminOfferApprovalsTabFixe
           child: _loading
               ? const Center(child: CircularProgressIndicator())
               : filtered.isEmpty
-                  ? const EmptyState(icon: Icons.inventory_2_outlined, title: 'No offers found')
+                  ? const EmptyState(
+                      icon: Icons.inventory_2_outlined,
+                      title: 'No offers found')
                   : RefreshIndicator(
                       onRefresh: _load,
                       child: ListView.builder(
@@ -2140,39 +2416,55 @@ class _AdminOfferApprovalsTabFixedState extends State<AdminOfferApprovalsTabFixe
                                     children: [
                                       Expanded(
                                         child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
                                           children: [
-                                            Text(o['title'] ?? 'Untitled', style: AppTextStyles.h4),
+                                            Text(o['title'] ?? 'Untitled',
+                                                style: AppTextStyles.h4),
                                             if (o['description'] != null)
-                                              Text(o['description'], style: AppTextStyles.caption,
-                                                  maxLines: 2, overflow: TextOverflow.ellipsis),
+                                              Text(o['description'],
+                                                  style: AppTextStyles.caption,
+                                                  maxLines: 2,
+                                                  overflow:
+                                                      TextOverflow.ellipsis),
                                           ],
                                         ),
                                       ),
                                       if (o['discount'] != null)
                                         Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 10, vertical: 4),
                                           decoration: BoxDecoration(
                                             color: AppColors.danger,
-                                            borderRadius: BorderRadius.circular(20),
+                                            borderRadius:
+                                                BorderRadius.circular(20),
                                           ),
                                           child: Text(o['discount'].toString(),
-                                              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
+                                              style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w800)),
                                         ),
                                     ],
                                   ),
                                   const SizedBox(height: 10),
                                   Wrap(spacing: 8, runSpacing: 6, children: [
                                     Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 3),
                                       decoration: BoxDecoration(
                                           color: stColor.withValues(alpha: 0.1),
-                                          borderRadius: BorderRadius.circular(20)),
+                                          borderRadius:
+                                              BorderRadius.circular(20)),
                                       child: Text(st,
-                                          style: TextStyle(fontSize: 10, color: stColor, fontWeight: FontWeight.w700)),
+                                          style: TextStyle(
+                                              fontSize: 10,
+                                              color: stColor,
+                                              fontWeight: FontWeight.w700)),
                                     ),
                                     if (o['consultantId'] != null)
-                                      Text('Consultant #${o['consultantId']}', style: AppTextStyles.caption),
+                                      Text('Consultant #${o['consultantId']}',
+                                          style: AppTextStyles.caption),
                                   ]),
                                   if (isPending) ...[
                                     const SizedBox(height: 14),
@@ -2182,13 +2474,20 @@ class _AdminOfferApprovalsTabFixedState extends State<AdminOfferApprovalsTabFixe
                                           child: OutlinedButton.icon(
                                             onPressed: _processing == o['id']
                                                 ? null
-                                                : () => _action(o['id'], 'reject'),
-                                            icon: const Icon(Icons.close_rounded, size: 16),
+                                                : () =>
+                                                    _action(o['id'], 'reject'),
+                                            icon: const Icon(
+                                                Icons.close_rounded,
+                                                size: 16),
                                             label: const Text('Reject'),
                                             style: OutlinedButton.styleFrom(
                                               foregroundColor: AppColors.danger,
-                                              side: const BorderSide(color: AppColors.danger),
-                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                              side: const BorderSide(
+                                                  color: AppColors.danger),
+                                              shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          10)),
                                             ),
                                           ),
                                         ),
@@ -2197,16 +2496,34 @@ class _AdminOfferApprovalsTabFixedState extends State<AdminOfferApprovalsTabFixe
                                           child: ElevatedButton.icon(
                                             onPressed: _processing == o['id']
                                                 ? null
-                                                : () => _action(o['id'], 'approve'),
+                                                : () =>
+                                                    _action(o['id'], 'approve'),
                                             icon: _processing == o['id']
-                                                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                                                : const Icon(Icons.check_rounded, size: 16, color: Colors.white),
+                                                ? const SizedBox(
+                                                    width: 14,
+                                                    height: 14,
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                            strokeWidth: 2,
+                                                            color:
+                                                                Colors.white))
+                                                : const Icon(
+                                                    Icons.check_rounded,
+                                                    size: 16,
+                                                    color: Colors.white),
                                             label: const Text('Approve',
-                                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                                                style: TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight:
+                                                        FontWeight.w700)),
                                             style: ElevatedButton.styleFrom(
-                                              backgroundColor: AppColors.success,
+                                              backgroundColor:
+                                                  AppColors.success,
                                               elevation: 0,
-                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                              shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          10)),
                                             ),
                                           ),
                                         ),
@@ -2236,10 +2553,12 @@ class AdminSkillsQuestionsTabFixed extends StatefulWidget {
   const AdminSkillsQuestionsTabFixed({super.key});
 
   @override
-  State<AdminSkillsQuestionsTabFixed> createState() => _AdminSkillsQuestionsTabFixedState();
+  State<AdminSkillsQuestionsTabFixed> createState() =>
+      _AdminSkillsQuestionsTabFixedState();
 }
 
-class _AdminSkillsQuestionsTabFixedState extends State<AdminSkillsQuestionsTabFixed>
+class _AdminSkillsQuestionsTabFixedState
+    extends State<AdminSkillsQuestionsTabFixed>
     with SingleTickerProviderStateMixin {
   late TabController _tabs;
   List<Map<String, dynamic>> _skills = [], _questions = [];
@@ -2272,9 +2591,13 @@ class _AdminSkillsQuestionsTabFixedState extends State<AdminSkillsQuestionsTabFi
         final ids = _skills.map((s) => s['id'].toString()).join('&skillIds=');
         final qr = await _dio.get('/api/questions?skillIds=$ids');
         final raw = qr.data;
-        final qList = List<Map<String, dynamic>>.from(raw is List ? raw : (raw['content'] ?? []));
-        final sm = {for (final s in _skills) s['id']: s['skillName'] ?? 'Skill'};
-        _questions = qList.map((q) => {...q, '_sn': sm[q['skillId']] ?? ''}).toList();
+        final qList = List<Map<String, dynamic>>.from(
+            raw is List ? raw : (raw['content'] ?? []));
+        final sm = {
+          for (final s in _skills) s['id']: s['skillName'] ?? 'Skill'
+        };
+        _questions =
+            qList.map((q) => {...q, '_sn': sm[q['skillId']] ?? ''}).toList();
       } else {
         _questions = [];
       }
@@ -2295,53 +2618,83 @@ class _AdminSkillsQuestionsTabFixedState extends State<AdminSkillsQuestionsTabFi
       context: context,
       isScrollControlled: true,
       backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => StatefulBuilder(builder: (_, ss) {
         bool saving = false;
         return Padding(
-          padding: EdgeInsets.only(left: 20, right: 20, top: 20, bottom: MediaQuery.of(ctx).viewInsets.bottom + 24),
+          padding: EdgeInsets.only(
+              left: 20,
+              right: 20,
+              top: 20,
+              bottom: MediaQuery.of(ctx).viewInsets.bottom + 24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Center(child: Container(margin: const EdgeInsets.only(bottom: 14), width: 40, height: 4,
-                  decoration: BoxDecoration(color: Colors.grey.withValues(alpha: 0.3), borderRadius: BorderRadius.circular(2)))),
+              Center(
+                  child: Container(
+                      margin: const EdgeInsets.only(bottom: 14),
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                          color: Colors.grey.withValues(alpha: 0.3),
+                          borderRadius: BorderRadius.circular(2)))),
               Row(children: [
-                Expanded(child: Text(s != null ? 'Edit Skill' : 'New Skill', style: AppTextStyles.h3)),
-                IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+                Expanded(
+                    child: Text(s != null ? 'Edit Skill' : 'New Skill',
+                        style: AppTextStyles.h3)),
+                IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(ctx)),
               ]),
               const SizedBox(height: 16),
-              TextField(controller: nc, decoration: _inp('Skill name *', icon: Icons.category_outlined)),
+              TextField(
+                  controller: nc,
+                  decoration:
+                      _inp('Skill name *', icon: Icons.category_outlined)),
               const SizedBox(height: 12),
-              TextField(controller: dc, decoration: _inp('Description (optional)'), maxLines: 2),
+              TextField(
+                  controller: dc,
+                  decoration: _inp('Description (optional)'),
+                  maxLines: 2),
               const SizedBox(height: 20),
               SizedBox(
-                width: double.infinity, height: 50,
+                width: double.infinity,
+                height: 50,
                 child: ElevatedButton(
-                  onPressed: saving ? null : () async {
-                    if (nc.text.trim().isEmpty) return;
-                    ss(() => saving = true);
-                    try {
-                      // ✅ FIX: SkillRequest schema uses 'skillName', not 'name'
-                      final payload = {'skillName': nc.text.trim()};
-                      if (s != null) {
-                        await _dio.put('/api/skills/${s['id']}', data: payload);
-                      } else {
-                        await _dio.post('/api/skills', data: payload);
-                      }
-                      if (ctx.mounted) Navigator.pop(ctx);
-                      _load();
-                    } on DioException catch (e) {
-                      final msg = e.response?.data?['message'] ?? 'Save failed';
-                      if (ctx.mounted) _snack(ctx, msg, error: true);
-                      ss(() => saving = false);
-                    }
-                  },
+                  onPressed: saving
+                      ? null
+                      : () async {
+                          if (nc.text.trim().isEmpty) return;
+                          ss(() => saving = true);
+                          try {
+                            // ✅ FIX: SkillRequest schema uses 'skillName', not 'name'
+                            final payload = {'skillName': nc.text.trim()};
+                            if (s != null) {
+                              await _dio.put('/api/skills/${s['id']}',
+                                  data: payload);
+                            } else {
+                              await _dio.post('/api/skills', data: payload);
+                            }
+                            if (ctx.mounted) Navigator.pop(ctx);
+                            _load();
+                          } on DioException catch (e) {
+                            final msg =
+                                e.response?.data?['message'] ?? 'Save failed';
+                            if (ctx.mounted) _snack(ctx, msg, error: true);
+                            ss(() => saving = false);
+                          }
+                        },
                   style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primaryLight,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14))),
                   child: Text(s != null ? 'Update Skill' : 'Create Skill',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15)),
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15)),
                 ),
               ),
             ],
@@ -2356,7 +2709,8 @@ class _AdminSkillsQuestionsTabFixedState extends State<AdminSkillsQuestionsTabFi
       context: context,
       builder: (_) => _ConfirmDialog(
         title: 'Delete Skill?',
-        body: 'Delete "${s['skillName'] ?? 'this skill'}"? All linked questions will also be removed.',
+        body:
+            'Delete "${s['skillName'] ?? 'this skill'}"? All linked questions will also be removed.',
         confirmLabel: 'Delete',
         confirmColor: AppColors.danger,
       ),
@@ -2377,68 +2731,110 @@ class _AdminSkillsQuestionsTabFixedState extends State<AdminSkillsQuestionsTabFi
     int? selSkill = q != null ? q['skillId'] as int? : null;
 
     showModalBottomSheet(
-      context: context, isScrollControlled: true,
+      context: context,
+      isScrollControlled: true,
       backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => StatefulBuilder(builder: (_, ss) {
         bool saving = false;
         return Padding(
-          padding: EdgeInsets.only(left: 20, right: 20, top: 20, bottom: MediaQuery.of(ctx).viewInsets.bottom + 24),
+          padding: EdgeInsets.only(
+              left: 20,
+              right: 20,
+              top: 20,
+              bottom: MediaQuery.of(ctx).viewInsets.bottom + 24),
           child: Column(
-            mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Center(child: Container(margin: const EdgeInsets.only(bottom: 14), width: 40, height: 4,
-                  decoration: BoxDecoration(color: Colors.grey.withValues(alpha: 0.3), borderRadius: BorderRadius.circular(2)))),
+              Center(
+                  child: Container(
+                      margin: const EdgeInsets.only(bottom: 14),
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                          color: Colors.grey.withValues(alpha: 0.3),
+                          borderRadius: BorderRadius.circular(2)))),
               Row(children: [
-                Expanded(child: Text(q != null ? 'Edit Question' : 'New Question', style: AppTextStyles.h3)),
-                IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+                Expanded(
+                    child: Text(q != null ? 'Edit Question' : 'New Question',
+                        style: AppTextStyles.h3)),
+                IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(ctx)),
               ]),
               const SizedBox(height: 16),
               if (_skills.isEmpty)
                 Container(
-                  padding: const EdgeInsets.all(12), margin: const EdgeInsets.only(bottom: 12),
-                  decoration: BoxDecoration(color: AppColors.warning.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10)),
-                  child: const Text('Create skills first before adding questions.', style: TextStyle(color: AppColors.warning)),
+                  padding: const EdgeInsets.all(12),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                      color: AppColors.warning.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10)),
+                  child: const Text(
+                      'Create skills first before adding questions.',
+                      style: TextStyle(color: AppColors.warning)),
                 ),
               DropdownButtonFormField<int>(
                 initialValue: selSkill,
-                decoration: _inp('Skill category *', icon: Icons.category_outlined),
-                items: _skills.map((s) => DropdownMenuItem(
-                  value: s['id'] as int,
-                  child: Text(s['skillName'] ?? 'Skill', style: AppTextStyles.body),
-                )).toList(),
+                decoration:
+                    _inp('Skill category *', icon: Icons.category_outlined),
+                items: _skills
+                    .map((s) => DropdownMenuItem(
+                          value: s['id'] as int,
+                          child: Text(s['skillName'] ?? 'Skill',
+                              style: AppTextStyles.body),
+                        ))
+                    .toList(),
                 onChanged: (v) => ss(() => selSkill = v),
               ),
               const SizedBox(height: 12),
-              TextField(controller: tc, decoration: _inp('Question text *', icon: Icons.help_outline_rounded), maxLines: 3),
+              TextField(
+                  controller: tc,
+                  decoration:
+                      _inp('Question text *', icon: Icons.help_outline_rounded),
+                  maxLines: 3),
               const SizedBox(height: 20),
               SizedBox(
-                width: double.infinity, height: 50,
+                width: double.infinity,
+                height: 50,
                 child: ElevatedButton(
-                  onPressed: (saving || selSkill == null) ? null : () async {
-                    if (tc.text.trim().isEmpty) return;
-                    ss(() => saving = true);
-                    try {
-                      // QuestionRequest: { skillId, text }
-                      final payload = {'skillId': selSkill, 'text': tc.text.trim()};
-                      if (q != null) {
-                        await _dio.put('/api/questions/${q['id']}', data: payload);
-                      } else {
-                        await _dio.post('/api/questions', data: payload);
-                      }
-                      if (ctx.mounted) Navigator.pop(ctx);
-                      _load();
-                    } on DioException catch (e) {
-                      final msg = e.response?.data?['message'] ?? 'Save failed';
-                      if (ctx.mounted) _snack(ctx, msg, error: true);
-                      ss(() => saving = false);
-                    }
-                  },
+                  onPressed: (saving || selSkill == null)
+                      ? null
+                      : () async {
+                          if (tc.text.trim().isEmpty) return;
+                          ss(() => saving = true);
+                          try {
+                            // QuestionRequest: { skillId, text }
+                            final payload = {
+                              'skillId': selSkill,
+                              'text': tc.text.trim()
+                            };
+                            if (q != null) {
+                              await _dio.put('/api/questions/${q['id']}',
+                                  data: payload);
+                            } else {
+                              await _dio.post('/api/questions', data: payload);
+                            }
+                            if (ctx.mounted) Navigator.pop(ctx);
+                            _load();
+                          } on DioException catch (e) {
+                            final msg =
+                                e.response?.data?['message'] ?? 'Save failed';
+                            if (ctx.mounted) _snack(ctx, msg, error: true);
+                            ss(() => saving = false);
+                          }
+                        },
                   style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primaryLight,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14))),
                   child: Text(q != null ? 'Update Question' : 'Create Question',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15)),
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15)),
                 ),
               ),
             ],
@@ -2468,7 +2864,8 @@ class _AdminSkillsQuestionsTabFixedState extends State<AdminSkillsQuestionsTabFi
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: const Text('Skills & Questions', style: TextStyle(color: AppColors.textPrimary)),
+        title: const Text('Skills & Questions',
+            style: TextStyle(color: AppColors.textPrimary)),
         backgroundColor: AppColors.surface,
         bottom: TabBar(
           controller: _tabs,
@@ -2495,7 +2892,9 @@ class _AdminSkillsQuestionsTabFixedState extends State<AdminSkillsQuestionsTabFi
               children: [
                 // ── Skills tab ─────────────────────────────────────────────
                 _skills.isEmpty
-                    ? const EmptyState(icon: Icons.category_outlined, title: 'No skills yet',
+                    ? const EmptyState(
+                        icon: Icons.category_outlined,
+                        title: 'No skills yet',
                         subtitle: 'Tap + to create your first skill category')
                     : ListView.builder(
                         padding: const EdgeInsets.all(16),
@@ -2503,7 +2902,9 @@ class _AdminSkillsQuestionsTabFixedState extends State<AdminSkillsQuestionsTabFi
                         itemBuilder: (_, i) {
                           final s = _skills[i];
                           final name = s['skillName'] ?? 'Skill';
-                          final qCount = _questions.where((q) => q['skillId'] == s['id']).length;
+                          final qCount = _questions
+                              .where((q) => q['skillId'] == s['id'])
+                              .length;
                           return Card(
                             margin: const EdgeInsets.only(bottom: 10),
                             shape: RoundedRectangleBorder(
@@ -2511,27 +2912,34 @@ class _AdminSkillsQuestionsTabFixedState extends State<AdminSkillsQuestionsTabFi
                               side: const BorderSide(color: Color(0xFFDDD6FE)),
                             ),
                             child: ListTile(
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 4),
                               leading: Container(
                                 padding: const EdgeInsets.all(10),
                                 decoration: BoxDecoration(
                                   color: const Color(0xFFEDE9FE),
                                   borderRadius: BorderRadius.circular(10),
                                 ),
-                                child: const Icon(Icons.category_rounded, color: Color(0xFF7C3AED), size: 20),
+                                child: const Icon(Icons.category_rounded,
+                                    color: Color(0xFF7C3AED), size: 20),
                               ),
                               title: Text(name, style: AppTextStyles.h4),
-                              subtitle: Text('$qCount question${qCount != 1 ? 's' : ''}', style: AppTextStyles.caption),
+                              subtitle: Text(
+                                  '$qCount question${qCount != 1 ? 's' : ''}',
+                                  style: AppTextStyles.caption),
                               trailing: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   IconButton(
-                                    icon: const Icon(Icons.edit_outlined, size: 18, color: AppColors.primaryLight),
+                                    icon: const Icon(Icons.edit_outlined,
+                                        size: 18,
+                                        color: AppColors.primaryLight),
                                     onPressed: () => _showSkillForm(s),
                                     splashRadius: 18,
                                   ),
                                   IconButton(
-                                    icon: const Icon(Icons.delete_outline, size: 18, color: AppColors.danger),
+                                    icon: const Icon(Icons.delete_outline,
+                                        size: 18, color: AppColors.danger),
                                     onPressed: () => _deleteSkill(s),
                                     splashRadius: 18,
                                   ),
@@ -2556,18 +2964,22 @@ class _AdminSkillsQuestionsTabFixedState extends State<AdminSkillsQuestionsTabFi
                               child: FilterChip(
                                 label: Text('All (${_questions.length})'),
                                 selected: _filterSkillId == null,
-                                onSelected: (_) => setState(() => _filterSkillId = null),
+                                onSelected: (_) =>
+                                    setState(() => _filterSkillId = null),
                               ),
                             ),
                             ..._skills.map((s) {
                               final id = s['id'] as int;
-                              final cnt = _questions.where((q) => q['skillId'] == id).length;
+                              final cnt = _questions
+                                  .where((q) => q['skillId'] == id)
+                                  .length;
                               return Padding(
                                 padding: const EdgeInsets.only(right: 8),
                                 child: FilterChip(
                                   label: Text('${s['skillName']} ($cnt)'),
                                   selected: _filterSkillId == id,
-                                  onSelected: (_) => setState(() => _filterSkillId = id),
+                                  onSelected: (_) =>
+                                      setState(() => _filterSkillId = id),
                                   selectedColor: const Color(0xFFEDE9FE),
                                   checkmarkColor: const Color(0xFF7C3AED),
                                 ),
@@ -2579,36 +2991,50 @@ class _AdminSkillsQuestionsTabFixedState extends State<AdminSkillsQuestionsTabFi
                     const SizedBox(height: 8),
                     Expanded(
                       child: filteredQ.isEmpty
-                          ? const EmptyState(icon: Icons.quiz_outlined, title: 'No questions',
+                          ? const EmptyState(
+                              icon: Icons.quiz_outlined,
+                              title: 'No questions',
                               subtitle: 'Tap + to add questions for a skill')
                           : ListView.builder(
-                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
                               itemCount: filteredQ.length,
                               itemBuilder: (_, i) {
                                 final q = filteredQ[i];
                                 return Card(
                                   margin: const EdgeInsets.only(bottom: 8),
                                   child: ListTile(
-                                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                                    contentPadding: const EdgeInsets.symmetric(
+                                        horizontal: 14, vertical: 4),
                                     leading: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 3),
                                       decoration: BoxDecoration(
                                           color: const Color(0xFFEDE9FE),
-                                          borderRadius: BorderRadius.circular(20)),
+                                          borderRadius:
+                                              BorderRadius.circular(20)),
                                       child: Text(q['_sn'] ?? '',
-                                          style: const TextStyle(fontSize: 10, color: Color(0xFF7C3AED), fontWeight: FontWeight.w700)),
+                                          style: const TextStyle(
+                                              fontSize: 10,
+                                              color: Color(0xFF7C3AED),
+                                              fontWeight: FontWeight.w700)),
                                     ),
-                                    title: Text(q['text'] ?? '', style: AppTextStyles.body),
+                                    title: Text(q['text'] ?? '',
+                                        style: AppTextStyles.body),
                                     trailing: Row(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         IconButton(
-                                          icon: const Icon(Icons.edit_outlined, size: 18, color: AppColors.primaryLight),
+                                          icon: const Icon(Icons.edit_outlined,
+                                              size: 18,
+                                              color: AppColors.primaryLight),
                                           onPressed: () => _showQForm(q),
                                           splashRadius: 18,
                                         ),
                                         IconButton(
-                                          icon: const Icon(Icons.delete_outline, size: 18, color: AppColors.danger),
+                                          icon: const Icon(Icons.delete_outline,
+                                              size: 18,
+                                              color: AppColors.danger),
                                           onPressed: () => _deleteQ(q),
                                           splashRadius: 18,
                                         ),
@@ -2659,7 +3085,8 @@ class _FormSection extends StatelessWidget {
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: AppColors.border),
           ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: children),
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start, children: children),
         ),
       ],
     );
@@ -2697,9 +3124,12 @@ class _ConfirmDialog extends StatelessWidget {
           style: ElevatedButton.styleFrom(
             backgroundColor: confirmColor,
             elevation: 0,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
-          child: Text(confirmLabel, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+          child: Text(confirmLabel,
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w700)),
         ),
       ],
     );
@@ -2744,3 +3174,368 @@ class _ConfirmDialog extends StatelessWidget {
 // 9. EXPORT BUTTON in _AdminTicketsTab:
 //    Replace SnackBar stub with:
 //    TicketExportService.exportToCsv(_filtered, context);
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SECTION 8 — ADMIN ADD MEMBER SCREEN
+// Web parity: AdminPage.tsx → AddMemberPanel
+// Endpoint: POST /api/onboarding/admin/member (multipart/form-data)
+// Fields: name, email, phoneNumber, location
+// Backend auto-generates password and emails login credentials to the member.
+// ═════════════════════════════════════════════════════════════════════════════
+
+class AdminAddMemberScreen extends StatefulWidget {
+  const AdminAddMemberScreen({super.key});
+  @override
+  State<AdminAddMemberScreen> createState() => _AdminAddMemberScreenState();
+}
+
+class _AdminAddMemberScreenState extends State<AdminAddMemberScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _mobileCtrl = TextEditingController();
+  final _locationCtrl = TextEditingController();
+  bool _saving = false;
+
+  // Recently added members shown in a list on the right (web parity)
+  List<Map<String, dynamic>> _recentMembers = [];
+  bool _loadingMembers = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRecentMembers();
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _emailCtrl.dispose();
+    _mobileCtrl.dispose();
+    _locationCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadRecentMembers() async {
+    setState(() => _loadingMembers = true);
+    try {
+      final res = await _dio.get('/api/users');
+      final list = res.data is List
+          ? res.data as List
+          : (res.data?['content'] as List? ?? []);
+      final memberRoles = {
+        'USER',
+        'MEMBER',
+        'CLIENT',
+        'SUBSCRIBER',
+        'SUBSCRIBED',
+        'GUEST'
+      };
+      final mapped = list
+          .where((u) {
+            final role = ((u['role'] ?? u['userRole'] ?? '') as String)
+                .toUpperCase()
+                .replaceAll('ROLE_', '');
+            return memberRoles.contains(role);
+          })
+          .map((u) => Map<String, dynamic>.from(u as Map))
+          .toList()
+          .take(10)
+          .toList();
+      setState(() => _recentMembers = mapped);
+    } catch (_) {
+      setState(() => _recentMembers = []);
+    }
+    if (mounted) setState(() => _loadingMembers = false);
+  }
+
+  String _resolveName(Map<String, dynamic> u) {
+    final raw =
+        u['name'] ?? u['fullName'] ?? u['firstName'] ?? u['username'] ?? '';
+    if (raw.toString().isNotEmpty) return raw.toString().trim();
+    final email = u['email']?.toString() ?? '';
+    if (email.contains('@'))
+      return email.split('@')[0].replaceAll(RegExp(r'[._-]'), ' ').trim();
+    return 'Member';
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+
+    try {
+      final payload = {
+        'name': _nameCtrl.text.trim(),
+        'email': _emailCtrl.text.trim().toLowerCase(),
+        'phoneNumber': _mobileCtrl.text.trim(),
+        'location': _locationCtrl.text.trim(),
+        'profileImageUrl': null,
+      };
+
+      final formData = FormData.fromMap({
+        'data': MultipartFile.fromString(
+          jsonEncode(payload),
+          filename: 'data.json',
+          contentType: DioMediaType.parse('application/json'),
+        ),
+      });
+
+      await _dio.post('/api/onboarding/admin/member', data: formData);
+
+      if (mounted) {
+        _snack(context,
+            'Member "${_nameCtrl.text.trim()}" added! Credentials sent to ${_emailCtrl.text.trim().toLowerCase()}.');
+        _nameCtrl.clear();
+        _emailCtrl.clear();
+        _mobileCtrl.clear();
+        _locationCtrl.clear();
+        _loadRecentMembers();
+      }
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      String msg = 'Failed to add member.';
+      if (e.response?.statusCode == 409)
+        msg = 'Email or phone number already registered.';
+      else if (e.response?.statusCode == 403)
+        msg = 'Access denied. Admin role required.';
+      else if (data is Map) msg = data['message'] ?? msg;
+      if (mounted) _snack(context, msg, error: true);
+    } catch (_) {
+      if (mounted)
+        _snack(context, 'Failed to add member. Please try again.', error: true);
+    }
+
+    if (mounted) setState(() => _saving = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(title: const Text('Add Member')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Info banner — same as web
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.primaryLight.withValues(alpha: 0.07),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                    color: AppColors.primaryLight.withValues(alpha: 0.25)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded,
+                      color: AppColors.primaryLight, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'A secure password is automatically created and the member\'s login details are sent to their email. They can log in immediately and update their password from their profile.',
+                      style: AppTextStyles.bodySmall
+                          .copyWith(color: AppColors.primaryLight),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Form card
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Member Details', style: AppTextStyles.label),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _nameCtrl,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: _inp('Full Name *',
+                          icon: Icons.person_outline_rounded),
+                      validator: (v) {
+                        if ((v ?? '').trim().length < 2)
+                          return 'Enter a valid full name';
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _emailCtrl,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration:
+                          _inp('Email Address *', icon: Icons.email_outlined),
+                      validator: (v) {
+                        if (!RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+                            .hasMatch(v ?? '')) return 'Valid email required';
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _mobileCtrl,
+                      keyboardType: TextInputType.phone,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly,
+                        LengthLimitingTextInputFormatter(10),
+                      ],
+                      decoration: _inp('Mobile Number *',
+                          icon: Icons.phone_outlined, hint: '10-digit number'),
+                      validator: (v) {
+                        if (!RegExp(r'^[6-9]\d{9}$').hasMatch(v ?? ''))
+                          return 'Valid 10-digit Indian mobile required';
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _locationCtrl,
+                      decoration: _inp('Location',
+                          icon: Icons.location_on_outlined,
+                          hint: 'City, State'),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () {
+                              _formKey.currentState?.reset();
+                              _nameCtrl.clear();
+                              _emailCtrl.clear();
+                              _mobileCtrl.clear();
+                              _locationCtrl.clear();
+                            },
+                            child: const Text('Reset'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 2,
+                          child: FilledButton.icon(
+                            onPressed: _saving ? null : _submit,
+                            style: FilledButton.styleFrom(
+                                backgroundColor: AppColors.primaryLight),
+                            icon: _saving
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                        color: Colors.white, strokeWidth: 2))
+                                : const Icon(Icons.person_add_rounded,
+                                    color: Colors.white, size: 18),
+                            label: Text(
+                              _saving ? 'Adding…' : 'Add Member',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Recently added members
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Recently Added Members', style: AppTextStyles.label),
+                Text('(${_recentMembers.length})',
+                    style: AppTextStyles.caption),
+              ],
+            ),
+            const SizedBox(height: 10),
+            if (_loadingMembers)
+              const Center(child: CircularProgressIndicator())
+            else if (_recentMembers.isEmpty)
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppColors.border)),
+                child: const Center(
+                    child: Text('No members added yet.',
+                        style: TextStyle(color: AppColors.textMuted))),
+              )
+            else
+              ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _recentMembers.length,
+                itemBuilder: (_, i) {
+                  final m = _recentMembers[i];
+                  final name = _resolveName(m);
+                  final email = m['email']?.toString() ?? '';
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.border),
+                    ),
+                    child: Row(children: [
+                      CircleAvatar(
+                        radius: 18,
+                        backgroundColor:
+                            AppColors.primary.withValues(alpha: 0.1),
+                        child: Text(name.isEmpty ? '?' : name[0].toUpperCase(),
+                            style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.primary)),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(name,
+                                  style: AppTextStyles.h4,
+                                  overflow: TextOverflow.ellipsis),
+                              if (email.isNotEmpty)
+                                Text(email,
+                                    style: AppTextStyles.caption,
+                                    overflow: TextOverflow.ellipsis),
+                            ]),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                            color:
+                                AppColors.primaryLight.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(20)),
+                        child: const Text('MEMBER',
+                            style: TextStyle(
+                                fontSize: 9,
+                                color: AppColors.primaryLight,
+                                fontWeight: FontWeight.w700)),
+                      ),
+                    ]),
+                  );
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}

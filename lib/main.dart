@@ -1,9 +1,22 @@
+// lib/main.dart
+// ════════════════════════════════════════════════════════════════════════════
+// Updated to match full web app routing:
+//   /login     → LoginScreen
+//   /register  → RegisterScreen
+//   /home      → UserDashboard
+//   /admin     → AdminDashboard
+//   /consultant→ ConsultantDashboard
+//   SplashScreen → auto-detects role + requiresPasswordChange flag
+// ════════════════════════════════════════════════════════════════════════════
+
 import 'package:finadvise/admin-dashboard.dart';
 import 'package:finadvise/app_theme.dart';
-import 'package:finadvise/auth_service.dart';
+import 'package:finadvise/services/services.dart';
 import 'package:finadvise/consultant-dashboard.dart';
+import 'package:finadvise/force_password_change_screen.dart';
 import 'package:finadvise/login_screen.dart';
-import 'package:finadvise/services/notification_service.dart';
+import 'package:finadvise/public_contact_screen.dart';
+import 'package:finadvise/register_screen.dart';
 import 'package:finadvise/user-dashboard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -34,15 +47,15 @@ class FinAdviseApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'FINADVISE',
+      title: 'Meet The Masters',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       home: const SplashScreen(),
-      // 👇 ROUTES ADDED HERE
-      // Yahan hum map kar rahe hain ki kis naam se kaunsi screen khulegi
       routes: {
+        '/contact': (context) => const PublicContactScreen(),
         '/login': (context) => const LoginScreen(),
-        '/home': (context) => const UserDashboard(), // '/home' route ko UserDashboard se map kar diya
+        '/register': (context) => const RegisterScreen(),
+        '/home': (context) => const UserDashboard(),
         '/admin': (context) => const AdminDashboard(),
         '/consultant': (context) => const ConsultantDashboard(),
       },
@@ -50,7 +63,7 @@ class FinAdviseApp extends StatelessWidget {
   }
 }
 
-// ─── SPLASH SCREEN ─────────────────────────────────────────────────────────────
+// ─── SPLASH SCREEN ────────────────────────────────────────────────────────────
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -59,7 +72,8 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
+class _SplashScreenState extends State<SplashScreen>
+    with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
   late Animation<double> _fadeAnim;
   late Animation<double> _scaleAnim;
@@ -67,18 +81,25 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200));
-    _fadeAnim = Tween<double>(begin: 0, end: 1).animate(CurvedAnimation(parent: _ctrl, curve: const Interval(0, 0.6, curve: Curves.easeOut)));
-    _scaleAnim = Tween<double>(begin: 0.7, end: 1).animate(CurvedAnimation(parent: _ctrl, curve: const Interval(0, 0.6, curve: Curves.elasticOut)));
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1200));
+    _fadeAnim = Tween<double>(begin: 0, end: 1).animate(CurvedAnimation(
+        parent: _ctrl,
+        curve: const Interval(0, 0.6, curve: Curves.easeOut)));
+    _scaleAnim = Tween<double>(begin: 0.7, end: 1).animate(CurvedAnimation(
+        parent: _ctrl,
+        curve: const Interval(0, 0.6, curve: Curves.elasticOut)));
     _ctrl.forward();
     _checkAuth();
   }
 
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   Future<void> _checkAuth() async {
-    // Minimum splash display
     await Future.delayed(const Duration(seconds: 2));
 
     final authService = AuthService();
@@ -90,27 +111,26 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     if (isLoggedIn) {
       final role = await authService.getUserRole();
       final userId = await authService.getUserId();
-      // final consultantId = await authService.getConsultantId(); // User ne upload ki file mein tha but unused
+      final requiresPwChange = await authService.requiresPasswordChange();
 
-      // Initialize notifications
+      // Init notifications
       if (role != null && userId != null) {
-        context.read<NotificationService>().initialize(role, userId as int);
+        final parsedUserId = int.tryParse(userId);
+        if (parsedUserId != null) {
+          context.read<NotificationService>().initialize(role, parsedUserId);
+        }
       }
 
-      switch (role) {
-        case 'ADMIN':
-          nextScreen = const AdminDashboard();
-          break;
-        case 'ADVISOR':
-        case 'CONSULTANT':
-          nextScreen = const ConsultantDashboard();
-          break;
-        default:
-          nextScreen = const UserDashboard();
-          break;
+      // Force password change check (matches ForcePasswordChangeModal logic)
+      if (requiresPwChange) {
+        nextScreen = ForcePasswordChangeScreen(
+          onPasswordChanged: () => _navigateByRole(role ?? 'USER'),
+        );
+      } else {
+        nextScreen = _screenForRole(role ?? 'USER');
       }
     } else {
-      nextScreen = const LoginScreen(); // ← Landing page dikhao, login nahi
+      nextScreen = const LoginScreen();
     }
 
     if (mounted) {
@@ -118,11 +138,31 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
         context,
         PageRouteBuilder(
           pageBuilder: (_, __, ___) => nextScreen,
-          transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
+          transitionsBuilder: (_, anim, __, child) =>
+              FadeTransition(opacity: anim, child: child),
           transitionDuration: const Duration(milliseconds: 400),
         ),
       );
     }
+  }
+
+  Widget _screenForRole(String role) {
+    final clean = role.toUpperCase().replaceFirst(RegExp(r'^ROLE_'), '');
+    switch (clean) {
+      case 'ADMIN': return const AdminDashboard();
+      case 'CONSULTANT':
+      case 'ADVISOR':
+      case 'AGENT': return const ConsultantDashboard();
+      default: return const UserDashboard();
+    }
+  }
+
+  void _navigateByRole(String role) {
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => _screenForRole(role)),
+    );
   }
 
   @override
@@ -131,9 +171,15 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF1E3A8A), Color(0xFF2563EB), Color(0xFF3B82F6)],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color(0xFF0F766E),
+              Color(0xFF2563EB),
+              Color(0xFF93C5FD),
+              Color(0xFFEFF6FF),
+            ],
+            stops: [0.0, 0.28, 0.64, 1.0],
           ),
         ),
         child: Center(
@@ -145,30 +191,35 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Container(
-                    width: 96,
-                    height: 96,
+                    width: 112,
+                    height: 112,
+                    padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(28),
-                      border: Border.all(color: Colors.white.withOpacity(0.3), width: 2),
+                      color: Colors.white.withOpacity(0.16),
+                      borderRadius: BorderRadius.circular(32),
+                      border: Border.all(
+                          color: Colors.white.withOpacity(0.3), width: 2),
                     ),
-                    child: const Icon(Icons.account_balance_rounded, size: 52, color: Colors.white),
+                    child: Image.asset(
+                      'assets/images/meet_the_masters_logo.png',
+                      fit: BoxFit.contain,
+                    ),
                   ),
                   const SizedBox(height: 24),
                   Text(
-                    'FINADVISE',
+                    'MEET THE MASTERS',
                     style: GoogleFonts.inter(
                       color: Colors.white,
-                      fontSize: 32,
+                      fontSize: 28,
                       fontWeight: FontWeight.w800,
-                      letterSpacing: 4,
+                      letterSpacing: 2.4,
                     ),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'SEBI Certified Financial Advisory',
+                    'Experience the Experience',
                     style: GoogleFonts.inter(
-                      color: Colors.white.withOpacity(0.7),
+                      color: Colors.white.withOpacity(0.78),
                       fontSize: 13,
                       letterSpacing: 0.5,
                     ),
@@ -178,9 +229,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                     width: 32,
                     height: 32,
                     child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2.5,
-                    ),
+                        color: Colors.white, strokeWidth: 2.5),
                   ),
                 ],
               ),

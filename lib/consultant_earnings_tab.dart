@@ -145,7 +145,7 @@ class _ConsultantEarningsTabState extends State<ConsultantEarningsTab> {
 
           // Monthly breakdown
           if (_monthlyBreakdown.isNotEmpty) ...[
-            const SectionHeader(title: 'Monthly Breakdown'),
+            SectionHeader(title: 'Monthly Breakdown'),
             const SizedBox(height: 10),
             Container(
               padding: const EdgeInsets.all(16),
@@ -187,7 +187,7 @@ class _ConsultantEarningsTabState extends State<ConsultantEarningsTab> {
 
           // Recent completed sessions
           if (_completed.isNotEmpty) ...[
-            const SectionHeader(title: 'Completed Sessions'),
+            SectionHeader(title: 'Completed Sessions'),
             const SizedBox(height: 10),
             ..._completed.take(10).map((b) => Card(
               margin: const EdgeInsets.only(bottom: 8),
