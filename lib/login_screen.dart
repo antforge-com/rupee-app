@@ -17,6 +17,7 @@ import 'package:provider/provider.dart';
 import 'app_theme.dart';
 import 'package:finadvise/services/services.dart';
 import 'services/user_service.dart';
+import 'meet_the_masters_brand.dart';
 import 'reset_password_screen.dart';
 import 'force_password_change_screen.dart';
 import 'admin-dashboard.dart';
@@ -316,34 +317,15 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Widget _buildBrand() {
-    return Column(
-      children: [
-        Container(
-          width: 84,
-          height: 84,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.15),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: Colors.white.withOpacity(0.3), width: 1.5),
-          ),
-          child: Image.asset(
-            'assets/images/meet_the_masters_logo.png',
-            fit: BoxFit.contain,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Text('MEET THE MASTERS',
-            style: GoogleFonts.inter(
-                color: Colors.white,
-                fontSize: 19,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 2.5)),
-        const SizedBox(height: 4),
-        Text('Experience the Experience',
-            style: GoogleFonts.inter(
-                color: Colors.white.withOpacity(0.78), fontSize: 12)),
-      ],
+    return const MeetTheMastersBrand(
+      onDark: true,
+      logoSize: 94,
+      logoPadding: 13,
+      titleSize: 23,
+      subtitleSize: 12.5,
+      titleLetterSpacing: 3.8,
+      gap: 10,
+      showAmbientGlow: true,
     );
   }
 

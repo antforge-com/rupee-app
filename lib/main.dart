@@ -15,12 +15,12 @@ import 'package:finadvise/services/services.dart';
 import 'package:finadvise/consultant-dashboard.dart';
 import 'package:finadvise/force_password_change_screen.dart';
 import 'package:finadvise/login_screen.dart';
+import 'package:finadvise/meet_the_masters_brand.dart';
 import 'package:finadvise/public_contact_screen.dart';
 import 'package:finadvise/register_screen.dart';
 import 'package:finadvise/user-dashboard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 void main() async {
@@ -187,49 +187,27 @@ class _SplashScreenState extends State<SplashScreen>
             opacity: _fadeAnim,
             child: ScaleTransition(
               scale: _scaleAnim,
-              child: Column(
+              child: const Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Container(
-                    width: 112,
-                    height: 112,
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.16),
-                      borderRadius: BorderRadius.circular(32),
-                      border: Border.all(
-                          color: Colors.white.withOpacity(0.3), width: 2),
-                    ),
-                    child: Image.asset(
-                      'assets/images/meet_the_masters_logo.png',
-                      fit: BoxFit.contain,
-                    ),
+                  MeetTheMastersBrand(
+                    onDark: true,
+                    logoSize: 122,
+                    logoPadding: 16,
+                    titleSize: 29,
+                    subtitleSize: 13.5,
+                    titleLetterSpacing: 4.0,
+                    gap: 18,
+                    showAmbientGlow: true,
                   ),
-                  const SizedBox(height: 24),
-                  Text(
-                    'MEET THE MASTERS',
-                    style: GoogleFonts.inter(
-                      color: Colors.white,
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 2.4,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Experience the Experience',
-                    style: GoogleFonts.inter(
-                      color: Colors.white.withOpacity(0.78),
-                      fontSize: 13,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 64),
-                  const SizedBox(
+                  SizedBox(height: 56),
+                  SizedBox(
                     width: 32,
                     height: 32,
                     child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2.5),
+                      color: Colors.white,
+                      strokeWidth: 2.5,
+                    ),
                   ),
                 ],
               ),

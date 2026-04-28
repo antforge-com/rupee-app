@@ -279,6 +279,7 @@ class _BookingItem {
   final String status;
   final String? meetingMode;
   final double amount;
+  final String? paymentStatus;
   final String? meetingLink;
   final bool isSpecial;
   final String? specialStatus;
@@ -295,6 +296,7 @@ class _BookingItem {
     this.timeRange,
     this.meetingMode,
     this.amount = 0,
+    this.paymentStatus,
     this.meetingLink,
     this.isSpecial = false,
     this.specialStatus,
@@ -312,24 +314,28 @@ class _BookingItem {
         timeRange: b.timeRange,
         meetingMode: b.meetingMode,
         amount: b.amount ?? 0,
+        paymentStatus: b.paymentStatus,
         meetingLink: b.meetingLink,
       );
 
   _BookingItem copyWith({
     String? status,
     String? meetingLink,
+    String? consultantName,
+    String? clientName,
   }) {
     return _BookingItem(
       id: id,
       status: status ?? this.status,
       userId: userId,
       consultantId: consultantId,
-      consultantName: consultantName,
-      clientName: clientName,
+      consultantName: consultantName ?? this.consultantName,
+      clientName: clientName ?? this.clientName,
       slotDate: slotDate,
       timeRange: timeRange,
       meetingMode: meetingMode,
       amount: amount,
+      paymentStatus: paymentStatus,
       meetingLink: meetingLink ?? this.meetingLink,
       isSpecial: isSpecial,
       specialStatus: specialStatus,
@@ -360,6 +366,8 @@ class _BookingsPageState extends State<BookingsPage> {
 
   List<_BookingItem> _regularBookings = [];
   List<_BookingItem> _specialBookings = [];
+  Map<int, String> _userNames = {};
+  Map<int, String> _consultantNames = {};
 
   bool _loading = true;
   bool _loadingMore = false;
@@ -405,6 +413,110 @@ class _BookingsPageState extends State<BookingsPage> {
   List<_BookingItem> get _mergedBookings =>
       _sortChronologically([..._specialBookings, ..._regularBookings]);
 
+  String _normalizeName(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return '';
+    final lower = text.toLowerCase();
+    if (lower == 'null' || lower == 'undefined') return '';
+    if (text.contains('@')) {
+      final local = text.split('@').first;
+      final cleaned = local
+          .replaceAll(RegExp(r'[._\-]+'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (cleaned.isNotEmpty) {
+        return cleaned
+            .split(' ')
+            .where((p) => p.isNotEmpty)
+            .map((p) =>
+                '${p.substring(0, 1).toUpperCase()}${p.substring(1).toLowerCase()}')
+            .join(' ');
+      }
+    }
+    return text;
+  }
+
+  String _displayClientName(_BookingItem booking) {
+    final direct = _normalizeName(booking.clientName ?? '');
+    if (direct.isNotEmpty && direct.toLowerCase() != 'client') return direct;
+    final id = booking.userId;
+    if (id != null && _userNames[id]?.trim().isNotEmpty == true) {
+      return _userNames[id]!.trim();
+    }
+    if (direct.isNotEmpty) return direct;
+    return id != null ? 'User #$id' : 'Client';
+  }
+
+  String _displayConsultantName(_BookingItem booking) {
+    final direct = _normalizeName(booking.consultantName ?? '');
+    if (direct.isNotEmpty && direct.toLowerCase() != 'consultant') {
+      return direct;
+    }
+    final id = booking.consultantId;
+    if (id != null && _consultantNames[id]?.trim().isNotEmpty == true) {
+      return _consultantNames[id]!.trim();
+    }
+    if (direct.isNotEmpty) return direct;
+    return id != null ? 'Consultant #$id' : 'Consultant';
+  }
+
+  bool _isRevenueBooking(_BookingItem booking) {
+    final status = booking.statusUpper;
+    final payment = (booking.paymentStatus ?? '').toUpperCase();
+    return status == 'COMPLETED' ||
+        payment == 'SUCCESS' ||
+        payment == 'PAID' ||
+        payment == 'CAPTURED';
+  }
+
+  Future<Map<String, Map<int, String>>> _fetchNameLookups() async {
+    final users = <int, String>{};
+    final consultants = <int, String>{};
+
+    try {
+      final userResp = await _dio.get('/api/users');
+      final userRows = _extractArray(
+        userResp.data,
+        keys: const ['content', 'data', 'items', 'users'],
+      );
+      for (final raw in userRows.whereType<Map>()) {
+        final row = Map<String, dynamic>.from(raw);
+        final id = _toInt(row['id'] ?? row['userId']);
+        if (id == null) continue;
+        final name = _normalizeName(
+          (row['name'] ??
+                  row['fullName'] ??
+                  row['displayName'] ??
+                  row['identifier'] ??
+                  row['email'] ??
+                  '')
+              .toString(),
+        );
+        if (name.isNotEmpty) users[id] = name;
+      }
+    } catch (_) {}
+
+    try {
+      final consultantResp = await _dio.get('/api/consultants');
+      final consultantRows = _extractArray(
+        consultantResp.data,
+        keys: const ['content', 'data', 'items', 'consultants'],
+      );
+      for (final raw in consultantRows.whereType<Map>()) {
+        final row = Map<String, dynamic>.from(raw);
+        final id = _toInt(row['id'] ?? row['consultantId']);
+        if (id == null) continue;
+        final name = _normalizeName(
+          (row['name'] ?? row['fullName'] ?? row['displayName'] ?? '')
+              .toString(),
+        );
+        if (name.isNotEmpty) consultants[id] = name;
+      }
+    } catch (_) {}
+
+    return {'users': users, 'consultants': consultants};
+  }
+
   List<_BookingItem> get _filtered {
     List<_BookingItem> list = _mergedBookings;
     if (_filter == 'SPECIAL') {
@@ -415,8 +527,8 @@ class _BookingsPageState extends State<BookingsPage> {
     if (_search.isNotEmpty) {
       final q = _search.toLowerCase();
       list = list.where((b) {
-        return (b.clientName ?? '').toLowerCase().contains(q) ||
-            (b.consultantName ?? '').toLowerCase().contains(q) ||
+        return _displayClientName(b).toLowerCase().contains(q) ||
+            _displayConsultantName(b).toLowerCase().contains(q) ||
             b.id.toString().contains(q);
       }).toList();
     }
@@ -437,7 +549,7 @@ class _BookingsPageState extends State<BookingsPage> {
   }
 
   double get _revenue => _mergedBookings
-      .where((b) => b.statusUpper == 'COMPLETED')
+      .where(_isRevenueBooking)
       .fold(0.0, (sum, b) => sum + b.amount);
 
   Future<void> _load({bool reset = false, bool silent = false}) async {
@@ -470,16 +582,33 @@ class _BookingsPageState extends State<BookingsPage> {
       final specialFuture =
           reset ? _fetchSpecialBookings() : Future.value(_specialBookings);
 
-      final results =
-          await Future.wait<dynamic>([regularFuture, specialFuture]);
+      final results = await Future.wait<dynamic>([
+        regularFuture,
+        specialFuture,
+        if (reset)
+          _fetchNameLookups()
+        else
+          Future.value({
+            'users': _userNames,
+            'consultants': _consultantNames,
+          }),
+      ]);
       final regularPage = results[0] as _RegularPageResult;
       final specialItems = results[1] as List<_BookingItem>;
+      final lookupRaw = results[2] as Map;
+      final usersLookup =
+          Map<int, String>.from((lookupRaw['users'] as Map?) ?? const {});
+      final consultantsLookup = Map<int, String>.from(
+        (lookupRaw['consultants'] as Map?) ?? const {},
+      );
 
       if (!mounted) return;
       setState(() {
         if (reset) {
           _regularBookings = regularPage.items;
           _specialBookings = specialItems;
+          _userNames = usersLookup;
+          _consultantNames = consultantsLookup;
         } else {
           _regularBookings.addAll(regularPage.items);
         }
@@ -640,8 +769,17 @@ class _BookingsPageState extends State<BookingsPage> {
         _BookingItem(
           id: id,
           status: displayStatus,
-          userId: _toInt(row['userId'] ?? row['user_id']),
-          consultantId: _toInt(row['consultantId']) ?? consultantId,
+          userId: _toInt(
+            row['userId'] ??
+                row['user_id'] ??
+                (row['user'] is Map ? row['user']['id'] : null),
+          ),
+          consultantId: _toInt(
+                row['consultantId'] ??
+                    row['consultant_id'] ??
+                    (row['consultant'] is Map ? row['consultant']['id'] : null),
+              ) ??
+              consultantId,
           consultantName: advisorName.isEmpty ? 'Consultant' : advisorName,
           clientName: userName.isEmpty ? 'Client' : userName,
           slotDate: date.isEmpty ? null : date,
@@ -656,8 +794,15 @@ class _BookingsPageState extends State<BookingsPage> {
                 row['totalAmount'] ??
                 row['total_amount'] ??
                 row['amount'] ??
+                row['baseAmount'] ??
+                row['paidAmount'] ??
                 row['charges'],
           ),
+          paymentStatus: _firstNonEmpty([
+            row['paymentStatus'],
+            row['payment_status'],
+            row['payment'] is Map ? row['payment']['status'] : null,
+          ]),
           isSpecial: true,
           specialStatus: rawStatus.isEmpty ? null : rawStatus,
           duration: duration,
@@ -995,18 +1140,26 @@ class _BookingsPageState extends State<BookingsPage> {
                           if (i >= filtered.length)
                             return const SizedBox.shrink();
                           final booking = filtered[i];
+                          final clientDisplayName = _displayClientName(booking);
+                          final consultantDisplayName =
+                              _displayConsultantName(booking);
                           return _BookingCard(
                             booking: booking,
                             isAdmin: widget.isAdmin,
+                            clientDisplayName: clientDisplayName,
+                            consultantDisplayName: consultantDisplayName,
                             onViewAnswers: () => Navigator.push(
                               context,
                               MaterialPageRoute(
                                 builder: (_) => BookingAnswersScreen(
-                                  bookingId: booking.isSpecial ? null : booking.id,
-                                  specialBookingId: booking.isSpecial ? booking.id : null,
-                                  bookingType: booking.isSpecial ? 'SPECIAL' : 'NORMAL',
+                                  bookingId:
+                                      booking.isSpecial ? null : booking.id,
+                                  specialBookingId:
+                                      booking.isSpecial ? booking.id : null,
+                                  bookingType:
+                                      booking.isSpecial ? 'SPECIAL' : 'NORMAL',
                                   userId: booking.userId,
-                                  clientName: booking.clientName ?? 'Client',
+                                  clientName: clientDisplayName,
                                 ),
                               ),
                             ),
@@ -1033,6 +1186,8 @@ class _BookingsPageState extends State<BookingsPage> {
 class _BookingCard extends StatelessWidget {
   final _BookingItem booking;
   final bool isAdmin;
+  final String clientDisplayName;
+  final String consultantDisplayName;
   final VoidCallback onCancel;
   final VoidCallback? onViewAnswers;
   final VoidCallback? onConfirm;
@@ -1042,6 +1197,8 @@ class _BookingCard extends StatelessWidget {
   const _BookingCard({
     required this.booking,
     required this.isAdmin,
+    required this.clientDisplayName,
+    required this.consultantDisplayName,
     required this.onCancel,
     this.onViewAnswers,
     this.onConfirm,
@@ -1064,7 +1221,7 @@ class _BookingCard extends StatelessWidget {
         b.specialStatusUpper == 'REQUESTED' &&
         _string(b.slotDate).isEmpty;
 
-    final who = (b.clientName ?? b.consultantName ?? '').trim();
+    final who = isAdmin ? clientDisplayName : consultantDisplayName;
     final initial = who.isNotEmpty ? who[0].toUpperCase() : '#';
 
     return Container(
@@ -1112,8 +1269,8 @@ class _BookingCard extends StatelessWidget {
                           Expanded(
                             child: Text(
                               isAdmin
-                                  ? (b.clientName ?? 'User #${b.userId ?? ''}')
-                                  : (b.consultantName ?? 'Consultant'),
+                                  ? clientDisplayName
+                                  : consultantDisplayName,
                               style: AppTextStyles.h4,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -1141,8 +1298,8 @@ class _BookingCard extends StatelessWidget {
                       ),
                       Text(
                         isAdmin
-                            ? (b.consultantName ?? 'Consultant')
-                            : (b.clientName ?? ''),
+                            ? 'Consultant: $consultantDisplayName'
+                            : 'Client: $clientDisplayName',
                         style: AppTextStyles.caption,
                         overflow: TextOverflow.ellipsis,
                       ),

@@ -24,6 +24,141 @@ class AnalyticsPeriod {
 class AnalyticsService {
   final ApiClient _apiClient = ApiClient();
 
+  static const List<String> _listKeys = [
+    'content', 'data', 'items', 'tickets', 'bookings', 'rows', 'records',
+    'messages', 'submissions', 'results',
+  ];
+
+  static const List<String> _mapKeys = [
+    'data', 'payload', 'result', 'analytics', 'summary', 'summaries',
+    'response', 'page',
+  ];
+
+  Map<String, dynamic>? _asMap(dynamic value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) {
+      return value.map((key, val) => MapEntry(key.toString(), val));
+    }
+    return null;
+  }
+
+  List<Map<String, dynamic>> _asMapList(dynamic value,
+      {List<String> keys = _listKeys}) {
+    List<Map<String, dynamic>> toMapList(List<dynamic> list) => list
+        .map(_asMap)
+        .whereType<Map<String, dynamic>>()
+        .toList(growable: false);
+
+    dynamic findList(dynamic raw, int depth) {
+      if (depth > 6 || raw == null) return null;
+      if (raw is List) return raw;
+      final map = _asMap(raw);
+      if (map == null) return null;
+      for (final key in keys) {
+        final candidate = map[key];
+        if (candidate is List) return candidate;
+      }
+      for (final entry in map.entries) {
+        if (keys.contains(entry.key)) continue;
+        final nested = findList(entry.value, depth + 1);
+        if (nested is List) return nested;
+      }
+      return null;
+    }
+
+    final list = findList(value, 0);
+    if (list is List) return toMapList(list.cast<dynamic>());
+    return const [];
+  }
+
+  int _toInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse('${value ?? ''}') ?? 0;
+  }
+
+  Future<List<Map<String, dynamic>>> _getAllFeedbacks() async {
+    try {
+      final response = await _apiClient.dio.get('/api/feedbacks');
+      return _asMapList(response.data);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// GET /api/analytics/tickets/all or /api/tickets — Fetch all tickets for analytics
+  Future<List<Map<String, dynamic>>> getAnalyticsTicketsAll({
+    int fallbackSize = 500,
+  }) async {
+    final requests = [
+      () => _apiClient.dio.get('/api/analytics/tickets/all'),
+      () => _apiClient.dio.get('/analytics/tickets/all'),
+      () => _apiClient.dio.get(
+            '/api/tickets',
+            queryParameters: {
+              'page': 0,
+              'size': fallbackSize,
+              'sortBy': 'createdAt'
+            },
+          ),
+      () => _apiClient.dio.get(
+            '/api/tickets',
+            queryParameters: {'size': fallbackSize},
+          ),
+    ];
+
+    for (var i = 0; i < requests.length; i++) {
+      final request = requests[i];
+      try {
+        final response = await request();
+        final items = _asMapList(response.data);
+        if (items.isEmpty) continue;
+
+        // If paginated ticket API is used, fetch remaining pages as well.
+        if (i >= 2) {
+          final root = _asMap(response.data) ?? const <String, dynamic>{};
+          final totalPages = _toInt(root['totalPages'] ?? root['pages']);
+          if (totalPages > 1) {
+            final size = _toInt(root['size'] ?? root['pageSize']);
+            final pageSize = size > 0 ? size : fallbackSize;
+            final all = <Map<String, dynamic>>[...items];
+            for (var page = 1; page < totalPages; page++) {
+              try {
+                final next = await _apiClient.dio.get(
+                  '/api/tickets',
+                  queryParameters: {
+                    'page': page,
+                    'size': pageSize,
+                    'sortBy': 'createdAt',
+                  },
+                );
+                all.addAll(_asMapList(next.data));
+              } catch (_) {
+                // Best effort: keep rows fetched so far.
+              }
+            }
+
+            final seen = <String>{};
+            final deduped = all.where((row) {
+              final key = '${row['id'] ?? row['ticketId'] ?? ''}'.trim();
+              if (key.isEmpty) return true;
+              if (seen.contains(key)) return false;
+              seen.add(key);
+              return true;
+            }).toList(growable: false);
+            if (deduped.isNotEmpty) return deduped;
+          }
+        }
+
+        return items;
+      } catch (_) {
+        // Try next endpoint variant.
+      }
+    }
+
+    return [];
+  }
+
   // ── PERIOD-BASED ──────────────────────────────────────────────────────────
 
   /// GET /api/dashboard/analytics?period=WEEKLY

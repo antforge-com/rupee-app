@@ -48,7 +48,6 @@ class StaticContentService {
       return [];
     }
   }
-
   /// POST /api/contact/public/submit — Submit contact form (Public)
   Future<bool> submitContactMessage({
     required String name,
@@ -101,5 +100,43 @@ class StaticContentService {
   /// Backend currently does not expose a clear-all-contact-messages endpoint.
   Future<bool> clearAllMessages() async {
     return false;
+  }
+
+  /// GET /api/terms/versions — Fetch all terms & conditions versions
+  Future<List<Map<String, dynamic>>> getTermsVersions() async {
+    try {
+      final response = await _apiClient.dio.get('/api/terms/versions');
+      if (response.data is List) {
+        return response.data
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      }
+      if (response.data is Map && response.data['versions'] is List) {
+        return (response.data['versions'] as List)
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// POST /api/terms/publish — Publish a new terms & conditions version
+  Future<bool> publishTerms({
+    required String content,
+    String? version,
+  }) async {
+    try {
+      await _apiClient.dio.post('/api/terms/publish', data: {
+        'content': content,
+        if (version != null && version.isNotEmpty) 'version': version,
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 }

@@ -5000,7 +5000,7 @@ class _SettingsTab extends StatefulWidget {
 
 class _SettingsTabState extends State<_SettingsTab> {
   String _view =
-      'menu'; // menu | profile | security | plans | contact | notifications | terms
+      'menu'; // menu | profile | security | plans | contact
   Map<String, dynamic> _profile = {};
   bool _loadingProfile = false;
 
@@ -5053,11 +5053,6 @@ class _SettingsTabState extends State<_SettingsTab> {
             });
       case 'contact':
         return _ContactView(onBack: () => setState(() => _view = 'menu'));
-      case 'notifications':
-        return _NotificationsPrefsView(
-            onBack: () => setState(() => _view = 'menu'));
-      case 'terms':
-        return _TermsView(onBack: () => setState(() => _view = 'menu'));
       default:
         return _SettingsMenu(
             user: widget.user,
@@ -5164,10 +5159,6 @@ class _SettingsMenu extends StatelessWidget {
               'Edit your personal info', () => onNav('profile'),
               color: _C.blue),
           _divider(),
-          _menuItem(Icons.notifications_rounded, 'Notifications',
-              'Manage alert preferences', () => onNav('notifications'),
-              color: _C.blue),
-          _divider(),
           _menuItem(Icons.card_membership_rounded, 'Subscription Plan',
               'Manage your plan — $plan', () => onNav('plans'),
               color: _C.purple),
@@ -5179,10 +5170,6 @@ class _SettingsMenu extends StatelessWidget {
           _menuItem(Icons.mail_rounded, 'Contact Us',
               'Reach out to our support team', () => onNav('contact'),
               color: _C.success),
-          _divider(),
-          _menuItem(Icons.gavel_rounded, 'Terms & Conditions',
-              'Read our terms and privacy policy', () => onNav('terms'),
-              color: _C.indigo),
         ]),
       ),
 

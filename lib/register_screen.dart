@@ -4,7 +4,7 @@
 //   - Full Name, Mobile (+91), Email + OTP verification, Location (optional)
 //   - 6-box OTP entry with paste support, resend countdown (60s)
 //   - Subscription plan selection (fetched from /subscription-plans)
-//   - POST /users/send-otp → POST /users/check-otp → POST /onboarding
+//   - POST /users/send-otp → optional POST /users/check-otp → POST /onboarding
 //   - Guests (discountPrice == 0) vs Premium plans
 //   - On success → redirect to login after 2.5s
 // ════════════════════════════════════════════════════════════════════════════
@@ -15,6 +15,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'app_theme.dart';
+import 'meet_the_masters_brand.dart';
 import 'package:finadvise/services/services.dart';
 import 'services/onboarding_service.dart';
 import 'services/subscription_service.dart';
@@ -389,31 +390,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   Widget _buildRegisterBrand() {
-    return Column(
-      children: [
-        Container(
-          width: 42,
-          height: 42,
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: const Color(0xFFEFF6FF),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Image.asset(
-            'assets/images/meet_the_masters_logo.png',
-            fit: BoxFit.contain,
-          ),
-        ),
-        const SizedBox(height: 6),
-        const Text('MEET THE MASTERS',
-            style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 2,
-                color: Color(0xFF2563EB))),
-        const Text('Create Your Account',
-            style: TextStyle(fontSize: 9, color: Color(0xFF64748B))),
-      ],
+    return const MeetTheMastersBrand(
+      subtitle: 'Create Your Account',
+      logoSize: 40,
+      logoPadding: 6,
+      titleSize: 12.5,
+      subtitleSize: 9.5,
+      titleLetterSpacing: 2.1,
+      gap: 6,
+      titleColor: AppColors.brandBlue,
+      showAmbientGlow: false,
     );
   }
 

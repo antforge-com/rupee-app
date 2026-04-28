@@ -67,21 +67,36 @@ class TicketService {
     String sortBy = 'createdAt',
     bool useAnalytics = false,
   }) async {
-    try {
-      final endpoint = useAnalytics ? '/api/analytics/tickets/all' : '/api/tickets';
-      final response = await _apiClient.dio.get(
-        endpoint,
-        queryParameters: useAnalytics ? {} : {'page': page, 'size': size, 'sortBy': sortBy},
-      );
-      final list = _extractArray(response.data,
-          keys: const ['content', 'data', 'items', 'tickets']);
-      return list
-          .whereType<Map>()
-          .map((e) => Ticket.fromJson(Map<String, dynamic>.from(e)))
-          .toList();
-    } catch (_) {
-      return [];
+    final requests = [
+      if (useAnalytics)
+        (
+          path: '/api/analytics/tickets/all',
+          query: <String, dynamic>{},
+        ),
+      (
+        path: '/api/tickets',
+        query: <String, dynamic>{'page': page, 'size': size, 'sortBy': sortBy},
+      ),
+    ];
+
+    for (final request in requests) {
+      try {
+        final response = await _apiClient.dio.get(
+          request.path,
+          queryParameters: request.query,
+        );
+        final list = _extractArray(response.data,
+            keys: const ['content', 'data', 'items', 'tickets']);
+        return list
+            .whereType<Map>()
+            .map((e) => Ticket.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+      } catch (_) {
+        // Try the next compatible endpoint.
+      }
     }
+
+    return [];
   }
 
   Future<Ticket?> getTicketById(int ticketId) async {

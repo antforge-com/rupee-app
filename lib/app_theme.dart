@@ -31,20 +31,20 @@ class AppColors {
   static const Color textMuted = Color(0xFF94A3B8);
 
   // Ticket status colors
-  static const Color statusNew = Color(0xFF8B5CF6);
-  static const Color statusOpen = Color(0xFF06B6D4);
-  static const Color statusInProgress = Color(0xFF2563EB);
-  static const Color statusPending = Color(0xFFF59E0B);
-  static const Color statusResolved = Color(0xFF22C55E);
+  static const Color statusNew = Color(0xFF6366F1);
+  static const Color statusOpen = Color(0xFF0F766E);
+  static const Color statusInProgress = Color(0xFFD97706);
+  static const Color statusPending = Color(0xFFD97706);
+  static const Color statusResolved = Color(0xFF16A34A);
   static const Color statusClosed = Color(0xFF64748B);
-  static const Color statusEscalated = Color(0xFFEF4444);
+  static const Color statusEscalated = Color(0xFFDC2626);
 
   // Priority colors
-  static const Color priorityLow = Color(0xFF22C55E);
-  static const Color priorityMedium = Color(0xFF2563EB);
-  static const Color priorityHigh = Color(0xFFF97316);
-  static const Color priorityUrgent = Color(0xFFEF4444);
-  static const Color priorityCritical = Color(0xFF7C0000);
+  static const Color priorityLow = Color(0xFF16A34A);
+  static const Color priorityMedium = Color(0xFFD97706);
+  static const Color priorityHigh = Color(0xFFEA580C);
+  static const Color priorityUrgent = Color(0xFFDC2626);
+  static const Color priorityCritical = Color(0xFF7C3AED);
 }
 
 class AppGradients {
@@ -63,7 +63,12 @@ class AppGradients {
   static const LinearGradient premium = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF92400E), Color(0xFFB45309), AppColors.secondary, AppColors.gold],
+    colors: [
+      Color(0xFF92400E),
+      Color(0xFFB45309),
+      AppColors.secondary,
+      AppColors.gold
+    ],
   );
 }
 
@@ -141,7 +146,8 @@ class AppTheme {
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: AppColors.danger),
         ),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         labelStyle: const TextStyle(color: AppColors.textSecondary),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
@@ -150,8 +156,10 @@ class AppTheme {
           foregroundColor: Colors.white,
           elevation: 0,
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          textStyle: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w600),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          textStyle:
+              GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w600),
         ),
       ),
       chipTheme: ChipThemeData(
@@ -159,7 +167,8 @@ class AppTheme {
         selectedColor: AppColors.primaryLight,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
-      dividerTheme: const DividerThemeData(color: AppColors.border, thickness: 1),
+      dividerTheme:
+          const DividerThemeData(color: AppColors.border, thickness: 1),
       bottomNavigationBarTheme: const BottomNavigationBarThemeData(
         backgroundColor: AppColors.surface,
         selectedItemColor: AppColors.primaryLight,
@@ -173,14 +182,26 @@ class AppTheme {
 
 // App-level text styles
 class AppTextStyles {
-  static TextStyle get h1 => GoogleFonts.inter(fontSize: 28, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
-  static TextStyle get h2 => GoogleFonts.inter(fontSize: 22, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
-  static TextStyle get h3 => GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textPrimary);
-  static TextStyle get h4 => GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary);
-  static TextStyle get body => GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w400, color: AppColors.textPrimary);
-  static TextStyle get bodySmall => GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w400, color: AppColors.textSecondary);
-  static TextStyle get label => GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500, color: AppColors.textSecondary);
-  static TextStyle get caption => GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w400, color: AppColors.textMuted);
+  static TextStyle get h1 => GoogleFonts.inter(
+      fontSize: 28, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
+  static TextStyle get h2 => GoogleFonts.inter(
+      fontSize: 22, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
+  static TextStyle get h3 => GoogleFonts.inter(
+      fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textPrimary);
+  static TextStyle get h4 => GoogleFonts.inter(
+      fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary);
+  static TextStyle get body => GoogleFonts.inter(
+      fontSize: 14, fontWeight: FontWeight.w400, color: AppColors.textPrimary);
+  static TextStyle get bodySmall => GoogleFonts.inter(
+      fontSize: 12,
+      fontWeight: FontWeight.w400,
+      color: AppColors.textSecondary);
+  static TextStyle get label => GoogleFonts.inter(
+      fontSize: 13,
+      fontWeight: FontWeight.w500,
+      color: AppColors.textSecondary);
+  static TextStyle get caption => GoogleFonts.inter(
+      fontSize: 11, fontWeight: FontWeight.w400, color: AppColors.textMuted);
 }
 
 // App-level spacings
@@ -196,24 +217,38 @@ class AppSpacing {
 // Status → Color helpers
 Color getStatusColor(String status) {
   switch (status.toUpperCase()) {
-    case 'NEW': return AppColors.statusNew;
-    case 'OPEN': return AppColors.statusOpen;
-    case 'IN_PROGRESS': return AppColors.statusInProgress;
-    case 'PENDING': return AppColors.statusPending;
-    case 'RESOLVED': return AppColors.statusResolved;
-    case 'CLOSED': return AppColors.statusClosed;
-    case 'ESCALATED': return AppColors.statusEscalated;
-    default: return AppColors.textMuted;
+    case 'NEW':
+      return AppColors.statusNew;
+    case 'OPEN':
+      return AppColors.statusOpen;
+    case 'IN_PROGRESS':
+      return AppColors.statusInProgress;
+    case 'PENDING':
+      return AppColors.statusPending;
+    case 'RESOLVED':
+      return AppColors.statusResolved;
+    case 'CLOSED':
+      return AppColors.statusClosed;
+    case 'ESCALATED':
+      return AppColors.statusEscalated;
+    default:
+      return AppColors.textMuted;
   }
 }
 
 Color getPriorityColor(String priority) {
   switch (priority.toUpperCase()) {
-    case 'LOW': return AppColors.priorityLow;
-    case 'MEDIUM': return AppColors.priorityMedium;
-    case 'HIGH': return AppColors.priorityHigh;
-    case 'URGENT': return AppColors.priorityUrgent;
-    case 'CRITICAL': return AppColors.priorityCritical;
-    default: return AppColors.textMuted;
+    case 'LOW':
+      return AppColors.priorityLow;
+    case 'MEDIUM':
+      return AppColors.priorityMedium;
+    case 'HIGH':
+      return AppColors.priorityHigh;
+    case 'URGENT':
+      return AppColors.priorityUrgent;
+    case 'CRITICAL':
+      return AppColors.priorityCritical;
+    default:
+      return AppColors.textMuted;
   }
 }

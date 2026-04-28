@@ -1,0 +1,20 @@
+﻿// lib/services/all_services.dart
+// Comprehensive export of all API services
+export 'booking_service_ext.dart';
+export 'feedback_service_ext.dart';
+export 'offer_service_ext.dart';
+export 'notification_service_ext.dart';
+export 'timeslot_service_ext.dart';
+export 'question_service_ext.dart';
+export 'special_booking_service_ext.dart';
+export 'analytics_service_ext.dart';
+export 'contact_message_service_ext.dart';
+export 'email_to_ticket_service_ext.dart';
+export 'skill_master_service_ext.dart';
+export 'master_timeslot_service_ext.dart';
+export 'subscription_service_ext.dart';
+export 'system_settings_service_ext.dart';
+export 'dashboard_service_ext.dart';
+export 'user_service_ext.dart';
+export 'consultant_service_ext.dart';
+export 'auth.service.dart';

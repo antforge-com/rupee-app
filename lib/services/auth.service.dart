@@ -3,7 +3,7 @@
 // Matches api.ts exactly:
 //   POST /api/users/authenticate        → login (clears token first)
 //   POST /api/users/send-otp            → sendRegistrationOtp
-//   POST /api/users/check-otp           → checkOtp (validates without consuming)
+//   POST /api/users/check-otp           → optional legacy checkOtp endpoint
 //   POST /api/users/forgot-password     → forgotPassword
 //   POST /api/users/reset-password      → resetPassword
 //   PUT  /api/users/change-password     → changePassword
@@ -11,6 +11,7 @@
 //   requiresPasswordChange detection + local flag management
 // ════════════════════════════════════════════════════════════════════════════
 
+import 'package:dio/dio.dart';
 import 'package:finadvise/api_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
@@ -219,25 +220,38 @@ class AuthService {
     }
   }
 
-  // ── CHECK OTP (validate without consuming) ────────────────────────────────
+  // ── CHECK OTP (legacy optional endpoint) ─────────────────────────────────
 
   /// POST /api/users/check-otp
-  /// Validates OTP without marking as used — RegisterPage.tsx calls this
-  /// before /onboarding to give immediate feedback
+  /// Some backend deployments do not expose this endpoint.
+  /// In that case we accept a well-formed OTP locally and let
+  /// POST /api/onboarding perform the real verification.
   Future<OtpResult> checkOtp({
     required String email,
     required String otp,
   }) async {
+    final normalizedEmail = email.trim();
+    final normalizedOtp = otp.trim();
+    if (!RegExp(r'^\d{6}$').hasMatch(normalizedOtp)) {
+      return const OtpResult(success: false, error: 'OTP must be exactly 6 digits');
+    }
+
     try {
       await _apiClient.dio.post(
         '/api/users/check-otp',
         data: {
-          'email': email.trim(),
-          'otp': otp.trim(),
+          'email': normalizedEmail,
+          'otp': normalizedOtp,
         },
       );
       return const OtpResult(success: true, message: 'OTP verified');
     } catch (e) {
+      if (_isMissingEndpoint(e)) {
+        return const OtpResult(
+          success: true,
+          message: 'OTP saved. It will be verified during registration.',
+        );
+      }
       return OtpResult(success: false, error: _extractError(e));
     }
   }
@@ -340,5 +354,13 @@ class AuthService {
       }
     } catch (_) {}
     return e.toString();
+  }
+
+  bool _isMissingEndpoint(dynamic e) {
+    if (e is DioException) {
+      final status = e.response?.statusCode ?? 0;
+      return status == 404 || status == 405 || status == 501;
+    }
+    return false;
   }
 }

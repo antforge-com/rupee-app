@@ -13,6 +13,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:finadvise/app_theme.dart';
+import 'package:finadvise/meet_the_masters_brand.dart';
 import 'package:finadvise/services/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -236,26 +237,16 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
         Center(
           child: Column(
             children: [
-              Container(
-                width: 54,
-                height: 54,
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEFF6FF),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Image.asset(
-                  'assets/images/meet_the_masters_logo.png',
-                  fit: BoxFit.contain,
-                ),
+              const MeetTheMastersBrand(
+                subtitle: '',
+                logoSize: 60,
+                logoPadding: 9,
+                titleSize: 18,
+                titleLetterSpacing: 2.8,
+                gap: 8,
+                titleColor: AppColors.primary,
+                showAmbientGlow: false,
               ),
-              const SizedBox(height: 12),
-              Text('MEET THE MASTERS',
-                  style: GoogleFonts.inter(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.primaryLight,
-                      letterSpacing: 3)),
               const SizedBox(height: 4),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
