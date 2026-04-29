@@ -163,7 +163,7 @@ class _AdminAdvisorsTabState extends State<AdminAdvisorsTab> {
   String _search = '';
   Timer? _pollTimer;
   
-  var _dio;
+  final Dio _dio = ApiClient().dio;
 
   @override
   void initState() {
@@ -223,8 +223,7 @@ class _AdminAdvisorsTabState extends State<AdminAdvisorsTab> {
 
   Future<bool> _hasActiveBookings(int advisorId) async {
     try {
-      var dio;
-      final res = await dio.get(
+      final res = await _dio.get(
         '/api/bookings/consultant/$advisorId',
         queryParameters: {'size': 30},
       );

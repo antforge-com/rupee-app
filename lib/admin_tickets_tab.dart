@@ -19,7 +19,6 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:finadvise/api_client.dart';
@@ -29,7 +28,6 @@ import 'package:finadvise/services/consultant_service.dart';
 import 'package:finadvise/services/ticket_service.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'ticket_detail_screen.dart';
@@ -637,6 +635,26 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
 
   // ─── Export ───────────────────────────────────────────────────────────────
 
+  Future<void> _shareTextFile({
+    required String fileName,
+    required String content,
+    required String mimeType,
+    String? subject,
+  }) async {
+    final xFile = XFile.fromData(
+      utf8.encode(content),
+      mimeType: mimeType,
+    );
+    await SharePlus.instance.share(
+      ShareParams(
+        files: [xFile],
+        fileNameOverrides: [fileName],
+        subject: subject,
+        downloadFallbackEnabled: true,
+      ),
+    );
+  }
+
   Future<void> _export() async {
     try {
       final list = _visible.isNotEmpty ? _visible : _all;
@@ -649,11 +667,13 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
           '"${_displayUserName(t)}","${_displayConsultantName(t)}","${t.createdAt ?? ''}"',
         );
       }
-      final dir = await getTemporaryDirectory();
-      final file = File(
-          '${dir.path}/tickets_${DateFormat('yyyyMMdd').format(DateTime.now())}.csv');
-      await file.writeAsString(sb.toString());
-      await Share.shareXFiles([XFile(file.path)], subject: 'Tickets Export');
+      await _shareTextFile(
+        fileName:
+            'tickets_${DateFormat('yyyyMMdd').format(DateTime.now())}.csv',
+        content: sb.toString(),
+        mimeType: 'text/csv',
+        subject: 'Tickets Export',
+      );
     } catch (_) {
       if (mounted) _toast(context, 'Export failed', error: true);
     }
@@ -662,9 +682,9 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
   Future<void> _exportTicket(Ticket ticket, {required String format}) async {
     try {
       final lower = format.toLowerCase();
-      final dir = await getTemporaryDirectory();
       final userName = _displayUserName(ticket);
       final consultantName = _displayConsultantName(ticket);
+      final ticketNo = _ticketNumber(ticket).replaceAll('/', '_');
 
       if (lower == 'xls') {
         final csv = StringBuffer(
@@ -672,10 +692,10 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
         csv.writeln(
           '"${_ticketNumber(ticket)}","${ticket.category}","$userName","$consultantName","${ticket.status}","${ticket.priority}","${ticket.createdAt ?? ''}","${(ticket.description ?? '').replaceAll('"', "'")}"',
         );
-        final file = File('${dir.path}/ticket_${ticket.id}.csv');
-        await file.writeAsString(csv.toString());
-        await Share.shareXFiles(
-          [XFile(file.path)],
+        await _shareTextFile(
+          fileName: 'ticket_$ticketNo.csv',
+          content: csv.toString(),
+          mimeType: 'text/csv',
           subject: 'Ticket ${_ticketNumber(ticket)} (XLS)',
         );
         return;
@@ -690,10 +710,10 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
         ..writeln('Priority: ${ticket.priority}')
         ..writeln('Created: ${ticket.createdAt ?? '--'}')
         ..writeln('Description: ${ticket.description ?? '--'}');
-      final file = File('${dir.path}/ticket_${ticket.id}.pdf.txt');
-      await file.writeAsString(txt.toString());
-      await Share.shareXFiles(
-        [XFile(file.path)],
+      await _shareTextFile(
+        fileName: 'ticket_$ticketNo.txt',
+        content: txt.toString(),
+        mimeType: 'text/plain',
         subject: 'Ticket ${_ticketNumber(ticket)} (PDF)',
       );
     } catch (_) {

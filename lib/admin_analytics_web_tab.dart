@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:finadvise/app_theme.dart';
+import 'package:finadvise/models/models.dart';
 import 'package:finadvise/services/analytics_service.dart';
+import 'package:finadvise/services/booking_service.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -10,11 +12,40 @@ import 'package:intl/intl.dart';
 DateTime? _analyticsDate(dynamic value) {
   final raw = '${value ?? ''}'.trim();
   if (raw.isEmpty) return null;
-  final normalized =
-      (raw.endsWith('Z') || RegExp(r'[+-]\d{2}:\d{2}$').hasMatch(raw))
-          ? raw
-          : '${raw}Z';
-  return DateTime.tryParse(normalized)?.toLocal();
+
+  final isoDateOnly = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(raw);
+  if (isoDateOnly != null) {
+    final y = int.tryParse(isoDateOnly.group(1)!);
+    final m = int.tryParse(isoDateOnly.group(2)!);
+    final d = int.tryParse(isoDateOnly.group(3)!);
+    if (y != null && m != null && d != null) {
+      return DateTime(y, m, d);
+    }
+  }
+
+  final ddMmYyyy =
+      RegExp(r'^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$').firstMatch(raw);
+  if (ddMmYyyy != null) {
+    final d = int.tryParse(ddMmYyyy.group(1)!);
+    final m = int.tryParse(ddMmYyyy.group(2)!);
+    final y = int.tryParse(ddMmYyyy.group(3)!);
+    if (y != null && m != null && d != null) {
+      return DateTime(y, m, d);
+    }
+  }
+
+  final hasZone =
+      raw.endsWith('Z') || RegExp(r'[+-]\d{2}:\d{2}$').hasMatch(raw);
+  if (hasZone) {
+    return DateTime.tryParse(raw)?.toLocal();
+  }
+
+  if (raw.contains('T')) {
+    final utc = DateTime.tryParse('${raw}Z');
+    if (utc != null) return utc.toLocal();
+  }
+
+  return DateTime.tryParse(raw)?.toLocal();
 }
 
 bool _isResolvedStatus(String status) =>
@@ -125,6 +156,22 @@ class _MetricTab {
   const _MetricTab(this.key, this.label, this.icon);
 }
 
+class _BookingConsultantRollup {
+  final String name;
+  final int total;
+  final int pending;
+  final int completed;
+  final double revenue;
+
+  const _BookingConsultantRollup({
+    required this.name,
+    required this.total,
+    required this.pending,
+    required this.completed,
+    required this.revenue,
+  });
+}
+
 class AdminAnalyticsWebTab extends StatefulWidget {
   const AdminAnalyticsWebTab({super.key});
 
@@ -134,9 +181,11 @@ class AdminAnalyticsWebTab extends StatefulWidget {
 
 class _AdminAnalyticsWebTabState extends State<AdminAnalyticsWebTab> {
   final AnalyticsService _analyticsService = AnalyticsService();
+  final BookingService _bookingService = BookingService();
 
   bool _loading = true;
   List<Map<String, dynamic>> _tickets = const [];
+  List<Booking> _bookings = const [];
   String _metric = 'ticket_volume';
   String _range = 'DAILY_14';
   Timer? _pollTimer;
@@ -169,16 +218,51 @@ class _AdminAnalyticsWebTabState extends State<AdminAnalyticsWebTab> {
   Future<void> _load({bool silent = false}) async {
     if (!silent) setState(() => _loading = true);
     try {
-      final rows = await _analyticsService.getAnalyticsTicketsAll();
+      final results = await Future.wait<dynamic>([
+        _analyticsService
+            .getAnalyticsTicketsAll()
+            .catchError((_) => <Map<String, dynamic>>[]),
+        _fetchAllBookings().catchError((_) => <Booking>[]),
+      ]);
+      final rows =
+          (results[0] as List).whereType<Map<String, dynamic>>().toList(
+                growable: false,
+              );
+      final bookings = results[1] as List<Booking>;
       if (!mounted) return;
       setState(() {
         _tickets = rows;
+        _bookings = bookings;
         _loading = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() => _loading = false);
     }
+  }
+
+  Future<List<Booking>> _fetchAllBookings() async {
+    final first =
+        await _bookingService.getAllBookingsPaginated(page: 0, size: 200);
+    final all = <Booking>[
+      ...(first['bookings'] as List<Booking>? ?? const <Booking>[]),
+    ];
+    final totalPages = (first['totalPages'] as int?) ?? 1;
+    for (var page = 1; page < totalPages; page++) {
+      final next =
+          await _bookingService.getAllBookingsPaginated(page: page, size: 200);
+      all.addAll(next['bookings'] as List<Booking>? ?? const <Booking>[]);
+    }
+    if (all.isEmpty) {
+      all.addAll(await _bookingService.getAllBookings(page: 0, size: 200));
+    }
+
+    final seen = <int>{};
+    return all.where((booking) {
+      if (seen.contains(booking.id)) return false;
+      seen.add(booking.id);
+      return true;
+    }).toList(growable: false);
   }
 
   List<Map<String, dynamic>> get _scopedTickets => _tickets
@@ -209,6 +293,76 @@ class _AdminAnalyticsWebTabState extends State<AdminAnalyticsWebTab> {
       if (_isSlaBreached(t)) count++;
     }
     return count;
+  }
+
+  DateTime? _bookingDate(Booking booking) =>
+      _analyticsDate(booking.slotDate ?? booking.createdAt);
+
+  bool _inBookingRange(Booking booking) {
+    final date = _bookingDate(booking);
+    if (date == null) return true;
+    final now = DateTime.now();
+    final startOfToday = DateTime(now.year, now.month, now.day);
+    final cutoff =
+        startOfToday.subtract(Duration(days: _daysForRange(_range) - 1));
+    return !date.isBefore(cutoff);
+  }
+
+  List<Booking> get _scopedBookings =>
+      _bookings.where(_inBookingRange).toList(growable: false);
+
+  String _bookingStatus(Booking booking) => booking.status.toUpperCase();
+
+  bool _isCompletedBooking(Booking booking) {
+    final status = _bookingStatus(booking);
+    final payment = (booking.paymentStatus ?? '').toUpperCase();
+    return status == 'COMPLETED' ||
+        status == 'CLOSED' ||
+        payment == 'SUCCESS' ||
+        payment == 'PAID' ||
+        payment == 'CAPTURED';
+  }
+
+  bool _isPendingBooking(Booking booking) {
+    final status = _bookingStatus(booking);
+    return status == 'PENDING' ||
+        status == 'CONFIRMED' ||
+        status == 'NEW' ||
+        status == 'OPEN' ||
+        status == 'IN_PROGRESS';
+  }
+
+  String _money(num amount) =>
+      'Rs ${NumberFormat.decimalPattern('en_IN').format(amount.round())}';
+
+  List<_BookingConsultantRollup> _buildConsultantBookingRows() {
+    final map = <String, _BookingConsultantRollup>{};
+    for (final booking in _scopedBookings) {
+      final name = (booking.consultantName ?? '').trim().isEmpty
+          ? 'Unassigned'
+          : booking.consultantName!.trim();
+      final current = map[name] ??
+          _BookingConsultantRollup(
+            name: name,
+            total: 0,
+            pending: 0,
+            completed: 0,
+            revenue: 0,
+          );
+      final completed = _isCompletedBooking(booking);
+      final pending = _isPendingBooking(booking);
+      final next = _BookingConsultantRollup(
+        name: name,
+        total: current.total + 1,
+        pending: current.pending + (pending ? 1 : 0),
+        completed: current.completed + (completed ? 1 : 0),
+        revenue: current.revenue + (completed ? (booking.amount ?? 0) : 0),
+      );
+      map[name] = next;
+    }
+    final rows = map.values.toList()
+      ..sort((a, b) => b.total.compareTo(a.total));
+    return rows;
   }
 
   List<_VolumePoint> _buildVolumeSeries() {
@@ -926,48 +1080,106 @@ class _AdminAnalyticsWebTabState extends State<AdminAnalyticsWebTab> {
       final rating = double.tryParse('${ratingRaw ?? ''}');
       if (rating != null && rating > 0) ratings.add(rating);
     }
+
     final avg =
         ratings.isEmpty ? 0 : ratings.reduce((a, b) => a + b) / ratings.length;
-    final happy = ratings.where((r) => r >= 4).length;
-    final happyRate = ratings.isEmpty ? 0 : happy * 100 / ratings.length;
+    final buckets = <int, int>{1: 0, 2: 0, 3: 0, 4: 0, 5: 0};
+    for (final rating in ratings) {
+      final bucket = rating.round().clamp(1, 5);
+      buckets[bucket] = (buckets[bucket] ?? 0) + 1;
+    }
+    final totalReviews = ratings.length;
+    final fiveStars = buckets[5] ?? 0;
 
     return Column(
       children: [
         _statsGrid([
           _kpiCard(
-            value: ratings.isEmpty ? '--' : avg.toStringAsFixed(1),
+            value: ratings.isEmpty ? '--' : '${avg.toStringAsFixed(1)} / 5',
             label: 'Average Rating',
-            sub: '${ratings.length} feedback entries',
+            sub: 'from $totalReviews reviews',
+            valueColor: const Color(0xFFF59E0B),
+            bg: const Color(0xFFFFFBEB),
+          ),
+          _kpiCard(
+            value: '$totalReviews',
+            label: 'Total Reviews',
+            sub: '$totalReviews total reviews collected',
             valueColor: const Color(0xFF7C3AED),
             bg: const Color(0xFFF5F3FF),
           ),
           _kpiCard(
-            value: '${happyRate.toStringAsFixed(0)}%',
-            label: 'Positive Feedback',
-            sub: '$happy users rated 4 or 5',
+            value: '$fiveStars',
+            label: '5-Star Reviews',
+            sub:
+                '${totalReviews == 0 ? 0 : ((fiveStars * 100) / totalReviews).toStringAsFixed(0)}% of total',
             valueColor: const Color(0xFF16A34A),
             bg: const Color(0xFFF0FDF4),
-          ),
-          _kpiCard(
-            value: '${_openCount}',
-            label: 'Open Conversations',
-            sub: 'tickets still awaiting closure',
-            valueColor: const Color(0xFFD97706),
-            bg: const Color(0xFFFFFBEB),
           ),
         ]),
         const SizedBox(height: 14),
         Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(18),
+          padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: const Color(0xFFE2E8F0)),
           ),
-          child: const Text(
-            'Customer satisfaction breakdown appears here when feedback ratings are available.',
-            style: TextStyle(color: Color(0xFF64748B), fontSize: 13),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Rating Distribution', style: AppTextStyles.h4),
+              const SizedBox(height: 12),
+              for (var star = 5; star >= 1; star--)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 30,
+                        child: Text(
+                          '$star *',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF334155),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: totalReviews == 0
+                                ? 0
+                                : (buckets[star] ?? 0) / totalReviews,
+                            minHeight: 8,
+                            backgroundColor: const Color(0xFFF1F5F9),
+                            valueColor: AlwaysStoppedAnimation(
+                              star >= 4
+                                  ? const Color(0xFF16A34A)
+                                  : const Color(0xFFCBD5E1),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      SizedBox(
+                        width: 72,
+                        child: Text(
+                          '${buckets[star] ?? 0} (${totalReviews == 0 ? 0 : (((buckets[star] ?? 0) * 100) / totalReviews).round()}%)',
+                          textAlign: TextAlign.right,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF475569),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
           ),
         ),
       ],
@@ -1090,26 +1302,228 @@ class _AdminAnalyticsWebTabState extends State<AdminAnalyticsWebTab> {
     );
   }
 
-  Widget _buildBookingsRevenueStub() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Bookings & Revenue', style: AppTextStyles.h4),
-          const SizedBox(height: 6),
-          const Text(
-            'Bookings/revenue cards are available in the Reports page with the same web-style layout.',
-            style: TextStyle(color: Color(0xFF64748B), fontSize: 13),
+  Widget _buildBookingsRevenueContent() {
+    final scoped = _scopedBookings;
+    final completed = scoped.where(_isCompletedBooking).toList(growable: false);
+    final totalRevenue = completed.fold<double>(
+        0, (sum, booking) => sum + (booking.amount ?? 0));
+    final pendingOrConfirmed = scoped.where(_isPendingBooking).length;
+    final consultantRows = _buildConsultantBookingRows();
+    final activeConsultants =
+        consultantRows.where((row) => row.name != 'Unassigned').length;
+
+    return Column(
+      children: [
+        _statsGrid([
+          _kpiCard(
+            value: '${scoped.length}',
+            label: 'Total Bookings',
+            sub: '$pendingOrConfirmed pending / confirmed',
+            valueColor: const Color(0xFF0F766E),
+            bg: const Color(0xFFECFEFF).withValues(alpha: 0.35),
           ),
-        ],
-      ),
+          _kpiCard(
+            value: '${completed.length}',
+            label: 'Completed',
+            sub:
+                '${scoped.isEmpty ? 0 : ((completed.length * 100) / scoped.length).toStringAsFixed(0)}% completion rate',
+            valueColor: const Color(0xFF16A34A),
+            bg: const Color(0xFFF0FDF4),
+          ),
+          _kpiCard(
+            value: _money(totalRevenue),
+            label: 'Total Revenue',
+            sub: 'from completed bookings',
+            valueColor: const Color(0xFF059669),
+            bg: const Color(0xFFF0FDF4),
+          ),
+          _kpiCard(
+            value: '$activeConsultants',
+            label: 'Active Consultants',
+            sub: '$activeConsultants with bookings',
+            valueColor: const Color(0xFF7C3AED),
+            bg: const Color(0xFFF5F3FF),
+          ),
+        ]),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Consultant Breakdown', style: AppTextStyles.h4),
+              const SizedBox(height: 10),
+              if (consultantRows.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 28),
+                  child: Center(
+                    child: Text(
+                      'No booking data available',
+                      style: TextStyle(color: Color(0xFF94A3B8)),
+                    ),
+                  ),
+                )
+              else
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SizedBox(
+                    width: 680,
+                    child: Column(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Row(
+                            children: [
+                              Expanded(
+                                flex: 4,
+                                child: Text(
+                                  'CONSULTANT',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    letterSpacing: 0.6,
+                                    color: Color(0xFF94A3B8),
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                child: Text(
+                                  'TOTAL',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    letterSpacing: 0.6,
+                                    color: Color(0xFF94A3B8),
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                child: Text(
+                                  'PENDING',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    letterSpacing: 0.6,
+                                    color: Color(0xFF94A3B8),
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                child: Text(
+                                  'COMPLETED',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    letterSpacing: 0.6,
+                                    color: Color(0xFF94A3B8),
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                flex: 2,
+                                child: Text(
+                                  'REVENUE',
+                                  textAlign: TextAlign.right,
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    letterSpacing: 0.6,
+                                    color: Color(0xFF94A3B8),
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        ...consultantRows.map((row) => Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 8),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    flex: 4,
+                                    child: Text(
+                                      row.name,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: Color(0xFF0F172A),
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Text(
+                                      '${row.total}',
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF0F766E),
+                                      ),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Text(
+                                      '${row.pending}',
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFFD97706),
+                                      ),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Text(
+                                      '${row.completed}',
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF16A34A),
+                                      ),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    flex: 2,
+                                    child: Text(
+                                      row.revenue == 0
+                                          ? '--'
+                                          : _money(row.revenue),
+                                      textAlign: TextAlign.right,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Color(0xFF64748B),
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -1166,7 +1580,7 @@ class _AdminAnalyticsWebTabState extends State<AdminAnalyticsWebTab> {
           if (_metric == 'agent_performance') _buildAgentPerformanceContent(),
           if (_metric == 'customer_satisfaction') _buildCustomerSatisfaction(),
           if (_metric == 'sla_breach') _buildSlaContent(),
-          if (_metric == 'bookings_revenue') _buildBookingsRevenueStub(),
+          if (_metric == 'bookings_revenue') _buildBookingsRevenueContent(),
         ],
       ),
     );

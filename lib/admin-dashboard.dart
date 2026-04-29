@@ -961,24 +961,53 @@ class _OverviewTabState extends State<_OverviewTab> {
       .where(_isRevenueBooking)
       .fold(0.0, (s, b) => s + (b.amount ?? 0));
 
+  DateTime? _parseBookingDateValue(String? raw) {
+    final value = (raw ?? '').trim();
+    if (value.isEmpty) return null;
+
+    final isoDateOnly = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(value);
+    if (isoDateOnly != null) {
+      final y = int.tryParse(isoDateOnly.group(1)!);
+      final m = int.tryParse(isoDateOnly.group(2)!);
+      final d = int.tryParse(isoDateOnly.group(3)!);
+      if (y != null && m != null && d != null) {
+        return DateTime(y, m, d);
+      }
+    }
+
+    final ddMmYyyy =
+        RegExp(r'^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$').firstMatch(value);
+    if (ddMmYyyy != null) {
+      final d = int.tryParse(ddMmYyyy.group(1)!);
+      final m = int.tryParse(ddMmYyyy.group(2)!);
+      final y = int.tryParse(ddMmYyyy.group(3)!);
+      if (y != null && m != null && d != null) {
+        return DateTime(y, m, d);
+      }
+    }
+
+    final hasZone =
+        value.endsWith('Z') || RegExp(r'[+-]\d{2}:\d{2}$').hasMatch(value);
+    if (hasZone) return DateTime.tryParse(value);
+
+    if (value.contains('T')) {
+      final utc = DateTime.tryParse('${value}Z');
+      if (utc != null) return utc.toLocal();
+    }
+
+    final parsed = DateTime.tryParse(value);
+    return parsed?.toLocal();
+  }
+
   List<_MonthStat> get _monthly {
     final now = DateTime.now();
     return List.generate(6, (i) {
       final month = DateTime(now.year, now.month - (5 - i));
       final bks = _bookings.where((b) {
-        final source = (b.slotDate ?? b.createdAt ?? '').trim();
-        if (source.isEmpty) return false;
-        try {
-          final normalized = (source.endsWith('Z') ||
-                  RegExp(r'[+-]\d{2}:\d{2}$').hasMatch(source))
-              ? source
-              : '${source}Z';
-          final parsed = DateTime.parse(normalized);
-          final d = DateTime(parsed.year, parsed.month, 1);
-          return d.year == month.year && d.month == month.month;
-        } catch (_) {
-          return false;
-        }
+        final parsed = _parseBookingDateValue(b.slotDate ?? b.createdAt);
+        if (parsed == null) return false;
+        final d = DateTime(parsed.year, parsed.month, 1);
+        return d.year == month.year && d.month == month.month;
       });
       return _MonthStat(
           label: DateFormat('MMM').format(month),
@@ -8587,13 +8616,14 @@ class _PlansScreenState extends State<_PlansScreen> {
                         controller: oc,
                         keyboardType: TextInputType.number,
                         decoration:
-                            _inp('Original price â‚¹ *', prefix: 'â‚¹ '))),
+                            _inp('Original price (Rs) *', prefix: 'Rs '))),
                 const SizedBox(width: 10),
                 Expanded(
                     child: TextField(
                         controller: dc,
                         keyboardType: TextInputType.number,
-                        decoration: _inp('Discount price â‚¹', prefix: 'â‚¹ ')))
+                        decoration:
+                            _inp('Discount price (Rs)', prefix: 'Rs ')))
               ]),
               const SizedBox(height: 10),
               TextField(
@@ -8693,7 +8723,7 @@ class _PlansScreenState extends State<_PlansScreen> {
                                           p['discountPrice'] !=
                                               p['originalPrice'])
                                         Row(children: [
-                                          Text('â‚¹${p['discountPrice']}',
+                                          Text('Rs ${p['discountPrice']}',
                                               style: AppTextStyles.label
                                                   .copyWith(
                                                       color: const Color(
@@ -8701,14 +8731,14 @@ class _PlansScreenState extends State<_PlansScreen> {
                                                       fontWeight:
                                                           FontWeight.w700)),
                                           const SizedBox(width: 6),
-                                          Text('â‚¹${p['originalPrice']}',
+                                          Text('Rs ${p['originalPrice']}',
                                               style: AppTextStyles.caption
                                                   .copyWith(
                                                       decoration: TextDecoration
                                                           .lineThrough))
                                         ])
                                       else
-                                        Text('â‚¹${p['originalPrice']}',
+                                        Text('Rs ${p['originalPrice']}',
                                             style: AppTextStyles.label.copyWith(
                                                 color: const Color(0xFF059669),
                                                 fontWeight: FontWeight.w700)),

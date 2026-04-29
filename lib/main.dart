@@ -19,6 +19,7 @@ import 'package:finadvise/meet_the_masters_brand.dart';
 import 'package:finadvise/public_contact_screen.dart';
 import 'package:finadvise/register_screen.dart';
 import 'package:finadvise/user-dashboard.dart';
+import 'package:finadvise/subscription_plans_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -55,9 +56,10 @@ class FinAdviseApp extends StatelessWidget {
         '/contact': (context) => const PublicContactScreen(),
         '/login': (context) => const LoginScreen(),
         '/register': (context) => const RegisterScreen(),
-        '/home': (context) => const UserDashboard(),
+        '/user': (context) => const UserDashboard(),
         '/admin': (context) => const AdminDashboard(),
         '/consultant': (context) => const ConsultantDashboard(),
+        '/subscription-plans': (context) => const SubscriptionPlansPanel(),
       },
     );
   }
