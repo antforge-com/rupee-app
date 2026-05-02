@@ -1,6 +1,7 @@
 import 'package:finadvise/app_theme.dart';
 import 'package:finadvise/services/services.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -547,12 +548,19 @@ class _ContactFormCard extends StatelessWidget {
                         child: _ContactField(
                           controller: phoneCtrl,
                           label: 'Phone',
-                          hint: '+91 XXXXX XXXXX',
+                          hint: '10-digit mobile number',
                           icon: Icons.call_outlined,
                           keyboardType: TextInputType.phone,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                            LengthLimitingTextInputFormatter(10),
+                          ],
                           validator: (value) {
-                            final text = value?.trim() ?? '';
+                            final text = (value ?? '').replaceAll(RegExp(r'\D'), '');
                             if (text.isEmpty) return 'Phone number is required.';
+                            if (!RegExp(r'^[6-9]\d{9}$').hasMatch(text)) {
+                              return 'Enter a valid 10-digit Indian mobile number.';
+                            }
                             return null;
                           },
                         ),
@@ -643,6 +651,7 @@ class _ContactField extends StatelessWidget {
   final IconData icon;
   final TextInputType? keyboardType;
   final int maxLines;
+  final List<TextInputFormatter>? inputFormatters;
   final String? Function(String? value)? validator;
 
   const _ContactField({
@@ -652,6 +661,7 @@ class _ContactField extends StatelessWidget {
     required this.icon,
     this.keyboardType,
     this.maxLines = 1,
+    this.inputFormatters,
     this.validator,
   });
 
@@ -674,6 +684,7 @@ class _ContactField extends StatelessWidget {
           controller: controller,
           keyboardType: keyboardType,
           maxLines: maxLines,
+          inputFormatters: inputFormatters,
           validator: validator,
           decoration: InputDecoration(
             hintText: hint,

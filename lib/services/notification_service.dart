@@ -59,9 +59,31 @@ class NotificationService extends ChangeNotifier {
   Future<void> _fetchFromApi() async {
     if (_role == null || _userId == null) return;
     try {
-      final response = await _apiClient.dio.get('/api/notifications');
-      final data = response.data;
-      final list = data is List ? data : (data is Map ? (data['content'] ?? data['data'] ?? []) : []);
+      List<dynamic> list = const [];
+      final attempts = <Future<dynamic> Function()>[
+        () => _apiClient.dio.get('/api/notifications').then((r) => r.data),
+        () => _apiClient.dio
+            .get('/api/notifications/user/$_userId/unread')
+            .then((r) => r.data),
+        () => _apiClient.dio
+            .get('/api/notifications/user/$_userId')
+            .then((r) => r.data),
+      ];
+
+      for (final attempt in attempts) {
+        try {
+          final data = await attempt();
+          final extracted = data is List
+              ? data
+              : (data is Map ? (data['content'] ?? data['data'] ?? []) : []);
+          if (extracted is List) {
+            list = extracted;
+            break;
+          }
+        } catch (_) {
+          // Try the next compatible endpoint.
+        }
+      }
 
       // Local read states preserve karo
       final readIds = _notifications.where((n) => n.isRead).map((n) => n.id).toSet();
@@ -71,7 +93,8 @@ class NotificationService extends ChangeNotifier {
         return readIds.contains(notif.id)
             ? notif.copyWith(isRead: true)
             : notif;
-      }).toList();
+      }).toList()
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
       _notifications
         ..clear()
@@ -140,9 +163,17 @@ class NotificationService extends ChangeNotifier {
     notifyListeners();
     await _saveToStorage();
 
+    try {
+      if (_userId != null) {
+        await _apiClient.dio.put('/api/notifications/user/$_userId/read-all');
+        return;
+      }
+    } catch (_) {}
+
     for (final id in unreadIds) {
-      // Fire-and-forget — errors silently ignored
-      _apiClient.dio.put('/api/notifications/$id/read').then((_) {}).catchError((_) => null);
+      try {
+        await _apiClient.dio.put('/api/notifications/$id/read');
+      } catch (_) {}
     }
   }
 

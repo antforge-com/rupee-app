@@ -15,6 +15,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 
 import 'api_client.dart';
+import 'assessment_sheet.dart';
 import 'booking_answers_screen.dart';
 import 'login_screen.dart';
 import 'models/models.dart';
@@ -655,7 +656,10 @@ class _UserDashboardState extends State<UserDashboard> {
         body: IndexedStack(
           index: _tab,
           children: [
-            _ConsultantsTab(user: _user),
+            _ConsultantsTab(
+              user: _user,
+              onOpenAccount: () => setState(() => _tab = 4),
+            ),
             _BookingsTab(user: _user),
             _TicketsTab(user: _user),
             _NotifsTab(user: _user, onRead: () => setState(() => _unread = 0)),
@@ -758,7 +762,8 @@ class _BottomNav extends StatelessWidget {
 
 class _ConsultantsTab extends StatefulWidget {
   final Map<String, dynamic> user;
-  const _ConsultantsTab({required this.user});
+  final VoidCallback onOpenAccount;
+  const _ConsultantsTab({required this.user, required this.onOpenAccount});
   @override
   State<_ConsultantsTab> createState() => _ConsultantsTabState();
 }
@@ -859,6 +864,7 @@ class _ConsultantsTabState extends State<_ConsultantsTab> {
                 ])),
             // Avatar
             GestureDetector(
+              onTap: widget.onOpenAccount,
               child: Container(
                 width: 44,
                 height: 44,
@@ -1366,6 +1372,20 @@ class _BookingSheetState extends State<_BookingSheet> {
   final _notesCtrl = TextEditingController();
   final _modes = ['ONLINE', 'PHYSICAL', 'PHONE'];
 
+  int get _consultantId {
+    final direct = (widget.c['id'] as num?)?.toInt();
+    if (direct != null && direct > 0) return direct;
+    final alt = (widget.c['consultantId'] as num?)?.toInt();
+    if (alt != null && alt > 0) return alt;
+    if (widget.c['consultant'] is Map) {
+      final nested = widget.c['consultant'] as Map;
+      final nestedId = (nested['id'] as num?)?.toInt() ??
+          (nested['consultantId'] as num?)?.toInt();
+      if (nestedId != null && nestedId > 0) return nestedId;
+    }
+    return 0;
+  }
+
   List<String> get _sortedDates {
     final all = {..._slotsByDate.keys, ..._specialDays}.toList()..sort();
     return all;
@@ -1588,7 +1608,7 @@ class _BookingSheetState extends State<_BookingSheet> {
   }
 
   Future<void> _load() async {
-    final cId = (widget.c['id'] as num?)?.toInt() ?? 0;
+    final cId = _consultantId;
     final results = await Future.wait([
       _consultantService.getAvailableSlots(cId),
       _consultantService.getSlotsForWindow(cId),
@@ -1752,7 +1772,7 @@ class _BookingSheetState extends State<_BookingSheet> {
     }
     setState(() => _booking = true);
 
-    final cId = (widget.c['id'] as num?)?.toInt() ?? 0;
+    final cId = _consultantId;
     var slotId = (_selSlot!['id'] as num?)?.toInt() ?? 0;
     final base = double.tryParse(widget.c['charges']?.toString() ?? '0') ?? 0;
     final offerId = (_selOffer?['id'] as num?)?.toInt();
@@ -1811,6 +1831,18 @@ class _BookingSheetState extends State<_BookingSheet> {
 
         Navigator.pop(context);
         _toast(context, 'Session booked successfully! 🎉');
+
+        // Show assessment sheet
+        if (mounted) {
+          Future.delayed(const Duration(milliseconds: 500), () {
+            AssessmentSheet.show(
+              context,
+              bookingId: result.id!,
+              bookingType: 'NORMAL',
+              consultantId: cId,
+            );
+          });
+        }
       } else {
         _toast(context, 'Failed to book. Please try again.', error: true);
       }
@@ -1835,7 +1867,7 @@ class _BookingSheetState extends State<_BookingSheet> {
     }
 
     setState(() => _booking = true);
-    final cId = (widget.c['id'] as num?)?.toInt() ?? 0;
+    final cId = _consultantId;
     final base = double.tryParse(widget.c['charges']?.toString() ?? '0') ?? 0;
     final offerId = (_selOffer?['id'] as num?)?.toInt();
     final consultantName =
@@ -1878,6 +1910,18 @@ class _BookingSheetState extends State<_BookingSheet> {
           context,
           'Special booking request sent to $consultantName for ${_fmtBookingDate(_selDate!)}.',
         );
+
+        // Show assessment sheet
+        if (mounted) {
+          Future.delayed(const Duration(milliseconds: 500), () {
+            AssessmentSheet.show(
+              context,
+              bookingId: created['id'] ?? 0,
+              bookingType: 'SPECIAL',
+              consultantId: cId,
+            );
+          });
+        }
       } else {
         _toast(
             context, 'Failed to request the special booking. Please try again.',
@@ -1890,7 +1934,18 @@ class _BookingSheetState extends State<_BookingSheet> {
   Widget build(BuildContext context) {
     final name = widget.c['name'] ?? 'Expert';
     final base = double.tryParse(widget.c['charges']?.toString() ?? '0') ?? 0;
-    final total = _calcFee(base, widget.feeConfig);
+    final fee = _calcFee(base, widget.feeConfig) - base;
+    double discount = 0;
+    if (_selOffer != null) {
+      final d = double.tryParse(_selOffer!['discount']?.toString() ?? '0') ?? 0;
+      final type = (_selOffer!['discountType'] ?? 'FLAT').toString().toUpperCase();
+      if (type == 'PERCENTAGE') {
+        discount = base * d / 100;
+      } else {
+        discount = d;
+      }
+    }
+    final total = base + fee - discount;
 
     return DraggableScrollableSheet(
       initialChildSize: 0.9,
@@ -2586,6 +2641,74 @@ class _BookingSheetState extends State<_BookingSheet> {
                                   }).toList()),
 
                                   const SizedBox(height: 32),
+                                  if (_offers.isNotEmpty) ...[
+                                    Text('AVAILABLE OFFERS',
+                                        style: _ts(11, FontWeight.w800, _C.text1,
+                                            ls: 0.5)),
+                                    const SizedBox(height: 16),
+                                    SizedBox(
+                                      height: 60,
+                                      child: ListView.separated(
+                                        scrollDirection: Axis.horizontal,
+                                        itemCount: _offers.length,
+                                        separatorBuilder: (_, __) =>
+                                            const SizedBox(width: 12),
+                                        itemBuilder: (_, i) {
+                                          final o = _offers[i];
+                                          final sel = _selOffer?['id'] == o['id'];
+                                          return GestureDetector(
+                                            onTap: () => setState(() =>
+                                                _selOffer = sel ? null : o),
+                                            child: AnimatedContainer(
+                                              duration: const Duration(
+                                                  milliseconds: 180),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 16),
+                                              decoration: BoxDecoration(
+                                                color: sel
+                                                    ? _C.successBg
+                                                    : Colors.white,
+                                                border: Border.all(
+                                                    color: sel
+                                                        ? _C.success
+                                                        : _C.border,
+                                                    width: sel ? 2 : 1),
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                              ),
+                                              child: Column(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(o['title'] ?? 'Offer',
+                                                      style: _ts(
+                                                          13,
+                                                          FontWeight.w700,
+                                                          sel
+                                                              ? _C.success
+                                                              : _C.text1)),
+                                                  Text(
+                                                      o['discountType'] ==
+                                                              'PERCENTAGE'
+                                                          ? '${o['discount']}% OFF'
+                                                          : '₹${o['discount']} OFF',
+                                                      style: _ts(
+                                                          10,
+                                                          FontWeight.w600,
+                                                          _C.text3)),
+                                                ],
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                    const SizedBox(height: 32),
+                                  ],
+
                                   Text(
                                     _isSpecialDateSelected
                                         ? 'NOTES  REQUIRED'
@@ -2619,7 +2742,61 @@ class _BookingSheetState extends State<_BookingSheet> {
                                     ),
                                   ),
 
-                                  const SizedBox(height: 40),
+                                  const SizedBox(height: 32),
+                                  Container(
+                                    padding: const EdgeInsets.all(20),
+                                    decoration: BoxDecoration(
+                                      color: _C.gray100.withOpacity(0.5),
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(color: _C.borderLight),
+                                    ),
+                                    child: Column(children: [
+                                      Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Text('Session Fee',
+                                                style: _ts(14, FontWeight.w600,
+                                                    _C.text3)),
+                                            Text('₹${base.toStringAsFixed(0)}',
+                                                style: _ts(14, FontWeight.w700,
+                                                    _C.text1)),
+                                          ]),
+                                      if (discount > 0) ...[
+                                        const SizedBox(height: 12),
+                                        Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Text('Offer Applied',
+                                                  style: _ts(14, FontWeight.w600,
+                                                      _C.success)),
+                                              Text('-₹${discount.toStringAsFixed(0)}',
+                                                  style: _ts(14, FontWeight.w700,
+                                                      _C.success)),
+                                            ]),
+                                      ],
+                                      const Padding(
+                                        padding:
+                                            EdgeInsets.symmetric(vertical: 12),
+                                        child: Divider(
+                                            height: 1, color: _C.borderLight),
+                                      ),
+                                      Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Text('Total Amount',
+                                                style: _ts(16, FontWeight.w800,
+                                                    _C.text1)),
+                                            Text('₹${total.toStringAsFixed(0)}',
+                                                style: _ts(18, FontWeight.w900,
+                                                    _C.blue)),
+                                          ]),
+                                    ]),
+                                  ),
+
+                                  const SizedBox(height: 32),
                                   _gradBtn(
                                     _isSpecialDateSelected
                                         ? 'Request Special Booking'
@@ -4844,9 +5021,13 @@ class _NotifsTabState extends State<_NotifsTab> {
           if (_unread > 0)
             TextButton(
               onPressed: () async {
-                for (final n in _notifs.where((n) => n['read'] == false)) {
-                  await _markRead(n);
-                }
+                setState(() {
+                  _notifs = _notifs
+                      .map((n) => {...n, 'read': true, 'isRead': true})
+                      .toList();
+                });
+                await _notificationService.markAllRead();
+                widget.onRead();
               },
               child: Text('Mark all read',
                   style: _ts(13, FontWeight.w600, _C.blue)),
@@ -5910,7 +6091,8 @@ class _PlansView extends StatefulWidget {
 
 class _PlansViewState extends State<_PlansView> {
   List<Map<String, dynamic>> _plans = [];
-  bool _loading = true, _saving = false;
+  bool _loading = true;
+  int? _savingPlanId;
   int? _currentPlanId;
   String _msg = '';
 
@@ -5933,7 +6115,7 @@ class _PlansViewState extends State<_PlansView> {
   Future<void> _selectPlan(int planId) async {
     final uid = (widget.user['id'] as num?)?.toInt() ?? 0;
     setState(() {
-      _saving = true;
+      _savingPlanId = planId;
       _msg = '';
     });
     final ok = await _onboardingService.updateProfile(uid, {
@@ -5942,7 +6124,7 @@ class _PlansViewState extends State<_PlansView> {
     });
     if (mounted) {
       setState(() {
-        _saving = false;
+        _savingPlanId = null;
         if (ok) _currentPlanId = planId;
         _msg = ok ? '✅ Plan updated!' : '❌ Failed to update plan.';
       });
@@ -6143,10 +6325,10 @@ class _PlansViewState extends State<_PlansView> {
                                       if (!isCurrent)
                                         _gradBtn(
                                             'Select Plan',
-                                            _saving
+                                            _savingPlanId != null
                                                 ? null
                                                 : () => _selectPlan(pid),
-                                            loading: _saving)
+                                            loading: _savingPlanId == pid)
                                       else
                                         Container(
                                           width: double.infinity,
@@ -6520,6 +6702,11 @@ class _ContactViewState extends State<_ContactView> {
       setState(() => _err = 'Please fill in all required fields.');
       return;
     }
+    final email = _emailCtrl.text.trim();
+    if (!RegExp(r'^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$').hasMatch(email)) {
+      setState(() => _err = 'Please enter a valid email address.');
+      return;
+    }
     setState(() {
       _sending = true;
       _err = '';
@@ -6527,7 +6714,7 @@ class _ContactViewState extends State<_ContactView> {
     // POST /api/contact/public/submit — real backend endpoint
     final ok = await _staticService.submitContactMessage(
       name: _nameCtrl.text.trim(),
-      email: _emailCtrl.text.trim(),
+      email: email,
       message: _msgCtrl.text.trim(),
     );
     if (mounted)

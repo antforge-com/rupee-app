@@ -36,6 +36,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -95,13 +96,8 @@ public class BookingService {
                 .paymentStatus(financials.paymentStatus())
                 .build();
 
-        // Explicitly wipe meeting links if mode is PHYSICAL or PHONE
-        if (booking.getMeetingMode() != null && booking.getMeetingMode() != MeetingMode.ONLINE) {
-            booking.setMeetingLink(null);
-            booking.setMeetingId(null);
-        }
-
         Booking savedBooking = bookingRepository.save(booking);
+        savedBooking = applyGeneratedMeetingAccess(savedBooking, "booking-" + savedBooking.getId());
 
         // SMART LOGGING: Audit based on the new total amount
         boolean isPaidBooking = savedBooking.getTotalAmount() != null && savedBooking.getTotalAmount().doubleValue() > 0;
@@ -162,13 +158,8 @@ public class BookingService {
                 .paymentStatus(financials.paymentStatus())
                 .build();
 
-        // SANITIZATION: Explicitly wipe meeting links if mode is PHYSICAL or PHONE
-        if (bulkBooking.getMeetingMode() != null && bulkBooking.getMeetingMode() != MeetingMode.ONLINE) {
-            bulkBooking.setMeetingLink(null);
-            bulkBooking.setMeetingId(null);
-        }
-
         Booking savedBooking = bookingRepository.save(bulkBooking);
+        savedBooking = applyGeneratedMeetingAccess(savedBooking, "bulk-booking-" + savedBooking.getId());
 
         notificationService.notifyNormalBookingCreated(
                 currentUser.getId(),
@@ -535,14 +526,9 @@ public class BookingService {
         if (request.getMeetingMode() != null) booking.setMeetingMode(request.getMeetingMode());
         if (request.getMeetingNotes() != null) booking.setMeetingNotes(request.getMeetingNotes());
 
-        // SANITIZATION: Explicitly wipe meeting links if mode is PHYSICAL or PHONE
-        if (booking.getMeetingMode() != null && booking.getMeetingMode() != MeetingMode.ONLINE) {
-            booking.setMeetingLink(null);
-            booking.setMeetingId(null);
-        } else {
-            if (request.getMeetingLink() != null) booking.setMeetingLink(request.getMeetingLink());
-            if (request.getMeetingId() != null) booking.setMeetingId(request.getMeetingId());
-        }
+        if (request.getMeetingLink() != null) booking.setMeetingLink(request.getMeetingLink());
+        if (request.getMeetingId() != null) booking.setMeetingId(request.getMeetingId());
+        applyGeneratedMeetingAccessInMemory(booking, "bulk-booking-" + booking.getId());
     }
 
     private void validateBookingOwnership(Booking booking, User currentUser) {
@@ -666,14 +652,40 @@ public class BookingService {
         if (request.getMeetingMode() != null) booking.setMeetingMode(request.getMeetingMode());
         if (request.getMeetingNotes() != null) booking.setMeetingNotes(request.getMeetingNotes());
 
-        // SANITIZATION: Explicitly wipe meeting links if mode is PHYSICAL or PHONE
-        if (booking.getMeetingMode() != null && booking.getMeetingMode() != MeetingMode.ONLINE) {
+        if (request.getMeetingLink() != null) booking.setMeetingLink(request.getMeetingLink());
+        if (request.getMeetingId() != null) booking.setMeetingId(request.getMeetingId());
+        applyGeneratedMeetingAccessInMemory(booking, "booking-" + booking.getId());
+    }
+
+    private Booking applyGeneratedMeetingAccess(Booking booking, String defaultPrefix) {
+        applyGeneratedMeetingAccessInMemory(booking, defaultPrefix);
+        return bookingRepository.save(booking);
+    }
+
+    private void applyGeneratedMeetingAccessInMemory(Booking booking, String defaultPrefix) {
+        if (booking.getMeetingMode() != MeetingMode.ONLINE) {
             booking.setMeetingLink(null);
             booking.setMeetingId(null);
-        } else {
-            if (request.getMeetingLink() != null) booking.setMeetingLink(request.getMeetingLink());
-            if (request.getMeetingId() != null) booking.setMeetingId(request.getMeetingId());
+            return;
         }
+
+        String resolvedMeetingId = normalizeMeetingId(booking.getMeetingId(), defaultPrefix);
+        booking.setMeetingId(resolvedMeetingId);
+
+        if (booking.getMeetingLink() == null || booking.getMeetingLink().isBlank()) {
+            booking.setMeetingLink("https://meet.jit.si/" + resolvedMeetingId);
+        }
+    }
+
+    private String normalizeMeetingId(String rawMeetingId, String defaultPrefix) {
+        String base = (rawMeetingId == null || rawMeetingId.isBlank())
+                ? defaultPrefix + "-" + UUID.randomUUID().toString().replace("-", "").substring(0, 10)
+                : rawMeetingId.trim();
+        return base
+                .toLowerCase()
+                .replaceAll("[^a-z0-9-]", "-")
+                .replaceAll("-{2,}", "-")
+                .replaceAll("^-|-$", "");
     }
 
     private void logAuditEvents(Booking booking, boolean isFinanceChanged, boolean reassigned) {

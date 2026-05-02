@@ -1,4 +1,5 @@
 import 'package:finadvise/app_theme.dart';
+import 'package:finadvise/meet_the_masters_brand.dart';
 import 'package:finadvise/models/models.dart';
 import 'package:flutter/material.dart';
 
@@ -344,26 +345,134 @@ class BookingCard extends StatelessWidget {
 
 // ─── LOADING SHIMMER ──────────────────────────────────────────────────────────
 
+class MeetTheMastersLoadingIndicator extends StatefulWidget {
+  final String? label;
+  final double size;
+  final bool compact;
+
+  const MeetTheMastersLoadingIndicator({
+    super.key,
+    this.label,
+    this.size = 56,
+    this.compact = false,
+  });
+
+  @override
+  State<MeetTheMastersLoadingIndicator> createState() =>
+      _MeetTheMastersLoadingIndicatorState();
+}
+
+class _MeetTheMastersLoadingIndicatorState
+    extends State<MeetTheMastersLoadingIndicator>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final badge = AnimatedBuilder(
+      animation: _controller,
+      builder: (_, __) {
+        final t = Curves.easeInOut.transform(_controller.value);
+        return Transform.scale(
+          scale: 0.96 + (t * 0.06),
+          child: Opacity(
+            opacity: 0.82 + (t * 0.18),
+            child: MeetTheMastersLogoBadge(
+              size: widget.size,
+              padding: widget.size * 0.13,
+              showAmbientGlow: !widget.compact,
+            ),
+          ),
+        );
+      },
+    );
+
+    if ((widget.label ?? '').trim().isEmpty) return badge;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        badge,
+        const SizedBox(height: 10),
+        Text(
+          widget.label!,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: AppColors.textSecondary,
+            letterSpacing: 0.3,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class ShimmerCard extends StatelessWidget {
   const ShimmerCard({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
         color: AppColors.surfaceVariant,
         borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Container(height: 16, width: 200, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(4))),
-          const SizedBox(height: 10),
-          Container(height: 12, width: double.infinity, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(4))),
-          const SizedBox(height: 6),
-          Container(height: 12, width: 150, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(4))),
+          const MeetTheMastersLoadingIndicator(size: 34, compact: true),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  height: 14,
+                  width: 156,
+                  decoration: BoxDecoration(
+                    color: AppColors.border,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  height: 10,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    color: AppColors.border,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Container(
+                  height: 10,
+                  width: 120,
+                  decoration: BoxDecoration(
+                    color: AppColors.border,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -553,4 +662,3 @@ class SectionHeader extends StatelessWidget {
     );
   }
 }
-

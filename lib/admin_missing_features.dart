@@ -87,6 +87,82 @@ InputDecoration _inp(String label,
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
     );
 
+final _leadingLetterFormatter = TextInputFormatter.withFunction(
+  (oldValue, newValue) {
+    final text = newValue.text;
+    if (text.trimLeft().isEmpty) return newValue;
+    final first = text.trimLeft()[0];
+    return RegExp(r'[A-Za-z]').hasMatch(first) ? newValue : oldValue;
+  },
+);
+
+String? _capitalizedTextError(
+  String? value, {
+  required String field,
+  bool requiredField = true,
+}) {
+  final text = (value ?? '').trim().replaceAll(RegExp(r'\s+'), ' ');
+  if (text.isEmpty) return requiredField ? '$field is required' : null;
+  if (!RegExp(r'[A-Za-z]').hasMatch(text[0])) {
+    return '$field must start with a letter';
+  }
+  if (!RegExp(r'[A-Z]').hasMatch(text[0])) {
+    return '$field must start with a capital letter';
+  }
+  return null;
+}
+
+String _cleanRole(dynamic raw) =>
+    raw.toString().toUpperCase().replaceAll('ROLE_', '').trim();
+
+Future<List<Map<String, dynamic>>> _mergeUsersWithProfiles(
+  List<Map<String, dynamic>> users,
+) async {
+  final merged = users
+      .map((user) => Map<String, dynamic>.from(user))
+      .toList(growable: false);
+  final ids = merged
+      .map((user) => user['id'])
+      .whereType<num>()
+      .map((id) => id.toInt())
+      .where((id) => id > 0)
+      .toList(growable: false);
+
+  final results = await Future.wait<MapEntry<int, Map<String, dynamic>>?>(
+    ids.map((id) async {
+      try {
+        final response = await _dio.get('/api/onboarding/$id');
+        if (response.data is! Map) return null;
+        return MapEntry(id, Map<String, dynamic>.from(response.data as Map));
+      } catch (_) {
+        return null;
+      }
+    }),
+  );
+
+  final profileMap = <int, Map<String, dynamic>>{
+    for (final entry in results.whereType<MapEntry<int, Map<String, dynamic>>>())
+      entry.key: entry.value,
+  };
+
+  return merged.map((user) {
+    final id = (user['id'] as num?)?.toInt();
+    final profile = id != null ? profileMap[id] : null;
+    if (profile == null) return user;
+    return {
+      ...user,
+      'profileName': profile['name'],
+      'profileEmail': profile['email'],
+      'profilePhone': profile['phoneNumber'],
+      'profileLocation': profile['location'],
+      'profileImageUrl': profile['profileImageUrl'],
+      'designation': profile['designation'],
+      'organizationName': profile['organizationName'],
+      'memberSince': profile['memberSince'],
+    };
+  }).toList(growable: false);
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // SECTION 1 — BUG FIXES
 // ═════════════════════════════════════════════════════════════════════════════
@@ -235,8 +311,11 @@ class _ProfileTabState extends State<_ProfileTab> {
   final _emailCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
   final _locationCtrl = TextEditingController();
+  final _designationCtrl = TextEditingController();
+  final _organizationCtrl = TextEditingController();
 
   String? _photoUrl;
+  String? _memberSince;
   File? _pickedImage;
   bool _loading = true;
   bool _saving = false;
@@ -254,6 +333,8 @@ class _ProfileTabState extends State<_ProfileTab> {
     _emailCtrl.dispose();
     _phoneCtrl.dispose();
     _locationCtrl.dispose();
+    _designationCtrl.dispose();
+    _organizationCtrl.dispose();
     super.dispose();
   }
 
@@ -272,7 +353,11 @@ class _ProfileTabState extends State<_ProfileTab> {
       _emailCtrl.text = d['email'] ?? '';
       _phoneCtrl.text = d['phoneNumber'] ?? '';
       _locationCtrl.text = d['location'] ?? '';
-      setState(() => _photoUrl = d['profileImageUrl']);
+      _designationCtrl.text = d['designation'] ?? '';
+      _organizationCtrl.text = d['organizationName'] ?? '';
+      _memberSince = d['memberSince']?.toString();
+      setState(() => _photoUrl =
+          d['profileImageUrl']?.toString() ?? d['photoUrl']?.toString());
     } catch (_) {
       // Load from secure storage as fallback
       _nameCtrl.text = await _storage.read(key: 'user_name') ?? '';
@@ -314,15 +399,17 @@ class _ProfileTabState extends State<_ProfileTab> {
         'email': _emailCtrl.text.trim(),
         'phoneNumber': _phoneCtrl.text.trim(),
         'location': _locationCtrl.text.trim(),
+        'designation': _designationCtrl.text.trim(),
+        'organizationName': _organizationCtrl.text.trim(),
       };
 
-      // PUT /api/onboarding/{id}  multipart/form-data
-      // "data" part = JSON blob,  "file" part = optional image
-      final formData = FormData();
-      formData.fields.add(MapEntry(
-        'data',
-        jsonEncode(payload),
-      ));
+      final formData = FormData.fromMap({
+        'data': MultipartFile.fromString(
+          jsonEncode(payload),
+          filename: 'data.json',
+          contentType: DioMediaType.parse('application/json'),
+        ),
+      });
 
       if (_pickedImage != null) {
         formData.files.add(MapEntry(
@@ -365,7 +452,9 @@ class _ProfileTabState extends State<_ProfileTab> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(
+        child: MeetTheMastersLoadingIndicator(label: 'Loading profile'),
+      );
     }
 
     return SingleChildScrollView(
@@ -448,11 +537,14 @@ class _ProfileTabState extends State<_ProfileTab> {
                 TextFormField(
                   controller: _nameCtrl,
                   textCapitalization: TextCapitalization.words,
+                  inputFormatters: [_leadingLetterFormatter],
                   decoration:
                       _inp('Full Name', icon: Icons.person_outline_rounded),
-                  validator: (v) => (v ?? '').trim().length < 2
-                      ? 'Minimum 2 characters'
-                      : null,
+                  validator: (v) =>
+                      _capitalizedTextError(v, field: 'Full name') ??
+                      ((v ?? '').trim().length < 2
+                          ? 'Minimum 2 characters'
+                          : null),
                 ),
                 const SizedBox(height: 14),
                 TextFormField(
@@ -474,18 +566,78 @@ class _ProfileTabState extends State<_ProfileTab> {
                   ],
                   decoration: _inp('Phone Number',
                       icon: Icons.phone_outlined, hint: '10-digit mobile'),
-                  validator: (v) => RegExp(r'^[6-9]\d{9}$').hasMatch(v ?? '')
+                  validator: (v) => RegExp(r'^[6-9]\d{9}$')
+                          .hasMatch((v ?? '').trim())
                       ? null
                       : 'Enter a valid 10-digit Indian number',
                 ),
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _locationCtrl,
+                  textCapitalization: TextCapitalization.words,
+                  inputFormatters: [_leadingLetterFormatter],
                   decoration: _inp('Location',
                       icon: Icons.location_on_outlined, hint: 'City, State'),
+                  validator: (v) => _capitalizedTextError(
+                    v,
+                    field: 'Location',
+                    requiredField: false,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _designationCtrl,
+                  textCapitalization: TextCapitalization.words,
+                  inputFormatters: [_leadingLetterFormatter],
+                  decoration:
+                      _inp('Designation', icon: Icons.work_outline_rounded),
+                  validator: (v) => _capitalizedTextError(
+                    v,
+                    field: 'Designation',
+                    requiredField: false,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _organizationCtrl,
+                  textCapitalization: TextCapitalization.words,
+                  inputFormatters: [_leadingLetterFormatter],
+                  decoration: _inp('Organization Name',
+                      icon: Icons.business_outlined),
+                  validator: (v) => _capitalizedTextError(
+                    v,
+                    field: 'Organization name',
+                    requiredField: false,
+                  ),
                 ),
               ],
             ),
+            if ((_memberSince ?? '').isNotEmpty) ...[
+              const SizedBox(height: 18),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.border),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.calendar_month_outlined,
+                        color: AppColors.textSecondary, size: 18),
+                    const SizedBox(width: 10),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Member Since', style: AppTextStyles.caption),
+                        const SizedBox(height: 2),
+                        Text(_memberSince!, style: AppTextStyles.label),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 28),
 
             // ── Save Button ────────────────────────────────────────────────
@@ -1276,6 +1428,7 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
         _users =
             List<Map<String, dynamic>>.from(res.data is List ? res.data : []);
       }
+      _users = await _mergeUsersWithProfiles(_users);
     } catch (_) {
       _users = [];
     }
@@ -1314,6 +1467,10 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
     final q = _search.toLowerCase();
     return _users
         .where((u) =>
+            (u['profileName'] ?? u['name'] ?? '')
+                .toString()
+                .toLowerCase()
+                .contains(q) ||
             (u['identifier'] ?? '').toString().toLowerCase().contains(q) ||
             (u['id'] ?? '').toString().contains(q) ||
             (u['role'] ?? '').toString().toLowerCase().contains(q))
@@ -1364,7 +1521,7 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
               children: [
                 TextField(
                   onChanged: (v) => setState(() => _search = v),
-                  decoration: _inp('Search by email, ID or role',
+                  decoration: _inp('Search by name, email, ID or role',
                       icon: Icons.search_rounded),
                 ),
                 const SizedBox(height: 10),
@@ -1427,7 +1584,7 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                     itemCount: 6,
                     itemBuilder: (_, __) => const Padding(
                       padding: EdgeInsets.only(bottom: 10),
-                      child: SizedBox(height: 72, child: ShimmerCard()),
+                      child: ShimmerCard(),
                     ),
                   )
                 : filtered.isEmpty
@@ -1443,9 +1600,22 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                           itemCount: filtered.length,
                           itemBuilder: (_, i) {
                             final u = filtered[i];
-                            final role = (u['role'] ?? 'GUEST').toString();
+                            final role = _cleanRole(u['role'] ?? 'GUEST');
                             final id = u['id'] as int?;
-                            final identifier = u['identifier'] ?? '—';
+                            final identifier =
+                                (u['identifier'] ?? '—').toString();
+                            final name = (u['profileName'] ??
+                                        u['name'] ??
+                                        u['fullName'] ??
+                                        '')
+                                    .toString()
+                                    .trim();
+                            final email = (u['profileEmail'] ??
+                                        u['email'] ??
+                                        u['identifier'] ??
+                                        '')
+                                    .toString()
+                                    .trim();
                             final requiresPwChange =
                                 u['requiresPasswordChange'] == true;
 
@@ -1466,9 +1636,12 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                                       ),
                                       child: Center(
                                         child: Text(
-                                          identifier.isNotEmpty
-                                              ? identifier[0].toUpperCase()
-                                              : '?',
+                                          (name.isNotEmpty
+                                                  ? name
+                                                  : identifier)
+                                              .characters
+                                              .first
+                                              .toUpperCase(),
                                           style: TextStyle(
                                             fontSize: 18,
                                             fontWeight: FontWeight.w800,
@@ -1486,7 +1659,10 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                                           Row(
                                             children: [
                                               Expanded(
-                                                child: Text(identifier,
+                                                child: Text(
+                                                    name.isNotEmpty
+                                                        ? name
+                                                        : identifier,
                                                     style: AppTextStyles.label
                                                         .copyWith(
                                                       fontWeight:
@@ -1523,7 +1699,11 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                                             ],
                                           ),
                                           const SizedBox(height: 4),
-                                          Row(
+                                          Wrap(
+                                            spacing: 8,
+                                            runSpacing: 6,
+                                            crossAxisAlignment:
+                                                WrapCrossAlignment.center,
                                             children: [
                                               Container(
                                                 padding:
@@ -1544,22 +1724,24 @@ class _AdminUserManagementScreenState extends State<AdminUserManagementScreen> {
                                                         color:
                                                             _roleColor(role))),
                                               ),
-                                              if (id != null) ...[
-                                                const SizedBox(width: 8),
+                                              if (id != null)
                                                 Text('ID: $id',
                                                     style:
                                                         AppTextStyles.caption),
-                                              ],
-                                              if (u['consultantId'] !=
-                                                  null) ...[
-                                                const SizedBox(width: 8),
+                                              if (u['consultantId'] != null)
                                                 Text(
                                                     'Cid: ${u['consultantId']}',
                                                     style: AppTextStyles.caption
                                                         .copyWith(
                                                             color: AppColors
                                                                 .primaryLight)),
-                                              ],
+                                              if (email.isNotEmpty)
+                                                Text(
+                                                  email,
+                                                  style: AppTextStyles.caption,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
                                             ],
                                           ),
                                         ],
@@ -3233,16 +3415,16 @@ class _AdminAddMemberScreenState extends State<AdminAddMemberScreen> {
       };
       final mapped = list
           .where((u) {
-            final role = ((u['role'] ?? u['userRole'] ?? '') as String)
-                .toUpperCase()
-                .replaceAll('ROLE_', '');
+            final role = _cleanRole(u['role'] ?? u['userRole'] ?? '');
             return memberRoles.contains(role);
           })
           .map((u) => Map<String, dynamic>.from(u as Map))
           .toList()
           .take(10)
           .toList();
-      setState(() => _recentMembers = mapped);
+      setState(() => _recentMembers = []);
+      final enriched = await _mergeUsersWithProfiles(mapped);
+      if (mounted) setState(() => _recentMembers = enriched);
     } catch (_) {
       setState(() => _recentMembers = []);
     }
@@ -3250,10 +3432,17 @@ class _AdminAddMemberScreenState extends State<AdminAddMemberScreen> {
   }
 
   String _resolveName(Map<String, dynamic> u) {
-    final raw =
-        u['name'] ?? u['fullName'] ?? u['firstName'] ?? u['username'] ?? '';
+    final raw = u['profileName'] ??
+        u['name'] ??
+        u['fullName'] ??
+        u['firstName'] ??
+        u['username'] ??
+        '';
     if (raw.toString().isNotEmpty) return raw.toString().trim();
-    final email = u['email']?.toString() ?? '';
+    final email = u['profileEmail']?.toString() ??
+        u['email']?.toString() ??
+        u['identifier']?.toString() ??
+        '';
     if (email.contains('@'))
       return email.split('@')[0].replaceAll(RegExp(r'[._-]'), ' ').trim();
     return 'Member';
@@ -3362,13 +3551,14 @@ class _AdminAddMemberScreenState extends State<AdminAddMemberScreen> {
                     TextFormField(
                       controller: _nameCtrl,
                       textCapitalization: TextCapitalization.words,
+                      inputFormatters: [_leadingLetterFormatter],
                       decoration: _inp('Full Name *',
                           icon: Icons.person_outline_rounded),
-                      validator: (v) {
-                        if ((v ?? '').trim().length < 2)
-                          return 'Enter a valid full name';
-                        return null;
-                      },
+                      validator: (v) =>
+                          _capitalizedTextError(v, field: 'Full name') ??
+                          ((v ?? '').trim().length < 2
+                              ? 'Enter a valid full name'
+                              : null),
                     ),
                     const SizedBox(height: 12),
                     TextFormField(
@@ -3401,9 +3591,16 @@ class _AdminAddMemberScreenState extends State<AdminAddMemberScreen> {
                     const SizedBox(height: 12),
                     TextFormField(
                       controller: _locationCtrl,
+                      textCapitalization: TextCapitalization.words,
+                      inputFormatters: [_leadingLetterFormatter],
                       decoration: _inp('Location',
                           icon: Icons.location_on_outlined,
                           hint: 'City, State'),
+                      validator: (v) => _capitalizedTextError(
+                        v,
+                        field: 'Location',
+                        requiredField: false,
+                      ),
                     ),
                     const SizedBox(height: 20),
                     Row(
@@ -3462,7 +3659,9 @@ class _AdminAddMemberScreenState extends State<AdminAddMemberScreen> {
             ),
             const SizedBox(height: 10),
             if (_loadingMembers)
-              const Center(child: CircularProgressIndicator())
+              const Center(
+                child: MeetTheMastersLoadingIndicator(label: 'Loading members'),
+              )
             else if (_recentMembers.isEmpty)
               Container(
                 padding: const EdgeInsets.all(24),

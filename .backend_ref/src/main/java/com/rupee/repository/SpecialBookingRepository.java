@@ -35,27 +35,27 @@ public interface SpecialBookingRepository extends JpaRepository<SpecialBooking, 
     // 📊 ANALYTICS & REVENUE PROJECTIONS
     // ==========================================
 
-    @Query("SELECT COALESCE(SUM(sb.totalAmount), 0) FROM SpecialBooking sb WHERE sb.consultantId = :consultantId AND sb.paymentStatus = 'SUCCESS'")
+    @Query("SELECT COALESCE(SUM(sb.totalAmount), 0) FROM SpecialBooking sb WHERE sb.consultantId = :consultantId AND sb.status = 'COMPLETED'")
     BigDecimal calculateTotalRevenueByConsultant(@Param("consultantId") Long consultantId);
 
-    @Query("SELECT COALESCE(SUM(sb.totalAmount), 0) FROM SpecialBooking sb WHERE sb.paymentStatus = 'SUCCESS'")
+    @Query("SELECT COALESCE(SUM(sb.totalAmount), 0) FROM SpecialBooking sb WHERE sb.status = 'COMPLETED'")
     BigDecimal calculateTotalPlatformRevenue();
 
-    @Query("SELECT COALESCE(SUM(sb.totalAmount), 0) FROM SpecialBooking sb WHERE sb.userId = :userId AND sb.paymentStatus = 'SUCCESS'")
+    @Query("SELECT COALESCE(SUM(sb.totalAmount), 0) FROM SpecialBooking sb WHERE sb.userId = :userId AND sb.status = 'COMPLETED'")
     BigDecimal calculateTotalSpentByUser(@Param("userId") Long userId);
 
     @Query("SELECT new map(MONTH(sb.createdAt) as month, COALESCE(SUM(sb.totalAmount), 0) as revenue) " +
-            "FROM SpecialBooking sb WHERE sb.consultantId = :consultantId AND sb.paymentStatus = 'SUCCESS' " +
+            "FROM SpecialBooking sb WHERE sb.consultantId = :consultantId AND sb.status = 'COMPLETED' " +
             "AND YEAR(sb.createdAt) = YEAR(CURRENT_DATE) GROUP BY MONTH(sb.createdAt)")
     List<Map<String, Object>> getMonthlyRevenueForConsultant(@Param("consultantId") Long consultantId);
 
     @Query("SELECT new map(MONTH(sb.createdAt) as month, COALESCE(SUM(sb.totalAmount), 0) as revenue) " +
-            "FROM SpecialBooking sb WHERE sb.paymentStatus = 'SUCCESS' " +
+            "FROM SpecialBooking sb WHERE sb.status = 'COMPLETED' " +
             "AND YEAR(sb.createdAt) = YEAR(CURRENT_DATE) GROUP BY MONTH(sb.createdAt)")
     List<Map<String, Object>> getPlatformMonthlyRevenue();
 
     @Query("SELECT new map(MONTH(sb.createdAt) as month, COALESCE(SUM(sb.totalAmount), 0) as revenue) " +
-            "FROM SpecialBooking sb WHERE sb.userId = :userId AND sb.paymentStatus = 'SUCCESS' " +
+            "FROM SpecialBooking sb WHERE sb.userId = :userId AND sb.status = 'COMPLETED' " +
             "AND YEAR(sb.createdAt) = YEAR(CURRENT_DATE) GROUP BY MONTH(sb.createdAt)")
     List<Map<String, Object>> getMonthlySpendingForUser(@Param("userId") Long userId);
 

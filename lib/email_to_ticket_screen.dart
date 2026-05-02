@@ -1,4 +1,5 @@
 import 'package:finadvise/app_theme.dart';
+import 'package:finadvise/shared_widgets.dart';
 import 'package:finadvise/services/services.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -28,21 +29,24 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
     final health = await _service.getHealthStatus();
     if (!mounted) return;
     setState(() {
-      _healthMessage = health ?? 'Unable to reach email-to-ticket health endpoint';
+      _healthMessage = health.message;
       _loading = false;
     });
   }
 
   Future<void> _triggerPoll() async {
     setState(() => _polling = true);
-    final message = await _service.triggerPolling();
+    final result = await _service.triggerPolling();
     if (!mounted) return;
     setState(() {
-      _lastActionMessage = message ?? 'Email polling request failed';
+      _lastActionMessage = result.message;
       _polling = false;
     });
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(_lastActionMessage!)),
+      SnackBar(
+        content: Text(_lastActionMessage!),
+        backgroundColor: result.ok ? AppColors.success : AppColors.danger,
+      ),
     );
     await _loadHealth();
   }
@@ -58,7 +62,11 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
         ),
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(
+              child: MeetTheMastersLoadingIndicator(
+                label: 'Checking email service',
+              ),
+            )
           : RefreshIndicator(
               onRefresh: _loadHealth,
               child: ListView(

@@ -37,6 +37,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -161,14 +162,9 @@ public class SpecialBookingService {
         booking.setScheduledTime(finalStartTime);
         booking.setStatus(SpecialBookingStatus.CONFIRMED);
 
-        // ✅ SANITIZATION: Explicitly wipe meeting links if mode is PHYSICAL or PHONE
-        if (booking.getMeetingMode() != null && booking.getMeetingMode() != MeetingMode.ONLINE) {
-            booking.setMeetingLink(null);
-            booking.setMeetingId(null);
-        } else {
-            booking.setMeetingLink(request.getMeetingLink());
-            booking.setMeetingId(request.getMeetingId());
-        }
+        booking.setMeetingLink(request.getMeetingLink());
+        booking.setMeetingId(request.getMeetingId());
+        applyGeneratedMeetingAccessInMemory(booking, "special-booking-" + booking.getId());
 
         SpecialBooking saved = specialBookingRepository.save(booking);
 
@@ -225,6 +221,7 @@ public class SpecialBookingService {
 
         booking.setScheduledDate(request.getNewDate());
         booking.setScheduledTime(finalStartTime);
+        applyGeneratedMeetingAccessInMemory(booking, "special-booking-" + booking.getId());
 
         SpecialBooking saved = specialBookingRepository.save(booking);
         log.info("AUDIT: Special Booking ID {} rescheduled to Date: {}, Time: {}", id, saved.getScheduledDate(), saved.getScheduledTime());
@@ -356,6 +353,32 @@ public class SpecialBookingService {
         }
 
         return discountAmount.min(baseAmount);
+    }
+
+    private void applyGeneratedMeetingAccessInMemory(SpecialBooking booking, String defaultPrefix) {
+        if (booking.getMeetingMode() != MeetingMode.ONLINE) {
+            booking.setMeetingLink(null);
+            booking.setMeetingId(null);
+            return;
+        }
+
+        String meetingId = normalizeMeetingId(booking.getMeetingId(), defaultPrefix);
+        booking.setMeetingId(meetingId);
+
+        if (booking.getMeetingLink() == null || booking.getMeetingLink().isBlank()) {
+            booking.setMeetingLink("https://meet.jit.si/" + meetingId);
+        }
+    }
+
+    private String normalizeMeetingId(String rawMeetingId, String defaultPrefix) {
+        String base = (rawMeetingId == null || rawMeetingId.isBlank())
+                ? defaultPrefix + "-" + UUID.randomUUID().toString().replace("-", "").substring(0, 10)
+                : rawMeetingId.trim();
+        return base
+                .toLowerCase()
+                .replaceAll("[^a-z0-9-]", "-")
+                .replaceAll("-{2,}", "-")
+                .replaceAll("^-|-$", "");
     }
 
     @Transactional(readOnly = true)

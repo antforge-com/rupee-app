@@ -315,12 +315,7 @@ class _AdminAnalyticsWebTabState extends State<AdminAnalyticsWebTab> {
 
   bool _isCompletedBooking(Booking booking) {
     final status = _bookingStatus(booking);
-    final payment = (booking.paymentStatus ?? '').toUpperCase();
-    return status == 'COMPLETED' ||
-        status == 'CLOSED' ||
-        payment == 'SUCCESS' ||
-        payment == 'PAID' ||
-        payment == 'CAPTURED';
+    return status == 'COMPLETED';
   }
 
   bool _isPendingBooking(Booking booking) {

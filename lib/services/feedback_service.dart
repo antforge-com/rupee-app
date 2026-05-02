@@ -15,10 +15,12 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 import 'package:finadvise/api_client.dart';
+import 'package:finadvise/services/user_service.dart';
 import '../models/models.dart';
 
 class FeedbackService {
   final ApiClient _apiClient = ApiClient();
+  final UserService _userService = UserService();
 
   // ── READ ─────────────────────────────────────────────────────────────────
 
@@ -28,7 +30,9 @@ class FeedbackService {
       final response = await _apiClient.dio.get('/api/feedbacks');
       final data = response.data;
       final list = data is Map ? (data['content'] ?? data['data'] ?? []) : data;
-      return (list as List).map((e) => Feedback.fromJson(e)).toList();
+      return _enrichFeedbackNames(
+        (list as List).map((e) => Feedback.fromJson(e)).toList(),
+      );
     } catch (e) {
       return [];
     }
@@ -42,7 +46,9 @@ class FeedbackService {
       );
       final data = response.data;
       final list = data is Map ? (data['content'] ?? data['data'] ?? []) : data;
-      return (list as List).map((e) => Feedback.fromJson(e)).toList();
+      return _enrichFeedbackNames(
+        (list as List).map((e) => Feedback.fromJson(e)).toList(),
+      );
     } catch (e) {
       return [];
     }
@@ -54,7 +60,9 @@ class FeedbackService {
       final response = await _apiClient.dio.get(
         '/api/feedbacks/booking/$bookingId',
       );
-      return Feedback.fromJson(response.data);
+      return _enrichFeedbackName(
+        Feedback.fromJson(response.data as Map<String, dynamic>),
+      );
     } catch (e) {
       return null;
     }
@@ -66,7 +74,9 @@ class FeedbackService {
       final response = await _apiClient.dio.get(
         '/api/feedbacks/meeting/$meetingId',
       );
-      return Feedback.fromJson(response.data);
+      return _enrichFeedbackName(
+        Feedback.fromJson(response.data as Map<String, dynamic>),
+      );
     } catch (e) {
       return null;
     }
@@ -76,7 +86,9 @@ class FeedbackService {
   Future<Feedback?> getFeedbackById(int feedbackId) async {
     try {
       final response = await _apiClient.dio.get('/api/feedbacks/$feedbackId');
-      return Feedback.fromJson(response.data);
+      return _enrichFeedbackName(
+        Feedback.fromJson(response.data as Map<String, dynamic>),
+      );
     } catch (e) {
       return null;
     }
@@ -139,5 +151,52 @@ class FeedbackService {
     } catch (e) {
       return false;
     }
+  }
+
+  Future<List<Feedback>> _enrichFeedbackNames(List<Feedback> feedbacks) async {
+    if (feedbacks.isEmpty) return feedbacks;
+    final resolved = await Future.wait(
+      feedbacks.map(_enrichFeedbackName),
+    );
+    return resolved;
+  }
+
+  Future<Feedback> _enrichFeedbackName(Feedback feedback) async {
+    final existingName = (feedback.clientName ?? '').trim();
+    if (existingName.isNotEmpty || feedback.userId == null) {
+      return feedback;
+    }
+
+    final userId = feedback.userId!;
+    try {
+      final profile = await _userService.getOnboardingProfile(userId);
+      final profileName = _pickName(profile);
+      if (profileName.isNotEmpty) {
+        return feedback.copyWith(clientName: profileName);
+      }
+    } catch (_) {}
+
+    try {
+      final user = await _userService.getUserById(userId);
+      final fallback = _pickName(user?.toJson());
+      if (fallback.isNotEmpty) {
+        return feedback.copyWith(clientName: fallback);
+      }
+    } catch (_) {}
+
+    return feedback;
+  }
+
+  String _pickName(Map<String, dynamic>? json) {
+    if (json == null) return '';
+    final raw = (json['name'] ??
+            json['fullName'] ??
+            json['displayName'] ??
+            json['identifier'] ??
+            json['email'] ??
+            '')
+        .toString()
+        .trim();
+    return raw;
   }
 }

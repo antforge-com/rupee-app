@@ -3,7 +3,30 @@
 // Question Service — Manage skills, admin questions and user answers
 // ════════════════════════════════════════════════════════════════════════════
 
+import 'package:dio/dio.dart';
 import 'package:finadvise/api_client.dart';
+
+class QuestionServiceActionResult {
+  final bool ok;
+  final String message;
+
+  const QuestionServiceActionResult({
+    required this.ok,
+    required this.message,
+  });
+}
+
+class QuestionServiceListResult {
+  final bool ok;
+  final String message;
+  final List<Map<String, dynamic>> items;
+
+  const QuestionServiceListResult({
+    required this.ok,
+    required this.message,
+    required this.items,
+  });
+}
 
 class QuestionService {
   final ApiClient _apiClient = ApiClient();
@@ -12,21 +35,45 @@ class QuestionService {
 
   /// GET /api/skills — All skills (Admin/User)
   Future<List<Map<String, dynamic>>> getAllSkills() async {
+    final result = await getAllSkillsResult();
+    return result.items;
+  }
+
+  Future<QuestionServiceListResult> getAllSkillsResult() async {
     try {
       final response = await _apiClient.dio.get('/api/skills');
-      return _extract(response.data);
-    } catch (_) {
-      return [];
+      return QuestionServiceListResult(
+        ok: true,
+        message: '',
+        items: _extract(response.data),
+      );
+    } catch (error) {
+      return QuestionServiceListResult(
+        ok: false,
+        message: _messageFromError(error, fallback: 'Failed to load skills'),
+        items: const <Map<String, dynamic>>[],
+      );
     }
   }
 
   /// POST /api/skills — Create new skill (Admin)
   Future<bool> createSkill(String name) async {
+    final result = await createSkillResult(name);
+    return result.ok;
+  }
+
+  Future<QuestionServiceActionResult> createSkillResult(String name) async {
     try {
       await _apiClient.dio.post('/api/skills', data: {'skillName': name});
-      return true;
-    } catch (_) {
-      return false;
+      return const QuestionServiceActionResult(
+        ok: true,
+        message: 'Skill created',
+      );
+    } catch (error) {
+      return QuestionServiceActionResult(
+        ok: false,
+        message: _messageFromError(error, fallback: 'Failed to create skill'),
+      );
     }
   }
 
@@ -42,11 +89,22 @@ class QuestionService {
 
   /// DELETE /api/skills/{id} — Delete skill (Admin)
   Future<bool> deleteSkill(int id) async {
+    final result = await deleteSkillResult(id);
+    return result.ok;
+  }
+
+  Future<QuestionServiceActionResult> deleteSkillResult(int id) async {
     try {
       await _apiClient.dio.delete('/api/skills/$id');
-      return true;
-    } catch (_) {
-      return false;
+      return const QuestionServiceActionResult(
+        ok: true,
+        message: 'Skill deleted',
+      );
+    } catch (error) {
+      return QuestionServiceActionResult(
+        ok: false,
+        message: _messageFromError(error, fallback: 'Failed to delete skill'),
+      );
     }
   }
 
@@ -54,21 +112,49 @@ class QuestionService {
 
   /// GET /api/questions — All questions (Admin)
   Future<List<Map<String, dynamic>>> getAllQuestions() async {
+    final result = await getAllQuestionsResult();
+    return result.items;
+  }
+
+  Future<QuestionServiceListResult> getAllQuestionsResult() async {
     try {
       final response = await _apiClient.dio.get('/api/questions');
-      return _extract(response.data);
-    } catch (_) {
-      return [];
+      return QuestionServiceListResult(
+        ok: true,
+        message: '',
+        items: _extract(response.data),
+      );
+    } catch (error) {
+      return QuestionServiceListResult(
+        ok: false,
+        message:
+            _messageFromError(error, fallback: 'Failed to load questions'),
+        items: const <Map<String, dynamic>>[],
+      );
     }
   }
 
   /// POST /api/questions — Create assessment question (Admin)
   Future<bool> createQuestion(Map<String, dynamic> data) async {
+    final result = await createQuestionResult(data);
+    return result.ok;
+  }
+
+  Future<QuestionServiceActionResult> createQuestionResult(
+    Map<String, dynamic> data,
+  ) async {
     try {
       await _apiClient.dio.post('/api/questions', data: data);
-      return true;
-    } catch (_) {
-      return false;
+      return const QuestionServiceActionResult(
+        ok: true,
+        message: 'Question created',
+      );
+    } catch (error) {
+      return QuestionServiceActionResult(
+        ok: false,
+        message:
+            _messageFromError(error, fallback: 'Failed to create question'),
+      );
     }
   }
 
@@ -84,11 +170,23 @@ class QuestionService {
 
   /// DELETE /api/questions/{id} — Delete question (Admin)
   Future<bool> deleteQuestion(int id) async {
+    final result = await deleteQuestionResult(id);
+    return result.ok;
+  }
+
+  Future<QuestionServiceActionResult> deleteQuestionResult(int id) async {
     try {
       await _apiClient.dio.delete('/api/questions/$id');
-      return true;
-    } catch (_) {
-      return false;
+      return const QuestionServiceActionResult(
+        ok: true,
+        message: 'Question deleted',
+      );
+    } catch (error) {
+      return QuestionServiceActionResult(
+        ok: false,
+        message:
+            _messageFromError(error, fallback: 'Failed to delete question'),
+      );
     }
   }
 
@@ -197,5 +295,24 @@ class QuestionService {
       }
     }
     return [];
+  }
+
+  String _messageFromError(Object error, {required String fallback}) {
+    if (error is DioException) {
+      final data = error.response?.data;
+      if (data is Map) {
+        final msg = data['message'] ?? data['error'] ?? data['detail'];
+        if (msg != null && '$msg'.trim().isNotEmpty) {
+          return '$msg'.trim();
+        }
+      } else if (data is String && data.trim().isNotEmpty) {
+        return data.trim();
+      }
+      final message = error.message?.trim() ?? '';
+      if (message.isNotEmpty) {
+        return message;
+      }
+    }
+    return fallback;
   }
 }

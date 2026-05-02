@@ -105,20 +105,23 @@ class StaticContentService {
   /// GET /api/terms/versions — Fetch all terms & conditions versions
   Future<List<Map<String, dynamic>>> getTermsVersions() async {
     try {
-      final response = await _apiClient.dio.get('/api/terms/versions');
-      if (response.data is List) {
-        return response.data
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
-      }
-      if (response.data is Map && response.data['versions'] is List) {
-        return (response.data['versions'] as List)
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
-      }
-      return [];
+      final response = await _apiClient.dio.get('/api/static-content');
+      final rows = response.data is List ? response.data as List : const [];
+      return rows
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .where((e) =>
+              (e['contentType'] ?? '').toString().toUpperCase() ==
+              'TERMS_AND_CONDITIONS')
+          .map((e) => {
+                'id': e['contentId'] ?? e['id'] ?? 0,
+                'version': e['version'] ?? '1.0',
+                'content': e['content'] ?? '',
+                'updatedAt': e['lastUpdatedDate'] ?? e['updatedAt'],
+                'updatedBy': e['lastUpdatedBy'] ?? e['updatedBy'] ?? 'Admin',
+                'isActive': true,
+              })
+          .toList();
     } catch (_) {
       return [];
     }
@@ -130,9 +133,11 @@ class StaticContentService {
     String? version,
   }) async {
     try {
-      await _apiClient.dio.post('/api/terms/publish', data: {
+      await _apiClient.dio.post('/api/static-content', data: {
+        'contentType': 'TERMS_AND_CONDITIONS',
         'content': content,
-        if (version != null && version.isNotEmpty) 'version': version,
+        'lastUpdatedBy':
+            version != null && version.isNotEmpty ? 'Admin v$version' : 'Admin',
       });
       return true;
     } catch (_) {

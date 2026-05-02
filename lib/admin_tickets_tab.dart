@@ -1,19 +1,19 @@
-// lib/admin_tickets_tab.dart
-// ════════════════════════════════════════════════════════════════════════════
-// ADMIN TICKETS TAB — 100% web-parity, 100% dynamic
+﻿// lib/admin_tickets_tab.dart
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ADMIN TICKETS TAB â€” 100% web-parity, 100% dynamic
 //
 // Key fixes vs old code:
-// • Escalated count = status=="ESCALATED" OR t.escalated==true (both checked)
-// • 7 KPI stat boxes matching web exactly (Total/Open/Overdue/Escalated/
+// â€¢ Escalated count = status=="ESCALATED" OR t.escalated==true (both checked)
+// â€¢ 7 KPI stat boxes matching web exactly (Total/Open/Overdue/Escalated/
 //   Resolved/ResolvedToday/Closed)  each with web-exact colours
-// • Email-to-Ticket banner: HEALTHY/DOWN/CHECKING badge + Check + Poll Inbox
-// • Auto-Responder collapsible panel (GET/POST /api/admin/settings/auto-responder)
-// • Status filter chips include ESCALATED count (checks both flag & status)
-// • Background 15-second polling
-// • Infinite scroll pagination
-// • Create Ticket FAB
-// • CSV Export
-// ════════════════════════════════════════════════════════════════════════════
+// â€¢ Email-to-Ticket banner: HEALTHY/DOWN/CHECKING badge + Check + Poll Inbox
+// â€¢ Auto-Responder collapsible panel (GET/POST /api/admin/settings/auto-responder)
+// â€¢ Status filter chips include ESCALATED count (checks both flag & status)
+// â€¢ Background 15-second polling
+// â€¢ Infinite scroll pagination
+// â€¢ Create Ticket FAB
+// â€¢ CSV Export
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 // ignore_for_file: use_build_context_synchronously
 
@@ -23,8 +23,8 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:finadvise/api_client.dart';
 import 'package:finadvise/models/models.dart';
-import 'package:finadvise/services/admin_service.dart';
 import 'package:finadvise/services/consultant_service.dart';
+import 'package:finadvise/services/email_to_ticket_service.dart';
 import 'package:finadvise/services/ticket_service.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -32,7 +32,7 @@ import 'package:share_plus/share_plus.dart';
 
 import 'ticket_detail_screen.dart';
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 final _dio = ApiClient().dio;
 
@@ -88,7 +88,27 @@ int? _toInt(dynamic v) {
 
 String _normTs(String s) => (s.endsWith('Z') || s.contains('+')) ? s : '${s}Z';
 
-// ─── SLA ─────────────────────────────────────────────────────────────────────
+String _apiErrorMessage(Object error,
+    {String fallback = 'Something went wrong'}) {
+  if (error is DioException) {
+    final data = error.response?.data;
+    if (data is Map) {
+      final msg = data['message'] ?? data['error'] ?? data['detail'];
+      if (msg != null && '$msg'.trim().isNotEmpty) {
+        return '$msg'.trim();
+      }
+    } else if (data is String && data.trim().isNotEmpty) {
+      return data.trim();
+    }
+    final message = error.message;
+    if (message != null && message.trim().isNotEmpty) {
+      return message.trim();
+    }
+  }
+  return fallback;
+}
+
+// â”€â”€â”€ SLA â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const _slaMap = {
   'LOW': 72,
@@ -153,7 +173,7 @@ _SlaLabel? _slaLabel(Ticket t) {
   }
 }
 
-// ─── colour config (web-exact) ────────────────────────────────────────────────
+// â”€â”€â”€ colour config (web-exact) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const _sCfg = {
   'NEW': [Color(0xFF6366F1), Color(0xFFEEF2FF), Color(0xFFC7D2FE), 'New'],
@@ -204,9 +224,9 @@ Color _pc(String p) =>
     (_pCfg[p.toUpperCase()]?[0] as Color?) ?? const Color(0xFF64748B);
 String _pl(String p) => (_pCfg[p.toUpperCase()]?[1] as String?) ?? p;
 
-// ════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // MAIN WIDGET
-// ════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class AdminTicketsTab extends StatefulWidget {
   const AdminTicketsTab({super.key});
@@ -216,8 +236,8 @@ class AdminTicketsTab extends StatefulWidget {
 
 class _AdminTicketsTabState extends State<AdminTicketsTab> {
   final _svc = TicketService();
-  final _adminSvc = AdminService();
   final _consultSvc = ConsultantService();
+  final _emailSvc = EmailToTicketService();
 
   List<Ticket> _all = [];
   List<Ticket> _visible = [];
@@ -243,14 +263,6 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
   String _emailStatus = 'checking'; // checking | ok | down
   bool _polling = false;
 
-  // Auto-Responder
-  bool _arEnabled = false;
-  String _arMessage = '';
-  bool _arLoading = true;
-  bool _arSaving = false;
-  bool _showArPanel = false;
-  final _arMsgCtrl = TextEditingController();
-
   static const _statuses = [
     'ALL',
     'NEW',
@@ -270,7 +282,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     'CRITICAL'
   ];
 
-  // ─── KPI computed (web-exact formulas) ───────────────────────────────────
+  // â”€â”€â”€ KPI computed (web-exact formulas) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   int get _total => _all.length;
   int get _openCount => _all
@@ -299,7 +311,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     }).length;
   }
 
-  /// Status chip counts — ESCALATED uses the combined flag check
+  /// Status chip counts â€” ESCALATED uses the combined flag check
   Map<String, int> get _chipCounts => {
         'ALL': _all.length,
         'NEW': _all.where((t) => t.status.toUpperCase() == 'NEW').length,
@@ -444,7 +456,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     return out;
   }
 
-  // ─── lifecycle ───────────────────────────────────────────────────────────
+  // â”€â”€â”€ lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   @override
   void initState() {
@@ -452,7 +464,6 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     _scrollCtrl.addListener(_onScroll);
     _loadData(reset: true);
     _checkEmail();
-    _loadAutoResponder();
     _pollTimer = Timer.periodic(
       const Duration(seconds: 15),
       (_) => _loadData(reset: true, silent: true),
@@ -464,7 +475,6 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     _pollTimer?.cancel();
     _scrollCtrl.dispose();
     _searchCtrl.dispose();
-    _arMsgCtrl.dispose();
     super.dispose();
   }
 
@@ -477,68 +487,47 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     }
   }
 
-  // ─── Email-to-Ticket ──────────────────────────────────────────────────────
+  // â”€â”€â”€ Email-to-Ticket â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   Future<void> _checkEmail() async {
     if (mounted) setState(() => _emailStatus = 'checking');
     try {
-      await _dio.get('/api/email-to-ticket/health');
-      if (mounted) setState(() => _emailStatus = 'ok');
+      final result = await _emailSvc.getHealthStatus();
+      if (!result.ok) {
+        if (mounted) setState(() => _emailStatus = 'down');
+        return;
+      }
+      final normalized = result.message.toUpperCase();
+      final down = normalized.contains('DOWN') ||
+          normalized.contains('OFFLINE') ||
+          normalized.contains('FAIL');
+      if (mounted) setState(() => _emailStatus = down ? 'down' : 'ok');
     } catch (_) {
       if (mounted) setState(() => _emailStatus = 'down');
     }
   }
 
   Future<void> _pollInbox() async {
+    if (_polling) return;
     setState(() => _polling = true);
+
     try {
-      await _dio.post('/api/email-to-ticket/poll');
-      if (mounted) _toast(context, 'Inbox polled successfully');
+      final result = await _emailSvc.triggerPolling();
+      if (!mounted) return;
+      if (!result.ok) {
+        _toast(context, result.message, error: true);
+        return;
+      }
+      setState(() => _emailStatus = 'ok');
+      _toast(context, result.message);
       _loadData(reset: true);
-    } catch (_) {
-      if (mounted) _toast(context, 'Poll failed', error: true);
+      _checkEmail();
     } finally {
       if (mounted) setState(() => _polling = false);
     }
   }
 
-  // ─── Auto-Responder ───────────────────────────────────────────────────────
-
-  Future<void> _loadAutoResponder() async {
-    setState(() => _arLoading = true);
-    try {
-      final data = await _adminSvc.getAutoResponder();
-      if (data != null && mounted) {
-        setState(() {
-          _arEnabled = data['enabled'] == true;
-          _arMessage = data['message']?.toString() ?? '';
-          _arMsgCtrl.text = _arMessage;
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _arLoading = false);
-    }
-  }
-
-  Future<void> _saveAutoResponder() async {
-    setState(() => _arSaving = true);
-    try {
-      final ok =
-          await _adminSvc.setAutoResponder(_arEnabled, _arMsgCtrl.text.trim());
-      if (mounted) {
-        if (ok) {
-          _arMessage = _arMsgCtrl.text.trim();
-          _toast(context, 'Auto-responder saved');
-        } else {
-          _toast(context, 'Failed to save', error: true);
-        }
-      }
-    } finally {
-      if (mounted) setState(() => _arSaving = false);
-    }
-  }
-
-  // ─── Data loading ─────────────────────────────────────────────────────────
+  // â”€â”€â”€ Data loading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   Future<void> _loadData({bool reset = false, bool silent = false}) async {
     if (reset) {
@@ -563,7 +552,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
         _svc.getAllTickets(
           page: reset ? 0 : _page,
           size: _pageSize,
-          useAnalytics: true,
+          useAnalytics: false,
         ),
         if (reset)
           _consultSvc.getAllConsultants()
@@ -633,7 +622,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
         }).toList();
       });
 
-  // ─── Export ───────────────────────────────────────────────────────────────
+  // â”€â”€â”€ Export â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   Future<void> _shareTextFile({
     required String fileName,
@@ -757,7 +746,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     }
   }
 
-  // ─── Create ticket ────────────────────────────────────────────────────────
+  // â”€â”€â”€ Create ticket â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   Future<void> _openCreate() async {
     List<Map<String, dynamic>> users = [];
@@ -974,13 +963,12 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
             const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       );
 
-  // ════════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // BUILD
-  // ════════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   @override
   Widget build(BuildContext context) {
-    final wideLayout = MediaQuery.of(context).size.width >= 1100;
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       body: _loading
@@ -993,775 +981,447 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
                 controller: _scrollCtrl,
                 slivers: [
                   SliverToBoxAdapter(
-                      child: Column(children: [
-                    _buildEmailBanner(),
-                    _buildHeader(),
-                    _buildKpiRow(),
-                    _buildSearchRow(),
-                    _buildStatusChips(),
-                    const SizedBox(height: 8),
-                  ])),
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-                    sliver: _visible.isEmpty
-                        ? SliverToBoxAdapter(child: _buildEmpty())
-                        : wideLayout
-                            ? SliverToBoxAdapter(child: _buildTicketsTable())
-                            : SliverList(
-                                delegate: SliverChildBuilderDelegate(
-                                (_, i) {
-                                  if (i == _visible.length) {
-                                    return _buildLoadMoreIndicator();
-                                  }
-                                  final ticket = _visible[i];
-                                  return _TicketCard(
-                                    ticket: ticket,
-                                    consultants: _consultants,
-                                    userDisplayName: _displayUserName(ticket),
-                                    consultantDisplayName:
-                                        _displayConsultantName(ticket),
-                                    onRefresh: () => _loadData(reset: true),
-                                  );
-                                },
-                                childCount:
-                                    _visible.length + (_hasMore ? 1 : 0),
-                              )),
+                    child: Column(
+                      children: [
+                        _buildEmailBanner(),
+                        _buildHeader(),
+                        _buildKpiRow(),
+                        _buildSearchRow(),
+                        _buildStatusChips(),
+                      ],
+                    ),
                   ),
+                  if (_visible.isEmpty)
+                    SliverToBoxAdapter(child: _buildEmpty())
+                  else
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+                      sliver: SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (_, i) {
+                            final ticket = _visible[i];
+                            return _TicketCard(
+                              ticket: ticket,
+                              consultants: _consultants,
+                              userDisplayName: _displayUserName(ticket),
+                              consultantDisplayName:
+                                  _displayConsultantName(ticket),
+                              onRefresh: () => _loadData(reset: true),
+                            );
+                          },
+                          childCount: _visible.length,
+                        ),
+                      ),
+                    ),
+                  if (_loadingMore)
+                    SliverToBoxAdapter(child: _buildLoadMoreIndicator()),
+                  const SliverToBoxAdapter(child: SizedBox(height: 8)),
                 ],
               ),
             ),
     );
   }
 
-  Widget _buildTicketsTable() => Container(
+  Widget _buildEmailBanner() {
+    final isDown = _emailStatus == 'down';
+    final isChecking = _emailStatus == 'checking';
+    final accent = isDown
+        ? const Color(0xFFDC2626)
+        : isChecking
+            ? const Color(0xFFD97706)
+            : const Color(0xFF0F766E);
+    final bg = isDown
+        ? const Color(0xFFFEF2F2)
+        : isChecking
+            ? const Color(0xFFFFFBEB)
+            : const Color(0xFFF0FDFA);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: bg,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFFE2E8F0)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.03),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
+          border: Border.all(color: accent.withValues(alpha: 0.35)),
         ),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _tableHeader(),
-            ..._visible.map(_tableRow),
-            if (_loadingMore)
-              _buildLoadMoreIndicator()
-            else if (_hasMore)
-              const Padding(
-                padding: EdgeInsets.fromLTRB(12, 8, 12, 14),
-                child: Text(
-                  'Scroll down to load more tickets',
-                  style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
-                ),
-              ),
-          ],
-        ),
-      );
+            LayoutBuilder(
+              builder: (_, constraints) {
+                final compact = constraints.maxWidth < 640;
+                final title = isChecking
+                    ? 'Checking Email-to-Ticket'
+                    : isDown
+                        ? 'Email-to-Ticket is Unavailable'
+                        : 'Email-to-Ticket is Active';
+                final subtitle = isChecking
+                    ? 'Checking mailbox integration health.'
+                    : isDown
+                        ? 'Mailbox integration is unreachable or taking too long to respond.'
+                        : 'Inbound support emails processed by the mailbox integration.';
+                final info = Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(7),
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(Icons.mail_outline_rounded,
+                          size: 18, color: accent),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF1E3A8A)),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            subtitle,
+                            style: const TextStyle(
+                                fontSize: 12.5, color: Color(0xFF475569)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
 
-  Widget _tableHeader() => SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-          decoration: const BoxDecoration(
-            color: Color(0xFFF8FAFC),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
-          ),
-          child: const Row(
-            children: [
-              _ColHeader(width: 150, label: 'TICKET NUMBER'),
-              _ColHeader(width: 300, label: 'TITLE / CLIENT'),
-              _ColHeader(width: 150, label: 'CATEGORY'),
-              _ColHeader(width: 120, label: 'PRIORITY'),
-              _ColHeader(width: 150, label: 'ASSIGNED TO'),
-              _ColHeader(width: 120, label: 'STATUS'),
-              _ColHeader(width: 120, label: 'CREATED'),
-              _ColHeader(width: 130, label: 'ACTION'),
-            ],
-          ),
-        ),
-      );
-
-  Widget _tableRow(Ticket ticket) {
-    final sla = _slaLabel(ticket);
-    final overdue = sla?.breached == true;
-    final warning = sla?.warning == true;
-    final escalated = _isEscalated(ticket);
-    final rowColor = (overdue || escalated)
-        ? const Color(0xFFFFFBFB)
-        : const Color(0xFFFFFFFF);
-    final leftBorder = (overdue || escalated)
-        ? const Color(0xFFDC2626)
-        : warning
-            ? const Color(0xFFF59E0B)
-            : Colors.transparent;
-    final userName = _displayUserName(ticket);
-    final consultantName = _displayConsultantName(ticket);
-    final created = _ticketCreatedText(ticket).split('\n');
-
-    return InkWell(
-      onTap: () => _openTicket(ticket),
-      child: Container(
-        decoration: BoxDecoration(
-          color: rowColor,
-          border: Border(
-            top: const BorderSide(color: Color(0xFFF1F5F9)),
-            left: BorderSide(color: leftBorder, width: 3),
-          ),
-        ),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: 150,
+                final statusChip = Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: accent.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: accent.withValues(alpha: 0.35)),
+                  ),
                   child: Text(
-                    _ticketNumber(ticket),
+                    isChecking ? 'CHECKING' : (isDown ? 'DOWN' : 'HEALTHY'),
                     style: TextStyle(
-                      fontSize: 24 / 2,
-                      color: overdue
-                          ? const Color(0xFFDC2626)
-                          : const Color(0xFFB91C1C),
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1,
-                      fontFamily: 'monospace',
-                    ),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: accent),
                   ),
-                ),
-                SizedBox(
-                  width: 300,
-                  child: Column(
+                );
+
+                if (compact) {
+                  return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        ticket.category.isEmpty ? 'General' : ticket.category,
-                        style: const TextStyle(
-                          fontSize: 29 / 2,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF0F172A),
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.person_outline_rounded,
-                            size: 12,
-                            color: Color(0xFF94A3B8),
-                          ),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              userName,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: Color(0xFF64748B),
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (sla != null && sla.breached) ...[
-                        const SizedBox(height: 4),
-                        const Text(
-                          'SLA BREACHED',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Color(0xFFDC2626),
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
+                      info,
+                      const SizedBox(height: 10),
+                      statusChip,
                     ],
+                  );
+                }
+
+                return Row(
+                  children: [
+                    Expanded(child: info),
+                    const SizedBox(width: 12),
+                    statusChip,
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton(
+                  onPressed: _checkEmail,
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: accent.withValues(alpha: 0.45)),
+                    foregroundColor: accent,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20)),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
                   ),
+                  child: const Text('Check',
+                      style: TextStyle(fontWeight: FontWeight.w700)),
                 ),
-                SizedBox(
-                  width: 150,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF1F5F9),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        ticket.category.isEmpty ? 'General' : ticket.category,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF334155),
-                          fontWeight: FontWeight.w600,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
+                FilledButton(
+                  onPressed: _polling ? null : _pollInbox,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF0F766E),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20)),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
                   ),
-                ),
-                SizedBox(
-                  width: 120,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _pc(ticket.priority).withValues(alpha: 0.10),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        _pl(ticket.priority),
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: _pc(ticket.priority),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                SizedBox(
-                  width: 150,
-                  child: Text(
-                    consultantName,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF64748B),
-                      fontWeight: FontWeight.w600,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                SizedBox(
-                  width: 120,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _sbg(ticket.status),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: _sbd(ticket.status)),
-                      ),
-                      child: Text(
-                        _sl(ticket.status),
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: _sc(ticket.status),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                SizedBox(
-                  width: 120,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        created.first,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF64748B),
-                        ),
-                      ),
-                      if (created.length > 1)
-                        Text(
-                          created.last,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFFDC2626),
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                SizedBox(
-                  width: 130,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SizedBox(
-                        height: 32,
-                        child: OutlinedButton(
-                          onPressed: () => _openTicket(ticket),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFF0F766E),
-                            side: const BorderSide(color: Color(0xFFA5F3FC)),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
-                            ),
-                            textStyle: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          child: const Text('Open'),
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          _actionFileChip(
-                            label: 'XLS',
-                            color: const Color(0xFF16A34A),
-                            onTap: () => _exportTicket(ticket, format: 'XLS'),
-                          ),
-                          const SizedBox(width: 6),
-                          _actionFileChip(
-                            label: 'PDF',
-                            color: const Color(0xFFDC2626),
-                            onTap: () => _exportTicket(ticket, format: 'PDF'),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
+                  child: _polling
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text('Poll Inbox',
+                          style: TextStyle(fontWeight: FontWeight.w700)),
                 ),
               ],
             ),
-          ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _actionFileChip({
-    required String label,
-    required Color color,
-    required VoidCallback onTap,
-  }) =>
-      InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: color.withValues(alpha: 0.35)),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              color: color,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
+  Widget _buildHeader() => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+        child: LayoutBuilder(
+          builder: (_, constraints) {
+            final compact = constraints.maxWidth < 840;
+            final titleBlock = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Support Tickets',
+                  style: TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF0F172A)),
+                ),
+                const SizedBox(height: 2),
+                Text('$_total total',
+                    style: const TextStyle(
+                        fontSize: 14, color: Color(0xFF64748B))),
+              ],
+            );
+
+            final actions = _buildHeaderActions();
+
+            if (compact) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  titleBlock,
+                  const SizedBox(height: 10),
+                  actions,
+                ],
+              );
+            }
+
+            return Row(
+              children: [
+                Expanded(child: titleBlock),
+                const SizedBox(width: 12),
+                actions,
+              ],
+            );
+          },
         ),
       );
 
-  // ─── Email-to-Ticket banner ───────────────────────────────────────────────
-
-  Widget _buildEmailBanner() {
-    final isOk = _emailStatus == 'ok';
-    final isDown = _emailStatus == 'down';
-
-    Color statusColor() => isOk
-        ? const Color(0xFF16A34A)
-        : isDown
-            ? const Color(0xFFDC2626)
-            : const Color(0xFF64748B);
-    Color statusBg() => isOk
-        ? const Color(0xFFF0FDF4)
-        : isDown
-            ? const Color(0xFFFEF2F2)
-            : const Color(0xFFF1F5F9);
-    Color statusBd() => isOk
-        ? const Color(0xFF86EFAC)
-        : isDown
-            ? const Color(0xFFFECACA)
-            : const Color(0xFFE2E8F0);
-    String statusTxt() => isOk
-        ? 'HEALTHY'
-        : isDown
-            ? 'DOWN'
-            : 'CHECKING';
-
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFFECFEFF), Color(0xFFF0FDF4)],
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-        ),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFA5F3FC)),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Icon(Icons.email_outlined, color: Color(0xFF1E3A8A), size: 20),
-          const SizedBox(width: 10),
-          Expanded(
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                const Text('Email-to-Ticket is Active',
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF1E3A8A))),
-                const Text(
-                    'Inbound support emails processed by the mailbox integration.',
-                    style: TextStyle(fontSize: 11, color: Color(0xFF475569))),
-              ])),
-          // Status badge
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: statusBg(),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: statusBd()),
-            ),
-            child: Text(statusTxt(),
-                style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    color: statusColor())),
-          ),
-        ]),
-        const SizedBox(height: 8),
-        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-          // Check
-          OutlinedButton(
-            onPressed: _checkEmail,
-            style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFF0F766E),
-              side: const BorderSide(color: Color(0xFFA5F3FC)),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              minimumSize: Size.zero,
-              textStyle:
-                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-            ),
-            child: const Text('Check'),
-          ),
-          const SizedBox(width: 6),
-          // Poll Inbox
-          ElevatedButton(
-            onPressed: _polling ? null : _pollInbox,
-            style: ElevatedButton.styleFrom(
+  Widget _buildHeaderActions() => Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        alignment: WrapAlignment.end,
+        children: [
+          FilledButton.icon(
+            onPressed: _openCreate,
+            icon: const Icon(Icons.add_rounded, size: 18),
+            label: const Text('New Ticket'),
+            style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFF0F766E),
               foregroundColor: Colors.white,
-              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              minimumSize: Size.zero,
-              textStyle:
-                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+                  borderRadius: BorderRadius.circular(12)),
             ),
-            child: _polling
-                ? const SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white))
-                : const Text('Poll Inbox'),
           ),
-        ]),
-      ]),
-    );
-  }
-
-  // ─── Auto-Responder panel ─────────────────────────────────────────────────
-
-  Widget _buildArPanel() {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFFBEB),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFFDE68A)),
-      ),
-      child: _arLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFD97706)),
-            )
-          : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                const Icon(Icons.auto_awesome_outlined,
-                    size: 16, color: Color(0xFF92400E)),
-                const SizedBox(width: 8),
-                const Expanded(
-                  child: Text('Auto-Responder',
-                      style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF92400E))),
-                ),
-                Switch(
-                  value: _arEnabled,
-                  onChanged: (v) => setState(() => _arEnabled = v),
-                  activeColor: const Color(0xFF0F766E),
-                ),
-              ]),
-              const SizedBox(height: 4),
-              const Text(
-                'Message sent automatically when a ticket is created.',
-                style: TextStyle(fontSize: 11, color: Color(0xFFB45309)),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: _arMsgCtrl,
-                maxLines: 3,
-                decoration: InputDecoration(
-                  hintText: 'Auto-response message…',
-                  hintStyle:
-                      const TextStyle(fontSize: 12, color: Color(0xFFC8974B)),
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.all(12),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: Color(0xFFFDE68A))),
-                  enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: Color(0xFFFDE68A))),
-                  focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide:
-                          const BorderSide(color: Color(0xFFD97706), width: 2)),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Align(
-                alignment: Alignment.centerRight,
-                child: ElevatedButton(
-                  onPressed: _arSaving ? null : _saveAutoResponder,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFD97706),
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
-                  ),
-                  child: _arSaving
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
-                      : const Text('Save',
-                          style: TextStyle(fontWeight: FontWeight.w700)),
-                ),
-              ),
-            ]),
-    );
-  }
-
-  // ─── Header ───────────────────────────────────────────────────────────────
-
-  Widget _buildHeader() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-      child: Row(children: [
-        Expanded(
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Support Tickets',
-              style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: Color(0xFF0F172A))),
-          Text('${_total} total',
-              style: const TextStyle(fontSize: 12, color: Color(0xFF64748B))),
-        ])),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(children: [
-            ElevatedButton.icon(
-              onPressed: _openCreate,
-              icon: const Icon(Icons.add_rounded, size: 15),
-              label: const Text('+ New Ticket'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF0F766E),
-                foregroundColor: Colors.white,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                textStyle:
-                    const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-              ),
+          OutlinedButton.icon(
+            onPressed: _export,
+            icon: const Icon(Icons.download_rounded, size: 16),
+            label: Text('Export ($_total)'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF334155),
+              side: const BorderSide(color: Color(0xFFCBD5E1)),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
             ),
-            const SizedBox(width: 8),
-            OutlinedButton.icon(
-              onPressed: _export,
-              icon: const Icon(Icons.download_outlined, size: 15),
-              label: Text(
-                  'Export (${_visible.isNotEmpty ? _visible.length : _total})'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF374151),
-                side: const BorderSide(color: Color(0xFFE2E8F0)),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                textStyle:
-                    const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-              ),
+          ),
+          OutlinedButton.icon(
+            onPressed: () => _loadData(reset: true),
+            icon: const Icon(Icons.refresh_rounded, size: 16),
+            label: const Text('Refresh'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF0F766E),
+              side: const BorderSide(color: Color(0xFF99F6E4)),
+              backgroundColor: const Color(0xFFF0FDFA),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
             ),
-            const SizedBox(width: 8),
-            OutlinedButton.icon(
-              onPressed: () => _loadData(reset: true),
-              icon: const Icon(Icons.refresh_rounded, size: 15),
-              label: const Text('Refresh'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF0F766E),
-                side: const BorderSide(color: Color(0xFFA5F3FC)),
-                backgroundColor: const Color(0xFFECFEFF),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                textStyle:
-                    const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-              ),
-            ),
-          ]),
-        ),
-      ]),
-    );
-  }
-
-  // ─── 7 KPI boxes (web-exact colours & labels) ─────────────────────────────
+          ),
+        ],
+      );
 
   Widget _buildKpiRow() {
-    final boxes = [
+    final cards = <Map<String, dynamic>>[
       {
+        'value': _total,
         'label': 'Total',
-        'val': _total,
         'color': const Color(0xFF0F766E),
-        'bg': const Color(0xFFECFEFF)
+        'bg': const Color(0xFFE6FFFA),
+        'bd': const Color(0xFF99F6E4),
       },
       {
+        'value': _openCount,
         'label': 'Open / Active',
-        'val': _openCount,
         'color': const Color(0xFFD97706),
-        'bg': const Color(0xFFFFFBEB)
+        'bg': const Color(0xFFFFFBEB),
+        'bd': const Color(0xFFFDE68A),
       },
       {
+        'value': _overdueCount,
         'label': 'Overdue (SLA)',
-        'val': _overdueCount,
         'color': const Color(0xFFDC2626),
-        'bg': const Color(0xFFFEF2F2)
+        'bg': const Color(0xFFFEF2F2),
+        'bd': const Color(0xFFFECACA),
       },
       {
+        'value': _escalatedCount,
         'label': 'Escalated',
-        'val': _escalatedCount,
         'color': const Color(0xFFDC2626),
-        'bg': const Color(0xFFFEF2F2)
+        'bg': const Color(0xFFFFF1F2),
+        'bd': const Color(0xFFFDA4AF),
       },
       {
+        'value': _resolvedCount,
         'label': 'Resolved',
-        'val': _resolvedCount,
         'color': const Color(0xFF16A34A),
-        'bg': const Color(0xFFF0FDF4)
+        'bg': const Color(0xFFF0FDF4),
+        'bd': const Color(0xFFBBF7D0),
       },
       {
+        'value': _resolvedToday,
         'label': 'Resolved Today',
-        'val': _resolvedToday,
         'color': const Color(0xFF16A34A),
-        'bg': const Color(0xFFF0FDF4)
+        'bg': const Color(0xFFF0FDF4),
+        'bd': const Color(0xFFBBF7D0),
       },
       {
+        'value': _closedCount,
         'label': 'Closed',
-        'val': _closedCount,
         'color': const Color(0xFF64748B),
-        'bg': const Color(0xFFF1F5F9)
+        'bg': const Color(0xFFF1F5F9),
+        'bd': const Color(0xFFCBD5E1),
       },
     ];
 
-    return SizedBox(
-      height: 90,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-        itemCount: boxes.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 10),
-        itemBuilder: (_, i) {
-          final b = boxes[i];
-          final color = b['color'] as Color;
-          final bg = b['bg'] as Color;
-          return Container(
-            width: 110,
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: color.withValues(alpha: 0.15)),
-              boxShadow: [
-                BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.04), blurRadius: 6),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: LayoutBuilder(
+        builder: (_, constraints) {
+          if (constraints.maxWidth < 900) {
+            return SizedBox(
+              height: 98,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: cards.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 10),
+                itemBuilder: (_, i) => SizedBox(
+                  width: 136,
+                  child: _kpiCard(
+                    value: cards[i]['value'] as int,
+                    label: cards[i]['label'] as String,
+                    color: cards[i]['color'] as Color,
+                    background: cards[i]['bg'] as Color,
+                    border: cards[i]['bd'] as Color,
+                  ),
+                ),
+              ),
+            );
+          }
+
+          final gap = 10.0;
+          final width = (constraints.maxWidth - (gap * (cards.length - 1))) /
+              cards.length;
+          return Row(
+            children: [
+              for (var i = 0; i < cards.length; i++) ...[
+                SizedBox(
+                  width: width,
+                  child: _kpiCard(
+                    value: cards[i]['value'] as int,
+                    label: cards[i]['label'] as String,
+                    color: cards[i]['color'] as Color,
+                    background: cards[i]['bg'] as Color,
+                    border: cards[i]['bd'] as Color,
+                  ),
+                ),
+                if (i < cards.length - 1) SizedBox(width: gap),
               ],
-            ),
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('${b['val']}',
-                  style: TextStyle(
-                      fontSize: 22, fontWeight: FontWeight.w800, color: color)),
-              const SizedBox(height: 4),
-              Text(b['label'] as String,
-                  style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w700,
-                      color: color.withValues(alpha: 0.75),
-                      letterSpacing: 0.4,
-                      height: 1.3),
-                  maxLines: 2),
-            ]),
+            ],
           );
         },
       ),
     );
   }
 
-  // ─── Search + priority filter ─────────────────────────────────────────────
+  Widget _kpiCard({
+    required int value,
+    required String label,
+    required Color color,
+    required Color background,
+    required Color border,
+  }) =>
+      Container(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              '$value',
+              style: TextStyle(
+                  fontSize: 24, fontWeight: FontWeight.w900, color: color),
+            ),
+            const SizedBox(height: 2),
+            Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 12, color: color, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      );
 
   Widget _buildSearchRow() => Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-        child: Row(children: [
-          Expanded(
-            child: TextField(
+        child: LayoutBuilder(
+          builder: (_, constraints) {
+            final compact = constraints.maxWidth < 620;
+
+            final searchField = TextField(
               controller: _searchCtrl,
               onChanged: (v) {
                 _search = v;
                 _applyFilters();
               },
               decoration: InputDecoration(
-                hintText: 'Search by ID, title, user, status, priority…',
+                hintText: 'Search by ID, title, user, status, priority...',
                 hintStyle:
                     const TextStyle(fontSize: 13, color: Color(0xFF94A3B8)),
                 prefixIcon: const Icon(Icons.search_rounded,
@@ -1780,42 +1440,57 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
                     borderSide:
                         const BorderSide(color: Color(0xFF0F766E), width: 1.5)),
               ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Container(
-            height: 44,
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFE2E8F0))),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                value: _priorityFilter,
-                style: const TextStyle(
-                    fontSize: 13,
-                    color: Color(0xFF374151),
-                    fontWeight: FontWeight.w600),
-                items: _priorities
-                    .map((p) => DropdownMenuItem(
-                        value: p,
-                        child: Text(p == 'ALL' ? 'All Priorities' : _pl(p))))
-                    .toList(),
-                onChanged: (v) {
-                  if (v != null) {
-                    setState(() => _priorityFilter = v);
-                    _applyFilters();
-                  }
-                },
+            );
+
+            final priorityDropdown = Container(
+              height: 44,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFE2E8F0))),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: _priorityFilter,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      color: Color(0xFF374151),
+                      fontWeight: FontWeight.w600),
+                  items: _priorities
+                      .map((p) => DropdownMenuItem(
+                          value: p,
+                          child: Text(p == 'ALL' ? 'All Priorities' : _pl(p))))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) {
+                      setState(() => _priorityFilter = v);
+                      _applyFilters();
+                    }
+                  },
+                ),
               ),
-            ),
-          ),
-        ]),
+            );
+
+            if (compact) {
+              return Column(
+                children: [
+                  searchField,
+                  const SizedBox(height: 8),
+                  SizedBox(width: double.infinity, child: priorityDropdown),
+                ],
+              );
+            }
+
+            return Row(
+              children: [
+                Expanded(child: searchField),
+                const SizedBox(width: 8),
+                priorityDropdown,
+              ],
+            );
+          },
+        ),
       );
-
-  // ─── Status filter chips ──────────────────────────────────────────────────
-
   Widget _buildStatusChips() => SizedBox(
         height: 44,
         child: ListView.separated(
@@ -1899,9 +1574,9 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       );
 }
 
-// ════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // TICKET CARD
-// ════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class _ColHeader extends StatelessWidget {
   final double width;
@@ -2116,32 +1791,65 @@ class _TicketCard extends StatelessWidget {
               const Divider(height: 1, color: Color(0xFFF1F5F9)),
               const SizedBox(height: 8),
 
-              // Footer: user · priority dot · date · arrow
-              Row(children: [
-                const Icon(Icons.person_outline_rounded,
-                    size: 13, color: Color(0xFF94A3B8)),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Text(
-                    userDisplayName,
-                    style:
-                        const TextStyle(fontSize: 11, color: Color(0xFF64748B)),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    consultantDisplayName,
-                    textAlign: TextAlign.right,
-                    style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF475569),
-                        fontWeight: FontWeight.w600),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ]),
+              LayoutBuilder(
+                builder: (_, constraints) {
+                  if (constraints.maxWidth < 380) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          const Icon(Icons.person_outline_rounded,
+                              size: 13, color: Color(0xFF94A3B8)),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              userDisplayName,
+                              style: const TextStyle(
+                                  fontSize: 11, color: Color(0xFF64748B)),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ]),
+                        const SizedBox(height: 4),
+                        Text(
+                          consultantDisplayName,
+                          style: const TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF475569),
+                              fontWeight: FontWeight.w600),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    );
+                  }
+
+                  return Row(children: [
+                    const Icon(Icons.person_outline_rounded,
+                        size: 13, color: Color(0xFF94A3B8)),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        userDisplayName,
+                        style: const TextStyle(
+                            fontSize: 11, color: Color(0xFF64748B)),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        consultantDisplayName,
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF475569),
+                            fontWeight: FontWeight.w600),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ]);
+                },
+              ),
               const SizedBox(height: 7),
               Row(children: [
                 Container(

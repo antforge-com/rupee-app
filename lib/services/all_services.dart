@@ -1,5 +1,6 @@
 ﻿// lib/services/all_services.dart
 // Comprehensive export of all API services
+export 'comprehensive_api_service.dart';
 export 'booking_service_ext.dart';
 export 'feedback_service_ext.dart';
 export 'offer_service_ext.dart';
@@ -18,3 +19,5 @@ export 'dashboard_service_ext.dart';
 export 'user_service_ext.dart';
 export 'consultant_service_ext.dart';
 export 'auth.service.dart';
+export 'ticket_service.dart';
+export 'admin_service.dart';

@@ -75,6 +75,14 @@ InputDecoration _inp(String label, {IconData? icon, String? hint, Widget? suffix
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
     );
 
+double _normalizeSessionFee(dynamic raw) {
+  final value = raw is num ? raw.toDouble() : double.tryParse('${raw ?? ''}') ?? 0;
+  if (value >= 10000 && value < 1000000 && value % 10 == 0) {
+    return value / 10;
+  }
+  return value;
+}
+
 String _apiError(Object error, {String fallback = 'Something went wrong.'}) {
   if (error is DioException) {
     // Timeout specific message
@@ -512,7 +520,7 @@ class _AdvisorCard extends StatelessWidget {
                           ),
                         if (advisor.charges != null)
                           Text(
-                            '₹${advisor.charges!.toStringAsFixed(0)}/session',
+                            'Rs ${_normalizeSessionFee(advisor.charges).toStringAsFixed(0)}/session',
                             style: AppTextStyles.caption.copyWith(
                               color: AppColors.accent,
                               fontWeight: FontWeight.w700,
@@ -681,7 +689,7 @@ class _AdvisorDetailScreenState extends State<AdvisorDetailScreen>
                   if (advisor.slotsDuration != null)
                     _infoRow(Icons.timer_outlined, 'Slot Duration', '${advisor.slotsDuration} mins'),
                   if (advisor.charges != null)
-                    _infoRow(Icons.currency_rupee_rounded, 'Session Fee', '₹${advisor.charges!.toStringAsFixed(0)}'),
+                    _infoRow(Icons.currency_rupee_rounded, 'Session Fee', 'Rs ${_normalizeSessionFee(advisor.charges).toStringAsFixed(0)}'),
                   if (advisor.shiftDisplay.isNotEmpty)
                     _infoRow(Icons.access_time_rounded, 'Working Hours', advisor.shiftDisplay),
                   _infoRow(
@@ -872,7 +880,7 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
       _nameCtrl.text = a.name;
       _emailCtrl.text = a.email;
       _desigCtrl.text = a.designation ?? '';
-      _chargesCtrl.text = a.charges?.toStringAsFixed(0) ?? '';
+      _chargesCtrl.text = _normalizeSessionFee(a.charges).toStringAsFixed(0);
       _descCtrl.text = a.description ?? '';
       _experienceCtrl.text = a.yearsOfExperience?.toStringAsFixed(1) ?? '';
       _slotDuration = a.slotsDuration ?? 60;
@@ -1146,7 +1154,7 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
               TextFormField(
                 controller: _chargesCtrl,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: _inp('Base Charge per Person (₹) *', icon: Icons.currency_rupee_rounded),
+                decoration: _inp('Base Charge per Person (Rs) *', icon: Icons.currency_rupee_rounded),
                 validator: (v) {
                   final value = (v ?? '').trim();
                   if (value.isEmpty) return 'Session fee is required';

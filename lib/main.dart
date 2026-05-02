@@ -18,6 +18,7 @@ import 'package:finadvise/login_screen.dart';
 import 'package:finadvise/meet_the_masters_brand.dart';
 import 'package:finadvise/public_contact_screen.dart';
 import 'package:finadvise/register_screen.dart';
+import 'package:finadvise/shared_widgets.dart';
 import 'package:finadvise/user-dashboard.dart';
 import 'package:finadvise/subscription_plans_panel.dart';
 import 'package:flutter/material.dart';
@@ -203,13 +204,9 @@ class _SplashScreenState extends State<SplashScreen>
                     showAmbientGlow: true,
                   ),
                   SizedBox(height: 56),
-                  SizedBox(
-                    width: 32,
-                    height: 32,
-                    child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2.5,
-                    ),
+                  MeetTheMastersLoadingIndicator(
+                    label: 'Loading',
+                    size: 48,
                   ),
                 ],
               ),

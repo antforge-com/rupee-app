@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'app_theme.dart';
+import 'services/comprehensive_api_service.dart';
 
 class SubscriptionPlansPanel extends StatefulWidget {
   const SubscriptionPlansPanel({super.key});
@@ -38,10 +39,13 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
 
   String _formError = '';
   bool _formSubmitting = false;
+  
+  late ComprehensiveApiService _apiService;
 
   @override
   void initState() {
     super.initState();
+    _apiService = ComprehensiveApiService();
     _loadPlans();
   }
 
@@ -61,43 +65,24 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
       _error = '';
     });
     try {
-      // TODO: Replace with actual API call
-      await Future.delayed(const Duration(milliseconds: 800));
+      final plansData = await _apiService.getAllSubscriptionPlans();
       if (mounted) {
         setState(() {
-          _plans = [
-            {
-              'id': 1,
-              'name': 'Guest',
-              'originalPrice': 0,
-              'discountPrice': 0,
-              'features': 'Limited access',
-              'tag': null,
-            },
-            {
-              'id': 2,
-              'name': 'Standard',
-              'originalPrice': 6999,
-              'discountPrice': 4999,
-              'features': 'Full access+Support',
-              'tag': 'POPULAR',
-            },
-            {
-              'id': 3,
-              'name': 'Premium',
-              'originalPrice': 14999,
-              'discountPrice': 11999,
-              'features': 'VIP+Priority',
-              'tag': null,
-            },
-          ];
+          _plans = List<Map<String, dynamic>>.from(
+            plansData.map((p) {
+              if (p is Map<String, dynamic>) {
+                return p;
+              }
+              return {};
+            }),
+          );
           _loading = false;
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = 'Failed to load plans: $e';
           _loading = false;
         });
       }
@@ -145,12 +130,30 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
     });
 
     try {
-      // TODO: Replace with actual API call
-      await Future.delayed(const Duration(milliseconds: 600));
+      final planData = {
+        'name': name,
+        'originalPrice': int.tryParse(_origPriceCtrl.text) ?? 0,
+        'discountPrice': int.tryParse(_discPriceCtrl.text) ?? 0,
+        'tag': _tagCtrl.text.trim().isEmpty ? null : _tagCtrl.text.trim(),
+        'features': _featuresCtrl.text.trim(),
+      };
 
-      if (mounted) {
+      bool success;
+      if (_editingPlan != null) {
+        success = await _apiService.updateSubscriptionPlan(
+          _editingPlan!['id'] as int,
+          planData,
+        );
+      } else {
+        final result = await _apiService.createSubscriptionPlan(planData);
+        success = result != null;
+      }
+
+      if (success && mounted) {
         _closeModal();
         _loadPlans();
+      } else if (mounted) {
+        setState(() => _formError = 'Failed to save plan. Please try again.');
       }
     } catch (e) {
       setState(() => _formError = e.toString());
@@ -386,28 +389,37 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
                   ],
                 ),
               ),
-              ElevatedButton.icon(
-                onPressed: () => _openModal(plan: plan),
-                icon: const Icon(Icons.edit, size: 12),
-                label: Text(
-                  'Edit',
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
+              PopupMenuButton<String>(
+                itemBuilder: (BuildContext context) => [
+                  const PopupMenuItem(
+                    value: 'edit',
+                    child: Row(
+                      children: [
+                        Icon(Icons.edit, size: 16),
+                        SizedBox(width: 8),
+                        Text('Edit'),
+                      ],
+                    ),
                   ),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFECFEFF),
-                  foregroundColor: AppColors.primary,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 5,
+                  const PopupMenuDivider(),
+                  const PopupMenuItem(
+                    value: 'delete',
+                    child: Row(
+                      children: [
+                        Icon(Icons.delete, size: 16, color: Colors.red),
+                        SizedBox(width: 8),
+                        Text('Delete', style: TextStyle(color: Colors.red)),
+                      ],
+                    ),
                   ),
-                  side: const BorderSide(
-                    color: Color(0xFFA5F3FC),
-                    width: 1.5,
-                  ),
-                ),
+                ],
+                onSelected: (value) {
+                  if (value == 'edit') {
+                    _openModal(plan: plan);
+                  } else if (value == 'delete') {
+                    _showDeleteConfirmation(plan);
+                  }
+                },
               ),
             ],
           ),
@@ -494,6 +506,51 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
             ),
         ],
       ),
+    );
+  }
+
+  void _showDeleteConfirmation(Map<String, dynamic> plan) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Delete Plan'),
+          content: Text(
+            'Are you sure you want to delete "${plan['name']}"? This action cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                final success = await _apiService.deleteSubscriptionPlan(
+                  plan['id'] as int,
+                );
+                if (success && mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Plan "${plan['name']}" deleted successfully'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                  _loadPlans();
+                } else if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Failed to delete plan'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              },
+              child: const Text('Delete', style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        );
+      },
     );
   }
 

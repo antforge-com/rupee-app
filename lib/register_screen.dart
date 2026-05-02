@@ -96,6 +96,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
   String _capitalizeFirst(String s) =>
       s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
 
+  String _formatPlanAmount(dynamic value) {
+    final amount = double.tryParse(value?.toString() ?? '0') ?? 0;
+    return amount.toStringAsFixed(2);
+  }
+
   Future<void> _fetchPlans() async {
     setState(() => _plansLoading = true);
     try {
@@ -522,7 +527,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   keyboardType: TextInputType.emailAddress,
                   enabled: !_emailVerified,
                   onChanged: (_) {
-                    if (_emailVerified || _otpBoxVisible) _resetEmailVerification();
+                    if (_emailVerified || _otpBoxVisible) {
+                      _resetEmailVerification();
+                    } else {
+                      setState(() {
+                        _errors = {..._errors, 'email': ''};
+                      });
+                    }
                   },
                   decoration: _inputDeco(
                     hint: 'you@example.com',
@@ -658,44 +669,51 @@ class _RegisterScreenState extends State<RegisterScreen> {
           const SizedBox(height: 16),
 
           // 6 boxes
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: List.generate(6, (i) {
-              return Container(
-                width: 44,
-                height: 54,
-                margin: EdgeInsets.only(right: i < 5 ? 8 : 0),
-                child: TextField(
-                  controller: _otpCtrl[i],
-                  focusNode: _otpFocus[i],
-                  textAlign: TextAlign.center,
-                  keyboardType: TextInputType.number,
-                  maxLength: 1,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.w800),
-                  onChanged: (val) => _handleOtpDigitChange(i, val),
-                  onSubmitted: (_) {
-                    if (i < 5) _otpFocus[i + 1].requestFocus();
-                  },
-                  decoration: InputDecoration(
-                    counterText: '',
-                    contentPadding: EdgeInsets.zero,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 1.5),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final maxWidth = constraints.maxWidth;
+              final boxWidth = ((maxWidth - 5 * 8) / 6).clamp(40.0, 50.0);
+              return Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 8,
+                runSpacing: 8,
+                children: List.generate(6, (i) {
+                  return SizedBox(
+                    width: boxWidth,
+                    height: 54,
+                    child: TextField(
+                      controller: _otpCtrl[i],
+                      focusNode: _otpFocus[i],
+                      textAlign: TextAlign.center,
+                      keyboardType: TextInputType.number,
+                      maxLength: 1,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.w800),
+                      onChanged: (val) => _handleOtpDigitChange(i, val),
+                      onSubmitted: (_) {
+                        if (i < 5) _otpFocus[i + 1].requestFocus();
+                      },
+                      decoration: InputDecoration(
+                        counterText: '',
+                        contentPadding: EdgeInsets.zero,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 1.5),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 1.5),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(color: AppColors.primaryLight, width: 1.5),
+                        ),
+                      ),
                     ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 1.5),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(color: AppColors.primaryLight, width: 1.5),
-                    ),
-                  ),
-                ),
+                  );
+                }),
               );
-            }),
+            },
           ),
 
           if (_otpError.isNotEmpty) ...[
@@ -772,9 +790,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
           // Badge row
           Row(
             children: [
-              _planBadge('Subscribed - Full access', !_isFree(_selectedPlan ?? {}), false),
+              Expanded(
+                child: _planBadge(
+                    'Subscribed - Full access', !_isFree(_selectedPlan ?? {}), false),
+              ),
               const SizedBox(width: 10),
-              _planBadge('Guest - Limited access', _isFree(_selectedPlan ?? {}), true),
+              Expanded(
+                child: _planBadge(
+                    'Guest - Limited access', _isFree(_selectedPlan ?? {}), true),
+              ),
             ],
           ),
           const SizedBox(height: 16),
@@ -813,7 +837,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
             isGuest ? Icons.person_outline : Icons.verified_user_outlined,
@@ -897,7 +921,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  isFree ? 'Free' : '₹${plan['discountPrice']}',
+                  isFree ? 'Free' : 'Rs ${_formatPlanAmount(plan['discountPrice'])}',
                   style: GoogleFonts.inter(
                       fontSize: 20,
                       fontWeight: FontWeight.w900,
@@ -960,7 +984,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
     } else if (!_emailVerified) {
       label = 'Enter OTP to Continue';
     } else if (!isFree && _selectedPlan != null) {
-      label = 'Subscribe & Register (₹${_selectedPlan!['discountPrice']})';
+      label =
+          'Subscribe & Register (Rs ${_formatPlanAmount(_selectedPlan!['discountPrice'])})';
     } else {
       label = 'Create Guest Account';
     }

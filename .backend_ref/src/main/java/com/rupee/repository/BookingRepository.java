@@ -91,26 +91,26 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
 
     // 1. Consultant: Revenue Chart Data (Monthly)
     @Query("SELECT new map(MONTH(b.createdAt) as month, COALESCE(SUM(b.totalAmount), 0) as revenue) " +
-            "FROM Booking b WHERE b.consultantId = :consultantId AND b.paymentStatus = 'SUCCESS' " +
+            "FROM Booking b WHERE b.consultantId = :consultantId AND b.bookingStatus = 'COMPLETED' " +
             "AND YEAR(b.createdAt) = YEAR(CURRENT_DATE) GROUP BY MONTH(b.createdAt)")
     List<Map<String, Object>> getMonthlyRevenueForConsultant(@Param("consultantId") Long consultantId);
 
     // 2. Admin: Platform Revenue Chart Data (Monthly)
     @Query("SELECT new map(MONTH(b.createdAt) as month, COALESCE(SUM(b.totalAmount), 0) as revenue) " +
-            "FROM Booking b WHERE b.paymentStatus = 'SUCCESS' " +
+            "FROM Booking b WHERE b.bookingStatus = 'COMPLETED' " +
             "AND YEAR(b.createdAt) = YEAR(CURRENT_DATE) GROUP BY MONTH(b.createdAt)")
     List<Map<String, Object>> getPlatformMonthlyRevenue();
 
     // 3. Admin: Top Consultants by Revenue
     @Query("SELECT new map(b.consultantId as consultantId, COALESCE(SUM(b.totalAmount), 0) as totalRevenue, COUNT(b.id) as totalBookings) " +
-            "FROM Booking b WHERE b.paymentStatus = 'SUCCESS' " +
+            "FROM Booking b WHERE b.bookingStatus = 'COMPLETED' " +
             "GROUP BY b.consultantId ORDER BY SUM(b.totalAmount) DESC")
     List<Map<String, Object>> getTopConsultantsByRevenue(Pageable pageable);
 
     // 4. Counts for Overview Cards
     long countByConsultantIdAndBookingStatus(Long consultantId, BookingStatus status);
 
-    @Query("SELECT COALESCE(SUM(b.totalAmount), 0) FROM Booking b WHERE b.consultantId = :consultantId AND b.paymentStatus = 'SUCCESS'")
+    @Query("SELECT COALESCE(SUM(b.totalAmount), 0) FROM Booking b WHERE b.consultantId = :consultantId AND b.bookingStatus = 'COMPLETED'")
     BigDecimal calculateTotalRevenueByConsultant(@Param("consultantId") Long consultantId);
 
     // 5. Recent Bookings
@@ -125,10 +125,10 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
 
     long countByUserIdAndBookingStatus(Long userId, BookingStatus status);
 
-    @Query("SELECT COALESCE(SUM(b.totalAmount), 0) FROM Booking b WHERE b.userId = :userId AND b.paymentStatus = 'SUCCESS'")
+    @Query("SELECT COALESCE(SUM(b.totalAmount), 0) FROM Booking b WHERE b.userId = :userId AND b.bookingStatus = 'COMPLETED'")
     BigDecimal calculateTotalSpentByUser(@Param("userId") Long userId);
 
-    @Query("SELECT COALESCE(SUM(b.discountAmount), 0) FROM Booking b WHERE b.userId = :userId AND b.paymentStatus = 'SUCCESS'")
+    @Query("SELECT COALESCE(SUM(b.discountAmount), 0) FROM Booking b WHERE b.userId = :userId AND b.bookingStatus = 'COMPLETED'")
     BigDecimal calculateTotalSavedByUser(@Param("userId") Long userId);
 
     List<Booking> findByUserIdOrderByCreatedAtDesc(Long userId, Pageable pageable);
@@ -141,7 +141,7 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
 
     // --- MISSING USER CHART QUERIES ---
     @Query("SELECT new map(MONTH(b.createdAt) as month, COALESCE(SUM(b.totalAmount), 0) as revenue) " +
-            "FROM Booking b WHERE b.userId = :userId AND b.paymentStatus = 'SUCCESS' " +
+            "FROM Booking b WHERE b.userId = :userId AND b.bookingStatus = 'COMPLETED' " +
             "AND YEAR(b.createdAt) = YEAR(CURRENT_DATE) GROUP BY MONTH(b.createdAt)")
     List<Map<String, Object>> getMonthlySpendingForUser(@Param("userId") Long userId);
 
@@ -154,13 +154,13 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
 
     // 1. Consultant: Revenue by Meeting Mode (Pie Chart)
     @Query("SELECT new map(CAST(b.meetingMode AS string) as mode, COALESCE(SUM(b.totalAmount), 0) as revenue) " +
-            "FROM Booking b WHERE b.consultantId = :consultantId AND b.paymentStatus = 'SUCCESS' " +
+            "FROM Booking b WHERE b.consultantId = :consultantId AND b.bookingStatus = 'COMPLETED' " +
             "GROUP BY b.meetingMode")
     List<Map<String, Object>> getRevenueByMeetingModeForConsultant(@Param("consultantId") Long consultantId);
 
     // 2. Admin: Platform Revenue by Meeting Mode (Pie Chart)
     @Query("SELECT new map(CAST(b.meetingMode AS string) as mode, COALESCE(SUM(b.totalAmount), 0) as revenue) " +
-            "FROM Booking b WHERE b.paymentStatus = 'SUCCESS' " +
+            "FROM Booking b WHERE b.bookingStatus = 'COMPLETED' " +
             "GROUP BY b.meetingMode")
     List<Map<String, Object>> getPlatformRevenueByMeetingMode();
 

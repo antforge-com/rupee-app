@@ -16,6 +16,8 @@ class UserModel {
   final String? photoUrl;
   final String? identifier;
   final int? consultantId;
+  final double? offerAmount;
+  final bool requiresPasswordChange;
 
   UserModel({
     required this.id,
@@ -27,18 +29,33 @@ class UserModel {
     this.photoUrl,
     this.identifier,
     this.consultantId,
+    this.offerAmount,
+    this.requiresPasswordChange = false,
   });
 
   factory UserModel.fromJson(Map<String, dynamic> json) => UserModel(
     id: json['id'] ?? 0,
-    name: json['name'] ?? json['fullName'] ?? '',
-    email: json['email'] ?? '',
-    role: json['role'] ?? 'USER',
+    name: _cleanText(
+      json['name'] ??
+          json['fullName'] ??
+          json['displayName'] ??
+          json['username'] ??
+          json['userName'] ??
+          json['identifier'] ??
+          json['email'],
+      fallback: '',
+    ),
+    email: _cleanText(json['email'], fallback: ''),
+    role: _cleanText(json['role'], fallback: 'USER'),
     createdAt: json['createdAt']?.toString(),
-    phone: json['phone']?.toString() ?? json['phoneNumber']?.toString(),
-    photoUrl: json['photoUrl'] ?? json['profilePicture'],
-    identifier: json['identifier']?.toString(),
+    phone: _cleanNullableText(
+      json['phone']?.toString() ?? json['phoneNumber']?.toString(),
+    ),
+    photoUrl: _cleanNullableText(json['photoUrl'] ?? json['profilePicture']),
+    identifier: _cleanNullableText(json['identifier']),
     consultantId: json['consultantId'],
+    offerAmount: _asDouble(json['offerAmount']),
+    requiresPasswordChange: json['requiresPasswordChange'] == true,
   );
 
   Map<String, dynamic> toJson() => {
@@ -51,6 +68,8 @@ class UserModel {
     if (photoUrl != null) 'photoUrl': photoUrl,
     if (identifier != null) 'identifier': identifier,
     if (consultantId != null) 'consultantId': consultantId,
+    if (offerAmount != null) 'offerAmount': offerAmount,
+    'requiresPasswordChange': requiresPasswordChange,
   };
 }
 
@@ -81,6 +100,51 @@ Map<String, dynamic>? _timeToMap(dynamic value) {
     }
   }
   return null;
+}
+
+String _fixTextEncoding(String value) {
+  var out = value;
+  const replacements = <String, String>{
+    'Ã¢â‚¬â€': '-',
+    'Ã¢â‚¬â€œ': '-',
+    'Ã¢â€ â€™': '->',
+    'â€”': '-',
+    'â€“': '-',
+    'â€¦': '...',
+    'â€¢': '-',
+    'Â·': ' - ',
+    'â€˜': "'",
+    'â€™': "'",
+    'â€œ': '"',
+    'â€': '"',
+    'â‚¹': 'Rs ',
+    '₹': 'Rs ',
+    'â‚¬': '',
+    '€': '',
+    'Â': '',
+  };
+  replacements.forEach((bad, good) {
+    out = out.replaceAll(bad, good);
+  });
+  out = out
+      .replaceAll(RegExp(r'[ÃÂ]+'), '')
+      .replaceAll(RegExp(r'[€]+'), '')
+      .replaceAll('\uFFFD', '');
+  return out.replaceAll(RegExp(r'\s+'), ' ').trim();
+}
+
+String _cleanText(dynamic value, {String fallback = ''}) {
+  final raw = value?.toString() ?? '';
+  if (raw.trim().isEmpty) return fallback;
+  final cleaned = _fixTextEncoding(raw);
+  return cleaned.isEmpty ? fallback : cleaned;
+}
+
+String? _cleanNullableText(dynamic value) {
+  final raw = value?.toString();
+  if (raw == null || raw.trim().isEmpty) return null;
+  final cleaned = _fixTextEncoding(raw);
+  return cleaned.isEmpty ? null : cleaned;
 }
 
 class ConsultantModel {
@@ -120,14 +184,16 @@ class ConsultantModel {
 
   factory ConsultantModel.fromJson(Map<String, dynamic> json) => ConsultantModel(
     id: json['id'] ?? 0,
-    name: json['name'] ?? json['fullName'] ?? '',
-    email: json['email'] ?? '',
-    designation: json['designation'] ?? json['title'],
-    description: json['description'],
+    name: _cleanText(json['name'] ?? json['fullName'], fallback: ''),
+    email: _cleanText(json['email'], fallback: ''),
+    designation: _cleanNullableText(json['designation'] ?? json['title']),
+    description: _cleanNullableText(json['description']),
     charges: _asDouble(json['charges'] ?? json['feePerSession'] ?? json['fee'] ?? json['totalAmount']),
     rating: _asDouble(json['rating']),
     reviewCount: json['reviewCount'] ?? json['totalReviews'] ?? 0,
-    photoUrl: json['photoUrl'] ?? json['profilePhoto'] ?? json['profilePicture'],
+    photoUrl: _cleanNullableText(
+      json['photoUrl'] ?? json['profilePhoto'] ?? json['profilePicture'],
+    ),
     shiftStartTime: _timeToMap(json['shiftStartTime']),
     shiftEndTime: _timeToMap(json['shiftEndTime']),
     yearsOfExperience: _asDouble(json['yearsOfExperience']),
@@ -295,31 +361,54 @@ class Booking {
 
   factory Booking.fromJson(Map<String, dynamic> json) {
     String? extractConsultantName(Map<String, dynamic> j) {
-      if (j['consultantName'] != null) return j['consultantName'];
+      if (j['consultantName'] != null) return _cleanNullableText(j['consultantName']);
       if (j['consultant'] is Map) {
-        return j['consultant']['name'] ??
+        return _cleanNullableText(j['consultant']['name'] ??
             j['consultant']['fullName'] ??
-            j['consultant']['username'];
+            j['consultant']['username']);
       }
       return null;
     }
+
     String? extractClientName(Map<String, dynamic> j) {
-      if (j['clientName'] != null) return j['clientName'];
-      if (j['userName'] != null) return j['userName'];
-      if (j['userIdentifier'] != null) return j['userIdentifier'];
-      if (j['userEmail'] != null) return j['userEmail'];
+      if (j['clientName'] != null) return _cleanNullableText(j['clientName']);
+      if (j['userName'] != null) return _cleanNullableText(j['userName']);
+      if (j['userIdentifier'] != null) {
+        return _cleanNullableText(j['userIdentifier']);
+      }
+      if (j['userEmail'] != null) return _cleanNullableText(j['userEmail']);
       if (j['user'] is Map) {
-        return j['user']['name'] ?? j['user']['fullName'] ?? j['user']['identifier'] ?? j['user']['email'];
+        return _cleanNullableText(
+          j['user']['name'] ??
+              j['user']['fullName'] ??
+              j['user']['identifier'] ??
+              j['user']['email'],
+        );
       }
       return null;
     }
+
     String? extractSlotDate(Map<String, dynamic> j) {
-      if (j['slotDate'] != null) return j['slotDate'].toString();
-      if (j['timeSlot'] is Map) return j['timeSlot']['slotDate']?.toString();
-      return j['date']?.toString() ?? j['bookingDate']?.toString();
+      final direct = j['slotDate'] ??
+          j['date'] ??
+          j['bookingDate'] ??
+          j['scheduledDate'] ??
+          j['scheduled_date'] ??
+          j['preferredDate'] ??
+          j['preferred_date'];
+      if (direct != null) return direct.toString().trim();
+      if (j['timeSlot'] is Map) {
+        return j['timeSlot']['slotDate']?.toString().trim();
+      }
+      return null;
     }
+
     String? extractTimeRange(Map<String, dynamic> j) {
       if (j['timeRange'] != null) return j['timeRange'];
+      if (j['scheduledTime'] != null) return j['scheduledTime'];
+      if (j['scheduled_time'] != null) return j['scheduled_time'];
+      if (j['preferredTimeRange'] != null) return j['preferredTimeRange'];
+      if (j['preferred_time_range'] != null) return j['preferred_time_range'];
       if (j['slotTime'] != null) return j['slotTime'];
       if (j['timeSlot'] is Map) {
         return j['timeSlot']['timeRange'] ??
@@ -331,22 +420,32 @@ class Booking {
 
     return Booking(
       id: json['id'] ?? 0,
-      bookingStatus: json['bookingStatus'] ?? json['status'] ?? 'PENDING',
-      paymentStatus: json['paymentStatus'],
-      meetingMode: json['meetingMode'],
-      meetingLink: json['meetingLink'] ?? json['joinUrl'],
-      meetingId: json['meetingId'],
-      meetingNotes: json['meetingNotes'],
-      userNotes: json['userNotes'],
-      amount: _asDouble(json['totalAmount'] ?? json['amount'] ?? json['charges'] ?? json['fee']),
+      bookingStatus: _cleanText(
+        json['bookingStatus'] ?? json['status'],
+        fallback: 'PENDING',
+      ),
+      paymentStatus: _cleanNullableText(json['paymentStatus']),
+      meetingMode: _cleanNullableText(json['meetingMode']),
+      meetingLink: _cleanNullableText(json['meetingLink'] ?? json['joinUrl']),
+      meetingId: _cleanNullableText(json['meetingId']),
+      meetingNotes: _cleanNullableText(json['meetingNotes']),
+      userNotes: _cleanNullableText(json['userNotes']),
+      amount: _asDouble(
+        json['totalAmount'] ??
+            json['amount'] ??
+            json['charges'] ??
+            json['fee'] ??
+            json['sessionAmount'] ??
+            json['baseAmount'],
+      ),
       discountAmount: _asDouble(json['discountAmount']),
       timeSlotId: json['timeSlotId'] ?? json['slotId'],
       consultantId: json['consultantId'],
       consultantName: extractConsultantName(json),
       userId: json['userId'],
       clientName: extractClientName(json),
-      slotDate: extractSlotDate(json),
-      timeRange: extractTimeRange(json),
+      slotDate: _cleanNullableText(extractSlotDate(json)),
+      timeRange: _cleanNullableText(extractTimeRange(json)),
       createdAt: json['createdAt']?.toString(),
     );
   }
@@ -404,6 +503,8 @@ class Ticket {
   final String? userName;
   final int? consultantId;
   final String? consultantName;
+  final int? feedbackRating;
+  final String? feedbackText;
   final String? createdAt;
   final String? updatedAt;
   final String? slaRespondBy;    // ISO datetime string
@@ -423,6 +524,8 @@ class Ticket {
     this.userName,
     this.consultantId,
     this.consultantName,
+    this.feedbackRating,
+    this.feedbackText,
     this.createdAt,
     this.updatedAt,
     this.slaRespondBy,
@@ -447,6 +550,8 @@ class Ticket {
     if (userName != null) 'userName': userName,
     if (consultantId != null) 'consultantId': consultantId,
     if (consultantName != null) 'consultantName': consultantName,
+    if (feedbackRating != null) 'feedbackRating': feedbackRating,
+    if (feedbackText != null) 'feedbackText': feedbackText,
     if (createdAt != null) 'createdAt': createdAt,
     if (updatedAt != null) 'updatedAt': updatedAt,
     if (slaRespondBy != null) 'slaRespondBy': slaRespondBy,
@@ -459,22 +564,41 @@ class Ticket {
 
   factory Ticket.fromJson(Map<String, dynamic> json) => Ticket(
     id: json['id'] ?? 0,
-    category: json['categoryName'] ??
-        json['category'] ??
-        json['title'] ??
-        json['subject'] ??
-        (json['ticketCategory'] is Map
-            ? json['ticketCategory']['name']
-            : null) ??
-        (json['category'] is Map ? json['category']['name'] : null) ??
-        'General',
-    description: json['description'] ?? json['body'],
-    status: json['status'] ?? 'NEW',
-    priority: json['priority'] ?? 'MEDIUM',
+    category: _cleanText(
+      json['categoryName'] ??
+          json['category'] ??
+          json['title'] ??
+          json['subject'] ??
+          (json['ticketCategory'] is Map
+              ? json['ticketCategory']['name']
+              : null) ??
+          (json['category'] is Map ? json['category']['name'] : null),
+      fallback: 'General',
+    ),
+    description: _cleanNullableText(json['description'] ?? json['body']),
+    status: _cleanText(json['status'], fallback: 'NEW'),
+    priority: _cleanText(json['priority'], fallback: 'MEDIUM'),
     userId: json['userId'] ?? json['user']?['id'],
-    userName: json['userName'] ?? json['user']?['name'] ?? json['clientName'],
+    userName: _cleanNullableText(
+      json['userName'] ??
+          json['user']?['name'] ??
+          json['user']?['fullName'] ??
+          json['user']?['identifier'] ??
+          json['clientName'],
+    ),
     consultantId: json['consultantId'] ?? json['assignedTo'],
-    consultantName: json['consultantName'] ?? json['assignedToName'],
+    consultantName: _cleanNullableText(
+      json['consultantName'] ??
+          json['assignedToName'] ??
+          json['consultant']?['name'] ??
+          json['consultant']?['fullName'],
+    ),
+    feedbackRating: json['feedbackRating'] is num
+        ? (json['feedbackRating'] as num).toInt()
+        : int.tryParse('${json['feedbackRating'] ?? ''}'),
+    feedbackText: _cleanNullableText(
+      json['feedbackText'] ?? json['feedbackComment'] ?? json['review'],
+    ),
     createdAt: json['createdAt']?.toString(),
     updatedAt: json['updatedAt']?.toString(),
     slaRespondBy: json['slaRespondBy']?.toString(),
@@ -556,11 +680,24 @@ class TicketComment {
   factory TicketComment.fromJson(Map<String, dynamic> json) => TicketComment(
     id: json['id'] ?? 0,
     ticketId: json['ticketId'],
-    message: json['message'] ?? json['content'] ?? json['body'] ?? '',
+    message: _cleanText(
+      json['message'] ?? json['content'] ?? json['body'],
+      fallback: '',
+    ),
     senderId: json['senderId'],
-    authorName: json['authorName'] ?? json['senderName'] ?? json['author']?['name'],
-    authorRole: json['authorRole'] ?? json['role'],
-    isConsultantReply: json['isConsultantReply'] ?? json['isInternal'] ?? json['internal'] ?? false,
+    authorName: _cleanNullableText(
+      json['authorName'] ??
+          json['senderName'] ??
+          json['userName'] ??
+          json['consultantName'] ??
+          json['author']?['name'],
+    ),
+    authorRole: _cleanNullableText(json['authorRole'] ?? json['role']),
+    isConsultantReply: json['isConsultantReply'] ??
+        json['consultantReply'] ??
+        json['isInternal'] ??
+        json['internal'] ??
+        false,
     createdAt: json['createdAt']?.toString(),
   );
 
@@ -582,21 +719,40 @@ class TicketComment {
 class TicketNote {
   final int id;
   final String content;
+  final int? authorId;
   final String? authorName;
   final String? createdAt;
 
-  TicketNote({required this.id, required this.content, this.authorName, this.createdAt});
+  TicketNote({
+    required this.id,
+    required this.content,
+    this.authorId,
+    this.authorName,
+    this.createdAt,
+  });
 
   factory TicketNote.fromJson(Map<String, dynamic> json) => TicketNote(
     id: json['id'] ?? 0,
-    content: json['content'] ?? json['message'] ?? '',
-    authorName: json['authorName'] ?? json['author']?['name'],
+    content: _cleanText(
+      json['content'] ?? json['message'] ?? json['noteText'],
+      fallback: '',
+    ),
+    authorId: json['authorId'] is num
+        ? (json['authorId'] as num).toInt()
+        : int.tryParse('${json['authorId'] ?? ''}'),
+    authorName: _cleanNullableText(
+      json['authorName'] ??
+          json['userName'] ??
+          json['consultantName'] ??
+          json['author']?['name'],
+    ),
     createdAt: json['createdAt']?.toString(),
   );
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'content': content,
+    if (authorId != null) 'authorId': authorId,
     'authorName': authorName,
     'createdAt': createdAt,
     'noteText': content, // for backward compat in UI
@@ -633,15 +789,49 @@ class Feedback {
 
   factory Feedback.fromJson(Map<String, dynamic> json) => Feedback(
     id: json['id'] ?? 0,
-    rating: json['rating'] ?? 0,
-    comments: json['comments'] ?? json['comment'] ?? json['review'],
-    clientName: json['clientName'] ?? json['userName'] ?? json['user']?['name'],
+    rating: json['rating'] is num
+        ? (json['rating'] as num).toInt()
+        : int.tryParse('${json['rating'] ?? ''}') ?? 0,
+    comments: _cleanNullableText(
+      json['comments'] ?? json['comment'] ?? json['review'],
+    ),
+    clientName: _cleanNullableText(
+      json['clientName'] ??
+          json['userName'] ??
+          json['name'] ??
+          json['user']?['name'] ??
+          json['user']?['fullName'] ??
+          json['user']?['identifier'],
+    ),
     userId: json['userId'],
     consultantId: json['consultantId'],
     bookingId: json['bookingId'],
     meetingId: json['meetingId'],
     createdAt: json['createdAt']?.toString(),
   );
+
+  Feedback copyWith({
+    int? id,
+    int? rating,
+    String? comments,
+    String? clientName,
+    int? userId,
+    int? consultantId,
+    int? bookingId,
+    int? meetingId,
+    String? createdAt,
+  }) =>
+      Feedback(
+        id: id ?? this.id,
+        rating: rating ?? this.rating,
+        comments: comments ?? this.comments,
+        clientName: clientName ?? this.clientName,
+        userId: userId ?? this.userId,
+        consultantId: consultantId ?? this.consultantId,
+        bookingId: bookingId ?? this.bookingId,
+        meetingId: meetingId ?? this.meetingId,
+        createdAt: createdAt ?? this.createdAt,
+      );
 }
 
 // ─── DASHBOARD / ANALYTICS ────────────────────────────────────────────────────
@@ -736,8 +926,10 @@ class AppNotification {
     'id': id,
     'title': title,
     'body': body,
+    'message': body,
     'type': type,
     'isRead': isRead,
+    'read': isRead,
     'createdAt': createdAt.toIso8601String(),
     if (data != null) 'data': data,
   };
@@ -760,6 +952,10 @@ class AppNotification {
         'ticketId': json['ticketId'] is num
             ? (json['ticketId'] as num).toInt()
             : int.tryParse('${json['ticketId']}'),
+      if (json['bookingId'] != null)
+        'bookingId': json['bookingId'] is num
+            ? (json['bookingId'] as num).toInt()
+            : int.tryParse('${json['bookingId']}'),
     },
   );
 }
@@ -930,9 +1126,13 @@ class OnboardingProfile {
   final String? location;
   final bool subscribed;
   final int? subscriptionPlanId;
+  final String? subscriptionPlanName;
   final List<Map<String, dynamic>> incomeItems;
   final List<Map<String, dynamic>> expenseItems;
   final String? photoUrl;
+  final String? designation;
+  final String? organizationName;
+  final String? memberSince;
 
   OnboardingProfile({
     required this.id,
@@ -944,13 +1144,17 @@ class OnboardingProfile {
     this.location,
     this.subscribed = false,
     this.subscriptionPlanId,
+    this.subscriptionPlanName,
     this.incomeItems = const [],
     this.expenseItems = const [],
     this.photoUrl,
+    this.designation,
+    this.organizationName,
+    this.memberSince,
   });
 
   factory OnboardingProfile.fromJson(Map<String, dynamic> json) => OnboardingProfile(
-    id: json['id'] ?? 0,
+    id: json['id'] ?? json['userId'] ?? 0,
     name: json['name'] ?? '',
     dob: json['dob']?.toString(),
     identifier: json['identifier']?.toString(),
@@ -958,18 +1162,31 @@ class OnboardingProfile {
     phoneNumber: json['phoneNumber']?.toString(),
     location: json['location'],
     subscribed: json['subscribed'] ?? false,
-    subscriptionPlanId: json['subscriptionPlanId'],
+    subscriptionPlanId: json['subscriptionPlanId'] ??
+        (json['subscriptionPlan'] is Map
+            ? json['subscriptionPlan']['id']
+            : null),
+    subscriptionPlanName: json['subscriptionPlanName']?.toString() ??
+        (json['subscriptionPlan'] is Map
+            ? json['subscriptionPlan']['name']?.toString()
+            : null),
     incomeItems: (json['incomeItems'] as List<dynamic>? ?? [])
         .map((e) => Map<String, dynamic>.from(e))
         .toList(),
     expenseItems: (json['expenseItems'] as List<dynamic>? ?? [])
         .map((e) => Map<String, dynamic>.from(e))
         .toList(),
-    photoUrl: json['photoUrl'] ?? json['profilePicture'],
+    photoUrl: json['profileImageUrl'] ??
+        json['photoUrl'] ??
+        json['profilePicture'],
+    designation: json['designation']?.toString(),
+    organizationName: json['organizationName']?.toString(),
+    memberSince: json['memberSince']?.toString(),
   );
 
   Map<String, dynamic> toJson() => {
     'id': id,
+    'userId': id,
     'name': name,
     if (dob != null) 'dob': dob,
     if (identifier != null) 'identifier': identifier,
@@ -978,8 +1195,12 @@ class OnboardingProfile {
     if (location != null) 'location': location,
     'subscribed': subscribed,
     if (subscriptionPlanId != null) 'subscriptionPlanId': subscriptionPlanId,
+    if (subscriptionPlanName != null) 'subscriptionPlanName': subscriptionPlanName,
     'incomeItems': incomeItems,
     'expenseItems': expenseItems,
-    if (photoUrl != null) 'photoUrl': photoUrl,
+    if (photoUrl != null) 'profileImageUrl': photoUrl,
+    if (designation != null) 'designation': designation,
+    if (organizationName != null) 'organizationName': organizationName,
+    if (memberSince != null) 'memberSince': memberSince,
   };
 }

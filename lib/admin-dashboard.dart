@@ -16,6 +16,7 @@ import 'package:finadvise/app_theme.dart';
 import 'package:finadvise/booking_page.dart';
 import 'package:finadvise/admin_analytics_web_tab.dart';
 import 'package:finadvise/admin_reports_web_tab.dart';
+import 'package:finadvise/admin_settings_tab.dart' as settings_ui;
 import 'package:finadvise/admin_tickets_tab.dart';
 import 'package:finadvise/email_to_ticket_screen.dart';
 import 'package:finadvise/login_screen.dart';
@@ -100,6 +101,16 @@ InputDecoration _inp(String label,
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
     );
 
+final _leadingLetterFormatter = TextInputFormatter.withFunction(
+  (oldValue, newValue) {
+    final text = newValue.text;
+    if (text.trimLeft().isEmpty) return newValue;
+    return RegExp(r'[A-Za-z]').hasMatch(text.trimLeft()[0])
+        ? newValue
+        : oldValue;
+  },
+);
+
 // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 String _fmtDate(dynamic d) {
@@ -155,6 +166,14 @@ int? _toInt(dynamic value) {
 double _toDouble(dynamic value) {
   if (value is num) return value.toDouble();
   return double.tryParse('${value ?? ''}') ?? 0;
+}
+
+double _normalizeSessionFee(dynamic raw) {
+  final value = _toDouble(raw);
+  if (value >= 10000 && value < 1000000 && value % 10 == 0) {
+    return value / 10;
+  }
+  return value;
 }
 
 String _fmtDateTime(dynamic value) {
@@ -375,7 +394,6 @@ enum AdminSection {
   contactMessages,
   addMember,
   settings,
-  userManagement,
   supportConfig,
   subscriptionPlans,
   masterTimeRanges,
@@ -479,7 +497,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
       case AdminSection.offerApprovals:
         return const _OfferApprovalsTab();
       case AdminSection.skillsQuestions:
-        return const _SkillsQuestionsTab();
+        return const settings_ui.SkillsQuestionsScreen();
       case AdminSection.termsConditions:
         return const _TermsTab();
       case AdminSection.commission:
@@ -490,8 +508,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
         return const AdminAddMemberScreen();
       case AdminSection.settings:
         return const AdminProfileSettingsScreen();
-      case AdminSection.userManagement:
-        return const AdminUserManagementScreen();
       case AdminSection.supportConfig:
         return const _CategoriesScreen();
       case AdminSection.subscriptionPlans:
@@ -523,7 +539,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
       AdminSection.contactMessages: 'Contact Messages',
       AdminSection.addMember: 'Add Member',
       AdminSection.settings: 'Settings',
-      AdminSection.userManagement: 'Client Management',
       AdminSection.supportConfig: 'Support Config',
       AdminSection.subscriptionPlans: 'Subscription Plans',
       AdminSection.masterTimeRanges: 'Master Time Ranges',
@@ -735,8 +750,8 @@ class _AdminDrawer extends StatelessWidget {
                     AdminSection.offers),
                 _item(context, Icons.task_alt_rounded, 'Offer Approvals',
                     AdminSection.offerApprovals),
-                _item(context, Icons.manage_accounts_rounded,
-                    'Client Management', AdminSection.userManagement),
+                _item(context, Icons.quiz_rounded, 'Skills & Questions',
+                    AdminSection.skillsQuestions),
                 _item(context, Icons.person_add_rounded, 'Add Member',
                     AdminSection.addMember),
                 _item(context, Icons.card_membership_rounded,
@@ -862,15 +877,20 @@ class _OverviewTabState extends State<_OverviewTab> {
   final _ts = TicketService();
   final _bs = BookingService();
   final _cs = ConsultantService();
+  final _us = UserService();
   List<Ticket> _tickets = [];
   List<Booking> _bookings = [];
   List<ConsultantModel> _consultants = [];
+  Map<int, String> _userNames = {};
+  Map<int, String> _consultantNames = {};
   bool _loading = true;
   Timer? _pollTimer;
 
   int get _slaBreachedCount =>
       _tickets.where((t) => _calcSla(t)?.breached ?? false).length;
-  int get _escalatedCount => _tickets.where((t) => t.escalated == true).length;
+  int get _escalatedCount => _tickets
+      .where((t) => t.escalated == true || t.status.toUpperCase() == 'ESCALATED')
+      .length;
 
   @override
   void initState() {
@@ -906,13 +926,107 @@ class _OverviewTabState extends State<_OverviewTab> {
     if (all.isEmpty) {
       all.addAll(await _bs.getAllBookings(page: 0, size: 200));
     }
+    try {
+      final specialRows = await _bs.getAllSpecialBookings();
+      all.addAll(specialRows.map(Booking.fromJson));
+    } catch (_) {}
 
-    final seen = <int>{};
+    final seen = <String>{};
     return all.where((booking) {
-      if (seen.contains(booking.id)) return false;
-      seen.add(booking.id);
+      final key = [
+        booking.id,
+        booking.status,
+        booking.slotDate ?? booking.createdAt ?? '',
+        booking.consultantId ?? 0,
+        booking.userId ?? 0,
+      ].join('|');
+      if (!seen.add(key)) return false;
       return true;
     }).toList();
+  }
+
+  String _normalizeName(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return '';
+    final lower = text.toLowerCase();
+    if (lower == 'null' || lower == 'undefined') return '';
+    if (text.contains('@')) {
+      final local = text.split('@').first;
+      final cleaned = local
+          .replaceAll(RegExp(r'[._\-]+'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (cleaned.isNotEmpty) {
+        return cleaned
+            .split(' ')
+            .where((part) => part.isNotEmpty)
+            .map((part) =>
+                '${part.substring(0, 1).toUpperCase()}${part.substring(1).toLowerCase()}')
+            .join(' ');
+      }
+    }
+    return text;
+  }
+
+  bool _isGenericLabel(String raw, String prefix) {
+    final text = raw.trim().toLowerCase();
+    if (text.isEmpty) return true;
+    final p = prefix.toLowerCase();
+    return text == p ||
+        text == '$p -' ||
+        RegExp('^${RegExp.escape(p)}\\s*#\\d+\$').hasMatch(text);
+  }
+
+  Future<Map<int, String>> _fetchUserLookup() async {
+    final out = <int, String>{};
+    try {
+      final users = await _us.getAllUsers(size: 500);
+      for (final user in users) {
+        final raw =
+            user.name.isNotEmpty ? user.name : (user.identifier ?? user.email);
+        final name = _normalizeName(raw);
+        if (name.isNotEmpty) {
+          out[user.id] = name;
+        }
+      }
+    } catch (_) {}
+    return out;
+  }
+
+  Map<int, String> _buildConsultantLookup(List<ConsultantModel> consultants) => {
+        for (final consultant in consultants)
+          if (_normalizeName(consultant.name).isNotEmpty)
+            consultant.id: _normalizeName(consultant.name),
+      };
+
+  String _displayClientName(Booking booking) {
+    final direct = _normalizeName(booking.clientName ?? '');
+    if (direct.isNotEmpty &&
+        !_isGenericLabel(direct, 'client') &&
+        !_isGenericLabel(direct, 'user')) {
+      return direct;
+    }
+    final id = booking.userId;
+    if (id != null && _userNames[id]?.trim().isNotEmpty == true) {
+      return _userNames[id]!.trim();
+    }
+    if (direct.isNotEmpty) return direct;
+    return id != null ? 'User #$id' : 'Client';
+  }
+
+  String _displayConsultantName(Booking booking) {
+    final direct = _normalizeName(booking.consultantName ?? '');
+    if (direct.isNotEmpty &&
+        !_isGenericLabel(direct, 'consultant') &&
+        !_isGenericLabel(direct, 'advisor')) {
+      return direct;
+    }
+    final id = booking.consultantId;
+    if (id != null && _consultantNames[id]?.trim().isNotEmpty == true) {
+      return _consultantNames[id]!.trim();
+    }
+    if (direct.isNotEmpty) return direct;
+    return id != null ? 'Consultant #$id' : 'Consultant';
   }
 
   Future<void> _load({bool silent = false}) async {
@@ -920,6 +1034,8 @@ class _OverviewTabState extends State<_OverviewTab> {
     var tickets = _tickets;
     var bookings = _bookings;
     var consultants = _consultants;
+    var userNames = _userNames;
+    var consultantNames = _consultantNames;
 
     try {
       tickets = await _fetchAllTickets();
@@ -933,11 +1049,19 @@ class _OverviewTabState extends State<_OverviewTab> {
       consultants = await _cs.getAllConsultants();
     } catch (_) {}
 
+    try {
+      userNames = await _fetchUserLookup();
+    } catch (_) {}
+
+    consultantNames = _buildConsultantLookup(consultants);
+
     if (mounted) {
       setState(() {
         _tickets = tickets;
         _bookings = bookings;
         _consultants = consultants;
+        _userNames = userNames;
+        _consultantNames = consultantNames;
         _loading = false;
       });
     }
@@ -949,11 +1073,7 @@ class _OverviewTabState extends State<_OverviewTab> {
       .length;
   bool _isRevenueBooking(Booking booking) {
     final status = booking.status.toUpperCase();
-    final payment = (booking.paymentStatus ?? '').toUpperCase();
-    return status == 'COMPLETED' ||
-        payment == 'SUCCESS' ||
-        payment == 'PAID' ||
-        payment == 'CAPTURED';
+    return status == 'COMPLETED';
   }
 
   int get _completedBookings => _bookings.where(_isRevenueBooking).length;
@@ -1290,7 +1410,11 @@ class _OverviewTabState extends State<_OverviewTab> {
             const _EmptyCard(
                 icon: Icons.calendar_today_outlined, message: 'No bookings yet')
           else
-            ..._bookings.take(5).map((b) => _RecentBookingRow(booking: b)),
+            ..._bookings.take(5).map((b) => _RecentBookingRow(
+                  booking: b,
+                  clientName: _displayClientName(b),
+                  consultantName: _displayConsultantName(b),
+                )),
 
           const SizedBox(height: 14),
 
@@ -1330,7 +1454,7 @@ class _OverviewTabState extends State<_OverviewTab> {
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
                           color: color)),
-                  Text('View â†’',
+                  Text('View ->',
                       style: TextStyle(
                           fontSize: 10, color: color.withValues(alpha: 0.7))),
                 ])),
@@ -1388,7 +1512,6 @@ class _SubScaffold extends StatelessWidget {
         AdminSection.addMember: 'Add Member',
         AdminSection.commission: 'Commission',
         AdminSection.contactMessages: 'Contact Messages',
-        AdminSection.userManagement: 'Client Management',
       }[section] ??
       '';
 
@@ -1397,12 +1520,10 @@ class _SubScaffold extends StatelessWidget {
     if (section == AdminSection.offerApprovals)
       return const _OfferApprovalsTab();
     if (section == AdminSection.skillsQuestions)
-      return const _SkillsQuestionsTab();
+      return const settings_ui.SkillsQuestionsScreen();
     if (section == AdminSection.addMember) return const AdminAddMemberScreen();
     if (section == AdminSection.commission) return const _CommissionTab();
     if (section == AdminSection.contactMessages) return const _ContactTab();
-    if (section == AdminSection.userManagement)
-      return const AdminUserManagementScreen();
     return const SizedBox.shrink();
   }
 
@@ -1424,7 +1545,14 @@ class _SubScaffold extends StatelessWidget {
 
 class _RecentBookingRow extends StatelessWidget {
   final Booking booking;
-  const _RecentBookingRow({required this.booking});
+  final String clientName;
+  final String consultantName;
+
+  const _RecentBookingRow({
+    required this.booking,
+    required this.clientName,
+    required this.consultantName,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1439,7 +1567,10 @@ class _RecentBookingRow extends StatelessWidget {
             radius: 18,
             backgroundColor: AppColors.primaryLight.withValues(alpha: 0.1),
             child: Text(
-                (b.clientName ?? b.consultantName ?? 'B')[0].toUpperCase(),
+                (clientName.isNotEmpty
+                        ? clientName
+                        : (consultantName.isNotEmpty ? consultantName : 'B'))[0]
+                    .toUpperCase(),
                 style: const TextStyle(
                     color: AppColors.primaryLight,
                     fontWeight: FontWeight.w700,
@@ -1448,8 +1579,8 @@ class _RecentBookingRow extends StatelessWidget {
         Expanded(
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(b.clientName ?? 'User #${b.userId}', style: AppTextStyles.label),
-          Text('${b.consultantName ?? 'Consultant'} - ${b.slotDate ?? ''}',
+          Text(clientName, style: AppTextStyles.label),
+          Text('$consultantName - ${b.slotDate ?? ''}',
               style: AppTextStyles.caption),
         ])),
         Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
@@ -1510,7 +1641,8 @@ class _ConsultantRow extends StatelessWidget {
                       color: AppColors.textPrimary))
             ]),
           if (c.charges != null)
-            Text('â‚¹${c.charges!.toStringAsFixed(0)}/session',
+            Text(
+                'Rs ${_normalizeSessionFee(c.charges).toStringAsFixed(0)}/session',
                 style: const TextStyle(
                     fontSize: 10,
                     color: Color(0xFF059669),
@@ -1902,7 +2034,7 @@ class _TicketsTabState extends State<_TicketsTab> {
                   style: AppTextStyles.caption
                       .copyWith(fontWeight: FontWeight.w700)),
               if (_hasMore)
-                const Text(' Â· scroll for more',
+                const Text(' - scroll for more',
                     style: TextStyle(fontSize: 10, color: AppColors.textMuted)),
             ]),
           ),
@@ -2143,7 +2275,7 @@ class _TicketCard extends StatelessWidget {
                         shape: BoxShape.circle)),
                 const SizedBox(width: 8),
                 Text(
-                    'SLA ${sla.breached ? 'BREACHED' : sla.warning ? 'WARNING' : 'ON TRACK'} Â· ${t.priority} Â· ${sla.label}',
+                    'SLA ${sla.breached ? 'BREACHED' : sla.warning ? 'WARNING' : 'ON TRACK'} - ${t.priority} - ${sla.label}',
                     style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w700,
@@ -2278,7 +2410,7 @@ class _AdvisorsTabState extends State<_AdvisorsTab> {
                           color: Color(0xFF059669), size: 16),
                       SizedBox(width: 8),
                       Expanded(
-                          child: Text('No active bookings â€” safe to delete',
+                          child: Text('No active bookings - safe to delete',
                               style: TextStyle(
                                   fontSize: 12, color: Color(0xFF059669))))
                     ])),
@@ -2421,7 +2553,8 @@ class _AdvisorCard extends StatelessWidget {
                         const SizedBox(width: 10)
                       ],
                       if (a.charges != null)
-                        Text('â‚¹${a.charges!.toStringAsFixed(0)}/session',
+                        Text(
+                            'Rs ${_normalizeSessionFee(a.charges).toStringAsFixed(0)}/session',
                             style: const TextStyle(
                                 fontSize: 11,
                                 color: Color(0xFF059669),
@@ -2551,7 +2684,7 @@ class _AdvisorDetailState extends State<_AdvisorDetail>
                       const Icon(Icons.star_rounded,
                           color: Color(0xFFF59E0B), size: 16),
                       Text(
-                          ' ${a.rating!.toStringAsFixed(1)} Â· ${a.reviewCount ?? 0} reviews',
+                          ' ${a.rating!.toStringAsFixed(1)} - ${a.reviewCount ?? 0} reviews',
                           style: const TextStyle(
                               color: Colors.white70, fontSize: 12))
                     ]),
@@ -2571,7 +2704,7 @@ class _AdvisorDetailState extends State<_AdvisorDetail>
                           '${a.slotsDuration} mins'),
                     if (a.charges != null)
                       _infoRow(Icons.currency_rupee_rounded, 'Session Fee',
-                          'â‚¹${a.charges!.toStringAsFixed(0)}'),
+                          'Rs ${_normalizeSessionFee(a.charges).toStringAsFixed(0)}'),
                     if (a.shiftDisplay.isNotEmpty)
                       _infoRow(Icons.access_time_rounded, 'Working Hours',
                           a.shiftDisplay),
@@ -2735,7 +2868,8 @@ class _AdvisorFormState extends State<_AdvisorForm> {
       _nameC.text = a.name;
       _emailC.text = a.email;
       _desigC.text = a.designation ?? '';
-      _chargesC.text = a.charges?.toStringAsFixed(0) ?? '';
+      _chargesC.text =
+          _normalizeSessionFee(a.charges).toStringAsFixed(0);
       _descC.text = a.description ?? '';
       _experienceC.text = a.yearsOfExperience?.toStringAsFixed(1) ?? '';
       _slotDuration = a.slotsDuration ?? 60;
@@ -2918,7 +3052,7 @@ class _AdvisorFormState extends State<_AdvisorForm> {
                 TextFormField(
                     controller: _chargesC,
                     keyboardType: TextInputType.number,
-                    decoration: _inp('Session Fee (â‚¹) *',
+                    decoration: _inp('Session Fee (Rs) *',
                         icon: Icons.currency_rupee_rounded),
                     validator: (v) => v?.isEmpty == true ? 'Required' : null),
                 const SizedBox(height: 10),
@@ -2984,7 +3118,7 @@ class _AdvisorFormState extends State<_AdvisorForm> {
                               ])))),
                   const Padding(
                       padding: EdgeInsets.symmetric(horizontal: 10),
-                      child: Text('â€”',
+                      child: Text('--',
                           style: TextStyle(color: AppColors.textMuted))),
                   Expanded(
                       child: GestureDetector(
@@ -3211,7 +3345,7 @@ class _AnalyticsTabState extends State<_AnalyticsTab> {
                         title: 'Avg Rating',
                         value: d.avgRating > 0
                             ? d.avgRating.toStringAsFixed(1)
-                            : 'â€”',
+                            : '--',
                         icon: Icons.star_rounded,
                         color: const Color(0xFFF59E0B)),
                   ]),
@@ -3569,7 +3703,7 @@ class _AgentPerformanceState extends State<_AgentPerformance> {
                     ? (avgMin >= 60
                         ? '${(avgMin / 60).toStringAsFixed(1)}h'
                         : '${avgMin}m')
-                    : 'â€”';
+                    : '--';
                 final rateColor = rate >= 80
                     ? const Color(0xFF059669)
                     : rate >= 50
@@ -3773,7 +3907,7 @@ class _ReportsTabState extends State<_ReportsTab> {
                         'Rate',
                         total > 0
                             ? '${(resolved * 100 / total).round()}%'
-                            : 'â€”',
+                            : '--',
                         AppColors.info),
                   ]),
               const SizedBox(height: 16),
@@ -4188,10 +4322,12 @@ class _OfferForm extends StatefulWidget {
 class _OfferFormState extends State<_OfferForm> {
   final _titleC = TextEditingController(),
       _descC = TextEditingController(),
-      _discC = TextEditingController(),
-      _cIdC = TextEditingController();
+      _discC = TextEditingController();
   bool _isActive = true, _saving = false;
   String? _validFrom, _validTo;
+  List<ConsultantModel> _consultants = [];
+  int? _selectedConsultantId;
+  bool _loadingConsultants = true;
 
   @override
   void initState() {
@@ -4204,8 +4340,9 @@ class _OfferFormState extends State<_OfferForm> {
       _isActive = o['isActive'] == true || o['active'] == true;
       _validFrom = o['validFrom']?.toString().substring(0, 10);
       _validTo = o['validTo']?.toString().substring(0, 10);
-      if (o['consultantId'] != null) _cIdC.text = o['consultantId'].toString();
+      _selectedConsultantId = _toInt(o['consultantId']);
     }
+    _loadConsultants();
   }
 
   @override
@@ -4213,16 +4350,55 @@ class _OfferFormState extends State<_OfferForm> {
     _titleC.dispose();
     _descC.dispose();
     _discC.dispose();
-    _cIdC.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadConsultants() async {
+    final consultants = await ConsultantService().getAllConsultants();
+    consultants.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    if (!mounted) return;
+    setState(() {
+      _consultants = consultants;
+      if (_selectedConsultantId != null &&
+          !_consultants.any((consultant) => consultant.id == _selectedConsultantId)) {
+        _selectedConsultantId = null;
+      }
+      _loadingConsultants = false;
+    });
   }
 
   Future<void> _pickDate(bool isFrom) async {
     final p = await showDatePicker(
-        context: context,
-        initialDate: DateTime.now(),
-        firstDate: DateTime.now().subtract(const Duration(days: 365)),
-        lastDate: DateTime.now().add(const Duration(days: 365 * 5)));
+      context: context,
+      initialDate: DateTime.tryParse(
+            (isFrom ? _validFrom : _validTo) ?? '',
+          ) ??
+          DateTime.now(),
+      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+      lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.light(
+            primary: AppColors.primaryLight,
+            onPrimary: Colors.white,
+            surface: Colors.white,
+            onSurface: AppColors.textPrimary,
+          ),
+          datePickerTheme: DatePickerThemeData(
+            backgroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
+            headerBackgroundColor: AppColors.primaryLight.withValues(alpha: 0.08),
+            headerForegroundColor: AppColors.textPrimary,
+            dayShape: MaterialStateProperty.all(
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ),
+        child: child!,
+      ),
+    );
     if (p != null)
       setState(() {
         if (isFrom)
@@ -4249,7 +4425,7 @@ class _OfferFormState extends State<_OfferForm> {
       'active': _isActive,
       'validFrom': '${_validFrom}T00:00:00',
       'validTo': '${_validTo}T23:59:59',
-      if (_cIdC.text.isNotEmpty) 'consultantId': int.tryParse(_cIdC.text)
+      if (_selectedConsultantId != null) 'consultantId': _selectedConsultantId,
     };
     try {
       final id = widget.offer?['id'];
@@ -4317,12 +4493,38 @@ class _OfferFormState extends State<_OfferForm> {
                         'Valid Until', _validTo, () => _pickDate(false))),
               ]),
               const SizedBox(height: 10),
-              TextField(
-                  controller: _cIdC,
-                  decoration: _inp('Consultant ID (optional)',
-                      icon: Icons.person_outline_rounded),
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly]),
+              DropdownButtonFormField<int?>(
+                value: _consultants.any(
+                  (consultant) => consultant.id == _selectedConsultantId,
+                )
+                    ? _selectedConsultantId
+                    : null,
+                isExpanded: true,
+                decoration: _inp('Consultant (optional)',
+                    icon: Icons.person_outline_rounded),
+                items: [
+                  const DropdownMenuItem<int?>(
+                    value: null,
+                    child: Text('All Consultants'),
+                  ),
+                  ..._consultants.map(
+                    (consultant) => DropdownMenuItem<int?>(
+                      value: consultant.id,
+                      child: Text(consultant.name, overflow: TextOverflow.ellipsis),
+                    ),
+                  ),
+                ],
+                onChanged: _loadingConsultants
+                    ? null
+                    : (value) => setState(() => _selectedConsultantId = value),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _loadingConsultants
+                    ? 'Loading consultant names...'
+                    : 'Choose a consultant to target a specific offer, or keep it global.',
+                style: AppTextStyles.caption,
+              ),
               const SizedBox(height: 8),
               SwitchListTile(
                   value: _isActive,
@@ -4361,20 +4563,34 @@ class _OfferFormState extends State<_OfferForm> {
           child: Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                  color: AppColors.surfaceVariant,
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.white,
+                      AppColors.surfaceVariant,
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: AppColors.border)),
-              child: Row(children: [
-                const Icon(Icons.calendar_today_outlined,
-                    color: AppColors.textSecondary, size: 16),
-                const SizedBox(width: 8),
-                Expanded(
-                    child: Text(date ?? label,
-                        style: date != null
-                            ? AppTextStyles.label
-                                .copyWith(color: AppColors.primaryLight)
-                            : AppTextStyles.caption))
-              ])));
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label, style: AppTextStyles.caption),
+                    const SizedBox(height: 6),
+                    Row(children: [
+                      const Icon(Icons.calendar_month_outlined,
+                          color: AppColors.textSecondary, size: 16),
+                      const SizedBox(width: 8),
+                      Expanded(
+                          child: Text(
+                              date != null ? _fmtDate(date) : 'Select date',
+                              style: date != null
+                                  ? AppTextStyles.label
+                                      .copyWith(color: AppColors.primaryLight)
+                                  : AppTextStyles.caption))
+                    ]),
+                  ])));
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -5435,7 +5651,7 @@ These Terms are governed by the laws of India, jurisdiction: Hyderabad, Telangan
             Icon(Icons.verified_outlined, color: Color(0xFF059669), size: 16),
             SizedBox(width: 8),
             Text(
-              'LIVE â€” currently published version',
+              'LIVE - currently published version',
               style: TextStyle(
                 color: Color(0xFF059669),
                 fontWeight: FontWeight.w600,
@@ -5485,7 +5701,7 @@ These Terms are governed by the laws of India, jurisdiction: Hyderabad, Telangan
           border: Border.all(color: AppColors.info.withValues(alpha: 0.3)),
         ),
         child: const Text(
-          'Preview mode â€” not published',
+          'Preview mode - not published',
           style: TextStyle(
               color: AppColors.info, fontSize: 12, fontWeight: FontWeight.w600),
         ),
@@ -5808,13 +6024,18 @@ These Terms are governed by the laws of India, jurisdiction: Hyderabad, Telangan
                 ],
               );
             }
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(width: 280, child: _buildVersionHistory()),
-                const SizedBox(width: 16),
-                Expanded(child: _buildContentPanel()),
-              ],
+            return SingleChildScrollView(
+              child: SizedBox(
+                width: constraints.maxWidth,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(width: 280, child: _buildVersionHistory()),
+                    const SizedBox(width: 16),
+                    Expanded(child: _buildContentPanel()),
+                  ],
+                ),
+              ),
             );
           },
         ),
@@ -5867,6 +6088,10 @@ class _CommissionTabState extends State<_CommissionTab> {
       _snack(context, 'Enter a valid value', error: true);
       return;
     }
+    if (_feeType == 'FLAT' && val > 100000) {
+      _snack(context, 'Commission cannot exceed Rs 1,00,000', error: true);
+      return;
+    }
     if (_feeType == 'PERCENTAGE' && val > 100) {
       _snack(context, 'Cannot exceed 100%', error: true);
       return;
@@ -5906,7 +6131,7 @@ class _CommissionTabState extends State<_CommissionTab> {
                       Row(children: [
                         Expanded(
                             child: _typeBtn('FLAT',
-                                Icons.currency_rupee_rounded, 'Fixed (â‚¹)')),
+                                Icons.currency_rupee_rounded, 'Fixed (Rs)')),
                         const SizedBox(width: 12),
                         Expanded(
                             child: _typeBtn('PERCENTAGE', Icons.percent_rounded,
@@ -5918,15 +6143,24 @@ class _CommissionTabState extends State<_CommissionTab> {
                           controller: _valCtrl,
                           keyboardType: TextInputType.number,
                           inputFormatters: [
-                            FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))
+                            FilteringTextInputFormatter.allow(
+                              _feeType == 'PERCENTAGE'
+                                  ? RegExp(r'[\d.]')
+                                  : RegExp(r'\d'),
+                            )
                           ],
                           decoration: _inp(
                               _feeType == 'PERCENTAGE'
                                   ? 'Enter % (e.g. 15)'
-                                  : 'Enter amount in â‚¹',
+                                  : 'Enter amount in Rs',
                               icon: _feeType == 'PERCENTAGE'
                                   ? Icons.percent_rounded
                                   : Icons.currency_rupee_rounded)),
+                      if (_feeType == 'FLAT') ...[
+                        const SizedBox(height: 8),
+                        Text('Maximum flat commission: Rs 1,00,000',
+                            style: AppTextStyles.caption),
+                      ],
                       const SizedBox(height: 20),
                       _sectionLbl('Live Calculator'),
                       Container(
@@ -5936,7 +6170,7 @@ class _CommissionTabState extends State<_CommissionTab> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Row(children: [
-                                  const Text('Consultant charges â‚¹',
+                                  const Text('Consultant charges Rs',
                                       style: TextStyle(
                                           fontSize: 13,
                                           color: AppColors.textSecondary)),
@@ -5974,19 +6208,19 @@ class _CommissionTabState extends State<_CommissionTab> {
                                     child: Column(children: [
                                       _calcRow(
                                           'Consultant Base',
-                                          'â‚¹${_base.toStringAsFixed(0)}',
+                                          'Rs ${_base.toStringAsFixed(0)}',
                                           AppColors.textPrimary),
                                       const Divider(
                                           height: 16, color: AppColors.border),
                                       _calcRow(
                                           'Platform Commission',
-                                          '+ â‚¹${_commission.toStringAsFixed(0)}',
+                                          '+ Rs ${_commission.toStringAsFixed(0)}',
                                           AppColors.primaryLight),
                                       const Divider(
                                           height: 16, color: AppColors.border),
                                       _calcRow(
                                           'Customer Pays',
-                                          'â‚¹${_total.toStringAsFixed(0)}',
+                                          'Rs ${_total.toStringAsFixed(0)}',
                                           const Color(0xFF059669),
                                           bold: true),
                                     ])),
@@ -6641,7 +6875,7 @@ class _AddMemberTabState extends State<_AddMemberTab> {
       if (msg.toLowerCase().contains('already'))
         _snack(context, 'Email or phone already registered', error: true);
       else if (msg.contains('403'))
-        _snack(context, 'Access denied â€” admin role required', error: true);
+        _snack(context, 'Access denied - admin role required', error: true);
       else
         _snack(context, msg, error: true);
     } finally {
@@ -7417,6 +7651,7 @@ class _MasterTimeRangePickerDialogState
     if (_selectedStartMinutes + _duration > 24 * 60) {
       _selectedStartMinutes = (24 * 60) - _duration;
     }
+    _selectedStartMinutes = _normalizeStartForDuration(_selectedStartMinutes);
   }
 
   bool get _isAm => _selectedStartMinutes < 12 * 60;
@@ -7424,8 +7659,45 @@ class _MasterTimeRangePickerDialogState
   List<int> get _hoursForPeriod {
     final base = _isAm ? 0 : 12;
     return List<int>.generate(12, (index) => (base + index) * 60)
+        .where(_isValidStartForDuration)
         .where((minutes) => minutes + _duration <= 24 * 60)
         .toList();
+  }
+
+  bool _isValidStartForDuration(int minutes) {
+    final hour = (minutes ~/ 60) % 24;
+    if (_duration == 120) return hour.isEven;
+    if (_duration == 180) return hour.isOdd;
+    return true;
+  }
+
+  int _normalizeStartForDuration(int minutes, {bool preferAm = false}) {
+    final candidateHours = List<int>.generate(24, (index) => index * 60)
+        .where(_isValidStartForDuration)
+        .where((value) => value + _duration <= 24 * 60)
+        .toList();
+    if (candidateHours.isEmpty) return minutes;
+    if (candidateHours.contains(minutes)) return minutes;
+
+    final samePeriod = candidateHours
+        .where((value) => preferAm ? value < 12 * 60 : value >= 12 * 60)
+        .toList();
+    final scoped = samePeriod.isNotEmpty ? samePeriod : candidateHours;
+    return scoped.reduce((best, next) {
+      final bestDiff = (best - minutes).abs();
+      final nextDiff = (next - minutes).abs();
+      return nextDiff < bestDiff ? next : best;
+    });
+  }
+
+  String get _durationRuleText {
+    if (_duration == 120) {
+      return '2 hr slots start on even hours.';
+    }
+    if (_duration == 180) {
+      return '3 hr slots start on odd hours.';
+    }
+    return '1 hr slots can start on any hour.';
   }
 
   String _formatMinutes(int minutes) {
@@ -7445,8 +7717,9 @@ class _MasterTimeRangePickerDialogState
     final mappedHour = am ? currentHour : currentHour + 12;
     final next = mappedHour * 60;
     setState(() {
+      final target = next + _duration > 24 * 60 ? ((am ? 11 : 8) * 60) : next;
       _selectedStartMinutes =
-          next + _duration > 24 * 60 ? ((am ? 11 : 8) * 60) : next;
+          _normalizeStartForDuration(target, preferAm: am);
     });
   }
 
@@ -7536,6 +7809,27 @@ class _MasterTimeRangePickerDialogState
                         fontWeight: FontWeight.w500,
                       ),
                     ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.schedule_rounded,
+                          size: 14,
+                          color: Color(0xFFFDE68A),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _durationRuleText,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 14),
                     Row(
                       children: [
@@ -7548,11 +7842,15 @@ class _MasterTimeRangePickerDialogState
                               onTap: () {
                                 setState(() {
                                   _duration = minutes;
-                                  if (_selectedStartMinutes + _duration >
-                                      24 * 60) {
-                                    _selectedStartMinutes =
-                                        (24 * 60) - _duration;
-                                  }
+                                  final capped = _selectedStartMinutes + _duration >
+                                          24 * 60
+                                      ? (24 * 60) - _duration
+                                      : _selectedStartMinutes;
+                                  _selectedStartMinutes =
+                                      _normalizeStartForDuration(
+                                    capped,
+                                    preferAm: _isAm,
+                                  );
                                 });
                               },
                             ),
@@ -7919,7 +8217,7 @@ class _BusinessHoursScreenState extends State<_BusinessHoursScreen> {
                                 () => _pickTime(i, true)),
                             const Padding(
                                 padding: EdgeInsets.symmetric(horizontal: 8),
-                                child: Text('â€”',
+                                child: Text('--',
                                     style:
                                         TextStyle(color: AppColors.textMuted))),
                             _timePick(h['closeTime'] as String,
@@ -8248,6 +8546,7 @@ class _CannedResponsesScreen extends StatefulWidget {
 class _CannedResponsesScreenState extends State<_CannedResponsesScreen> {
   final _api = AdminService();
   List<Map<String, dynamic>> _responses = [];
+  List<Map<String, dynamic>> _categories = [];
   bool _loading = true;
 
   @override
@@ -8258,61 +8557,95 @@ class _CannedResponsesScreenState extends State<_CannedResponsesScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    _responses =
-        List<Map<String, dynamic>>.from(await _api.getCannedResponses());
+    final results = await Future.wait<dynamic>([
+      _api.getCannedResponses(),
+      _api.getCategories(),
+    ]);
+    _responses = List<Map<String, dynamic>>.from(results[0] as List);
+    _categories = List<Map<String, dynamic>>.from(results[1] as List)
+        .where((category) =>
+            (category['isActive'] ?? category['active'] ?? true) != false)
+        .toList(growable: false);
     if (mounted) setState(() => _loading = false);
   }
 
   void _addSheet() {
-    final tc = TextEditingController(),
-        cc = TextEditingController(),
-        catC = TextEditingController();
+    final tc = TextEditingController(), cc = TextEditingController();
+    String? selectedCategory = _categories.isNotEmpty
+        ? _categories.first['name']?.toString()
+        : null;
     showModalBottomSheet(
         context: context,
         isScrollControlled: true,
         backgroundColor: AppColors.surface,
         shape: const RoundedRectangleBorder(
             borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-        builder: (_) => Padding(
-            padding: EdgeInsets.only(
-                left: 20,
-                right: 20,
-                top: 20,
-                bottom: MediaQuery.of(context).viewInsets.bottom + 20),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Text('Add Canned Response', style: AppTextStyles.h3),
-              const SizedBox(height: 16),
-              TextField(
-                  controller: tc,
-                  decoration: _inp('Title *', icon: Icons.title_rounded)),
-              const SizedBox(height: 10),
-              TextField(
-                  controller: catC,
-                  decoration: _inp('Category (optional)',
-                      icon: Icons.label_outline_rounded)),
-              const SizedBox(height: 10),
-              TextField(
-                  controller: cc,
-                  maxLines: 4,
-                  decoration:
-                      _inp('Response content *', icon: Icons.message_outlined)),
-              const SizedBox(height: 16),
-              SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: FilledButton(
-                      onPressed: () async {
-                        if (tc.text.isEmpty || cc.text.isEmpty) return;
-                        final ok = await _api.createCannedResponse(tc.text,
-                            cc.text, catC.text.isNotEmpty ? catC.text : null);
-                        if (ok && mounted) {
-                          Navigator.pop(context);
-                          _load();
-                        }
-                      },
-                      child: const Text('Add Response',
-                          style: TextStyle(fontWeight: FontWeight.w700)))),
-            ])));
+        builder: (_) => StatefulBuilder(
+              builder: (context, setSheetState) => Padding(
+                  padding: EdgeInsets.only(
+                      left: 20,
+                      right: 20,
+                      top: 20,
+                      bottom: MediaQuery.of(context).viewInsets.bottom + 20),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Text('Add Canned Response', style: AppTextStyles.h3),
+                    const SizedBox(height: 16),
+                    TextField(
+                        controller: tc,
+                        textCapitalization: TextCapitalization.sentences,
+                        inputFormatters: [_leadingLetterFormatter],
+                        decoration: _inp('Title *', icon: Icons.title_rounded)),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<String>(
+                      value: selectedCategory,
+                      isExpanded: true,
+                      decoration: _inp('Category *',
+                          icon: Icons.label_outline_rounded),
+                      items: _categories
+                          .map((category) => DropdownMenuItem<String>(
+                                value: category['name']?.toString(),
+                                child: Text(category['name']?.toString() ?? ''),
+                              ))
+                          .toList(growable: false),
+                      onChanged: (value) =>
+                          setSheetState(() => selectedCategory = value),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                        controller: cc,
+                        maxLines: 4,
+                        decoration: _inp('Response content *',
+                            icon: Icons.message_outlined)),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                        width: double.infinity,
+                        height: 48,
+                        child: FilledButton(
+                            onPressed: () async {
+                              final title = tc.text.trim();
+                              final content = cc.text.trim();
+                              if (title.isEmpty ||
+                                  content.isEmpty ||
+                                  selectedCategory == null ||
+                                  selectedCategory!.isEmpty) {
+                                _snack(context, 'Title, category, and content are required',
+                                    error: true);
+                                return;
+                              }
+                              final ok = await _api.createCannedResponse(
+                                title,
+                                content,
+                                selectedCategory,
+                              );
+                              if (ok && mounted) {
+                                Navigator.pop(context);
+                                _load();
+                              }
+                            },
+                            child: const Text('Add Response',
+                                style: TextStyle(fontWeight: FontWeight.w700)))),
+                  ])),
+            ));
   }
 
   @override
@@ -8431,6 +8764,8 @@ class _CategoriesScreenState extends State<_CategoriesScreen> {
               const SizedBox(height: 16),
               TextField(
                   controller: nc,
+                  textCapitalization: TextCapitalization.words,
+                  inputFormatters: [_leadingLetterFormatter],
                   decoration: _inp('Category name *',
                       icon: Icons.label_outline_rounded)),
               const SizedBox(height: 10),
@@ -8623,7 +8958,7 @@ class _PlansScreenState extends State<_PlansScreen> {
                         controller: dc,
                         keyboardType: TextInputType.number,
                         decoration:
-                            _inp('Discount price (Rs)', prefix: 'Rs ')))
+                            _inp('Discount amount (Rs)', prefix: 'Rs ')))
               ]),
               const SizedBox(height: 10),
               TextField(
@@ -8643,7 +8978,12 @@ class _PlansScreenState extends State<_PlansScreen> {
                       onPressed: () async {
                         if (nc.text.isEmpty || oc.text.isEmpty) return;
                         final original = double.tryParse(oc.text) ?? 0;
-                        final discount = double.tryParse(dc.text) ?? original;
+                        final discountInput = double.tryParse(dc.text) ?? 0;
+                        final discount = dc.text.trim().isEmpty
+                            ? original
+                            : (discountInput <= original
+                                ? (original - discountInput)
+                                : discountInput);
                         final ok = await _api.addSubscriptionPlan({
                           'name': nc.text.trim(),
                           'originalPrice': original,
@@ -8723,7 +9063,8 @@ class _PlansScreenState extends State<_PlansScreen> {
                                           p['discountPrice'] !=
                                               p['originalPrice'])
                                         Row(children: [
-                                          Text('Rs ${p['discountPrice']}',
+                                          Text(
+                                              'Rs ${discountPrice.toStringAsFixed(2)}',
                                               style: AppTextStyles.label
                                                   .copyWith(
                                                       color: const Color(
@@ -8731,14 +9072,16 @@ class _PlansScreenState extends State<_PlansScreen> {
                                                       fontWeight:
                                                           FontWeight.w700)),
                                           const SizedBox(width: 6),
-                                          Text('Rs ${p['originalPrice']}',
+                                          Text(
+                                              'Rs ${originalPrice.toStringAsFixed(2)}',
                                               style: AppTextStyles.caption
                                                   .copyWith(
                                                       decoration: TextDecoration
                                                           .lineThrough))
                                         ])
                                       else
-                                        Text('Rs ${p['originalPrice']}',
+                                        Text(
+                                            'Rs ${originalPrice.toStringAsFixed(2)}',
                                             style: AppTextStyles.label.copyWith(
                                                 color: const Color(0xFF059669),
                                                 fontWeight: FontWeight.w700)),
@@ -9295,7 +9638,7 @@ class _ProfileFormState extends State<_ProfileForm> {
                     .map((plan) => DropdownMenuItem<int>(
                         value: _toInt(plan['id'])!,
                         child: Text(
-                            '${plan['name']} (â‚¹${_toDouble(plan['discountPrice'] ?? plan['originalPrice']).toStringAsFixed(0)})')))
+                            '${plan['name']} (Rs ${_toDouble(plan['discountPrice'] ?? plan['originalPrice']).toStringAsFixed(0)})')))
                     .toList(),
                 onChanged: (value) => setState(() => _selectedPlanId = value),
               ),
@@ -9459,7 +9802,9 @@ class _NotificationSettingsTabState extends State<_NotificationSettingsTab> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               const SizedBox(height: 4),
-                              Text((item['message'] ?? '').toString(),
+                              Text(
+                                  (item['body'] ?? item['message'] ?? '')
+                                      .toString(),
                                   style: AppTextStyles.bodySmall),
                               if ((item['createdAt'] ?? '')
                                   .toString()
@@ -9690,7 +10035,7 @@ class _SlaBreachedScreenState extends State<SlaBreachedScreen> {
                                     const SizedBox(width: 8),
                                     Expanded(
                                         child: Text(
-                                            '#${t.id} â€” ${t.category}',
+                                            '#${t.id} - ${t.category}',
                                             style: const TextStyle(
                                                 fontWeight: FontWeight.w700,
                                                 fontSize: 13))),
@@ -9816,7 +10161,7 @@ class _EscalatedTicketsScreenState extends State<EscalatedTicketsScreen> {
                                     const SizedBox(width: 8),
                                     Expanded(
                                         child: Text(
-                                            '#${t.id} â€” ${t.category}',
+                                            '#${t.id} - ${t.category}',
                                             style: const TextStyle(
                                                 fontWeight: FontWeight.w700,
                                                 fontSize: 13,
@@ -9876,7 +10221,7 @@ class TicketExportService {
       await file.writeAsString(sb.toString());
       await Share.shareXFiles([XFile(file.path)],
           subject:
-              'Tickets Export â€” ${DateFormat('d MMM yyyy').format(DateTime.now())}');
+              'Tickets Export - ${DateFormat('d MMM yyyy').format(DateTime.now())}');
     } catch (e) {
       if (context.mounted) _snack(context, 'Export failed: $e', error: true);
     }

@@ -243,13 +243,26 @@ List<_BookingItem> _sortChronologically(List<_BookingItem> source) {
   list.sort((a, b) {
     final aDate = _normalizeDateKey(a.slotDate ?? '');
     final bDate = _normalizeDateKey(b.slotDate ?? '');
-    final dateCmp = aDate.compareTo(bDate);
+    final dateCmp = bDate.compareTo(aDate);
     if (dateCmp != 0) return dateCmp;
     final aTime = _parseTimeToMinutes(a.timeRange ?? '');
     final bTime = _parseTimeToMinutes(b.timeRange ?? '');
-    return aTime.compareTo(bTime);
+    return bTime.compareTo(aTime);
   });
   return list;
+}
+
+bool _isPastBookingDate(String? raw) {
+  final key = _normalizeDateKey(raw ?? '');
+  if (key.isEmpty || key == '9999-12-31') return false;
+  try {
+    final day = DateTime.parse(key);
+    final now = DateTime.now();
+    final startOfToday = DateTime(now.year, now.month, now.day);
+    return day.isBefore(startOfToday);
+  } catch (_) {
+    return false;
+  }
 }
 
 class _RegularPageResult {
@@ -343,7 +356,14 @@ class _BookingItem {
     );
   }
 
-  String get statusUpper => status.toUpperCase();
+  String get rawStatusUpper => status.toUpperCase();
+  String get statusUpper {
+    if (rawStatusUpper == 'COMPLETED' || rawStatusUpper == 'CANCELLED') {
+      return rawStatusUpper;
+    }
+    if (_isPastBookingDate(slotDate)) return 'COMPLETED';
+    return rawStatusUpper;
+  }
   String get specialStatusUpper => (specialStatus ?? '').toUpperCase();
   String get displayStatus => isSpecial && specialStatusUpper == 'REQUESTED'
       ? 'REQUESTED'
@@ -461,17 +481,13 @@ class _BookingsPageState extends State<BookingsPage> {
   }
 
   bool _isRevenueBooking(_BookingItem booking) {
-    final status = booking.statusUpper;
-    final payment = (booking.paymentStatus ?? '').toUpperCase();
-    return status == 'COMPLETED' ||
-        payment == 'SUCCESS' ||
-        payment == 'PAID' ||
-        payment == 'CAPTURED';
+    return booking.statusUpper == 'COMPLETED';
   }
 
   Future<Map<String, Map<int, String>>> _fetchNameLookups() async {
     final users = <int, String>{};
     final consultants = <int, String>{};
+    final userIds = <int>{};
 
     try {
       final userResp = await _dio.get('/api/users');
@@ -483,6 +499,7 @@ class _BookingsPageState extends State<BookingsPage> {
         final row = Map<String, dynamic>.from(raw);
         final id = _toInt(row['id'] ?? row['userId']);
         if (id == null) continue;
+        userIds.add(id);
         final name = _normalizeName(
           (row['name'] ??
                   row['fullName'] ??
@@ -495,6 +512,33 @@ class _BookingsPageState extends State<BookingsPage> {
         if (name.isNotEmpty) users[id] = name;
       }
     } catch (_) {}
+
+    if (userIds.isNotEmpty) {
+      final profiles = await Future.wait<MapEntry<int, String>?>(
+        userIds.map((id) async {
+          try {
+            final response = await _dio.get('/api/onboarding/$id');
+            if (response.data is! Map) return null;
+            final row = Map<String, dynamic>.from(response.data as Map);
+            final name = _normalizeName(
+              (row['name'] ??
+                      row['fullName'] ??
+                      row['displayName'] ??
+                      row['email'] ??
+                      '')
+                  .toString(),
+            );
+            if (name.isEmpty) return null;
+            return MapEntry(id, name);
+          } catch (_) {
+            return null;
+          }
+        }),
+      );
+      for (final entry in profiles.whereType<MapEntry<int, String>>()) {
+        users[entry.key] = entry.value;
+      }
+    }
 
     try {
       final consultantResp = await _dio.get('/api/consultants');
@@ -956,6 +1000,31 @@ class _BookingsPageState extends State<BookingsPage> {
     }
   }
 
+  Future<void> _changeBookingStatus(
+    _BookingItem booking,
+    String status,
+  ) async {
+    if (booking.isSpecial) return;
+    try {
+      if (status == 'CANCELLED') {
+        await _dio.patch('/api/bookings/${booking.id}/cancel');
+      } else {
+        await _dio.put(
+          '/api/bookings/${booking.id}',
+          data: {'bookingStatus': status},
+        );
+      }
+      setState(() => _updateRegularBooking(booking, status: status));
+      _snack(context, 'Booking #${booking.id} updated to $status');
+    } catch (error) {
+      _snack(
+        context,
+        _apiError(error, fallback: 'Failed to update booking status'),
+        error: true,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final filtered = _filtered;
@@ -1148,30 +1217,37 @@ class _BookingsPageState extends State<BookingsPage> {
                             isAdmin: widget.isAdmin,
                             clientDisplayName: clientDisplayName,
                             consultantDisplayName: consultantDisplayName,
-                            onViewAnswers: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => BookingAnswersScreen(
-                                  bookingId:
-                                      booking.isSpecial ? null : booking.id,
-                                  specialBookingId:
-                                      booking.isSpecial ? booking.id : null,
-                                  bookingType:
-                                      booking.isSpecial ? 'SPECIAL' : 'NORMAL',
-                                  userId: booking.userId,
-                                  clientName: clientDisplayName,
-                                ),
-                              ),
-                            ),
+                            onViewAnswers: widget.isAdmin
+                                ? null
+                                : () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => BookingAnswersScreen(
+                                          bookingId: booking.isSpecial
+                                              ? null
+                                              : booking.id,
+                                          specialBookingId: booking.isSpecial
+                                              ? booking.id
+                                              : null,
+                                          bookingType: booking.isSpecial
+                                              ? 'SPECIAL'
+                                              : 'NORMAL',
+                                          userId: booking.userId,
+                                          clientName: clientDisplayName,
+                                        ),
+                                      ),
+                                    ),
                             onCancel: () => _cancelBooking(booking),
                             onConfirm: widget.isAdmin
                                 ? () => _confirmBooking(booking)
                                 : null,
-                            onAddMeetingLink: widget.isAdmin
-                                ? () => _addMeetingLink(booking)
-                                : null,
+                            onAddMeetingLink: null,
                             onMarkCompleted: widget.isAdmin
                                 ? () => _markCompleted(booking)
+                                : null,
+                            onStatusChanged: widget.isAdmin
+                                ? (status) =>
+                                    _changeBookingStatus(booking, status)
                                 : null,
                           );
                         },
@@ -1193,6 +1269,7 @@ class _BookingCard extends StatelessWidget {
   final VoidCallback? onConfirm;
   final VoidCallback? onAddMeetingLink;
   final VoidCallback? onMarkCompleted;
+  final ValueChanged<String>? onStatusChanged;
 
   const _BookingCard({
     required this.booking,
@@ -1204,6 +1281,7 @@ class _BookingCard extends StatelessWidget {
     this.onConfirm,
     this.onAddMeetingLink,
     this.onMarkCompleted,
+    this.onStatusChanged,
   });
 
   @override
@@ -1229,16 +1307,6 @@ class _BookingCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isCancelled ? const Color(0xFFFECACA) : AppColors.border,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          )
-        ],
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -1323,6 +1391,22 @@ class _BookingCard extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (isAdmin && !b.isSpecial && onStatusChanged != null)
+                  PopupMenuButton<String>(
+                    tooltip: 'Change booking status',
+                    icon: const Icon(Icons.more_vert_rounded,
+                        color: AppColors.textSecondary, size: 18),
+                    onSelected: onStatusChanged,
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'PENDING', child: Text('Mark Pending')),
+                      PopupMenuItem(
+                          value: 'CONFIRMED', child: Text('Mark Confirmed')),
+                      PopupMenuItem(
+                          value: 'COMPLETED', child: Text('Mark Completed')),
+                      PopupMenuItem(
+                          value: 'CANCELLED', child: Text('Mark Cancelled')),
+                    ],
+                  ),
               ],
             ),
             const SizedBox(height: 10),
@@ -1410,6 +1494,38 @@ class _BookingCard extends StatelessWidget {
                           fontWeight: FontWeight.w600,
                         ),
                         overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ] else if ((b.meetingMode ?? '').toUpperCase() == 'ONLINE' &&
+                isConfirmed) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFF6FF),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFBFDBFE)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(
+                      Icons.auto_awesome_rounded,
+                      size: 14,
+                      color: Color(0xFF2563EB),
+                    ),
+                    SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Meeting link is generated by the backend and will appear here once available.',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF1D4ED8),
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ],

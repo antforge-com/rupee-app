@@ -19,6 +19,7 @@
 
 import 'package:dio/dio.dart';
 import 'package:finadvise/api_client.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
 
 class BookingService {
@@ -267,9 +268,30 @@ class BookingService {
       if (meetingId != null) body['meetingId'] = meetingId;
       if (meetingNotes != null) body['meetingNotes'] = meetingNotes;
       if (body.isEmpty) return true;
+      final altBody = <String, dynamic>{
+        ...body,
+        if (bookingStatus != null) 'status': bookingStatus,
+      };
+      final endpoints = <String>[
+        '/api/bookings/$bookingId',
+        '/api/bookings/bulk/$bookingId',
+      ];
 
-      await _apiClient.dio.put('/api/bookings/$bookingId', data: body);
-      return true;
+      for (final path in endpoints) {
+        try {
+          await _apiClient.dio.put(path, data: body);
+          return true;
+        } catch (_) {}
+        try {
+          await _apiClient.dio.patch(path, data: body);
+          return true;
+        } catch (_) {}
+        try {
+          await _apiClient.dio.put(path, data: altBody);
+          return true;
+        } catch (_) {}
+      }
+      return false;
     } catch (_) {
       return false;
     }
@@ -457,48 +479,120 @@ class BookingService {
   // ── SPECIAL BOOKINGS ──────────────────────────────────────────────────────
 
   /// POST /api/special-bookings — Create a special booking request
-  Future<Map<String, dynamic>?> createSpecialBooking(Map<String, dynamic> payload) async {
+  Future<int?> _readCurrentUserId() async {
     try {
-      final response = await _apiClient.dio.post('/api/special-bookings', data: payload);
-      return response.data is Map ? Map<String, dynamic>.from(response.data) : null;
+      final prefs = await SharedPreferences.getInstance();
+      final intValue = prefs.getInt('fin_user_id') ??
+          prefs.getInt('user_id') ??
+          prefs.getInt('userId');
+      if (intValue != null && intValue > 0) return intValue;
+      final raw = prefs.getString('fin_user_id') ??
+          prefs.getString('user_id') ??
+          prefs.getString('userId');
+      return int.tryParse('${raw ?? ''}');
     } catch (_) {
       return null;
     }
   }
 
+  Map<String, dynamic> _normalizeSpecialPayload(Map<String, dynamic> payload) {
+    final hoursRaw = payload['durationInHours'] ??
+        payload['duration_hours'] ??
+        payload['hours'] ??
+        1;
+    final amountRaw = payload['sessionAmount'] ??
+        payload['amount'] ??
+        payload['baseAmount'] ??
+        payload['totalAmount'];
+    final hours = int.tryParse('$hoursRaw') ?? 1;
+    final amount = double.tryParse('$amountRaw') ?? 0;
+
+    return {
+      'consultantId': payload['consultantId'],
+      'durationInHours': hours.clamp(1, 8),
+      'sessionAmount': amount,
+      'meetingMode': (payload['meetingMode'] ?? 'ONLINE').toString(),
+      'userNotes': (payload['userNotes'] ?? 'Special booking request').toString(),
+      if (payload['offerId'] != null) 'offerId': payload['offerId'],
+    };
+  }
+
+  Future<Map<String, dynamic>?> createSpecialBooking(Map<String, dynamic> payload) async {
+    final body = _normalizeSpecialPayload(payload);
+    final attempts = <Map<String, dynamic>>[
+      body,
+      {
+        ...body,
+        if (!body.containsKey('status')) 'status': 'REQUESTED',
+      },
+    ];
+
+    for (final requestBody in attempts) {
+      try {
+        final response = await _apiClient.dio.post(
+          '/api/special-bookings',
+          data: requestBody,
+        );
+        final data = response.data;
+        if (data is Map) return Map<String, dynamic>.from(data);
+        if (data is List && data.isNotEmpty && data.first is Map) {
+          return Map<String, dynamic>.from(data.first as Map);
+        }
+      } catch (_) {
+        // Try next request-body variant.
+      }
+    }
+    return null;
+  }
+
   /// GET /api/special-bookings/me — My special bookings (logged-in user)
   Future<List<Map<String, dynamic>>> getMySpecialBookings() async {
-    final paths = [
+    final userId = await _readCurrentUserId();
+    final paths = <String>[
       '/api/special-bookings/me',
       '/api/special-bookings/my',
+      if (userId != null) '/api/special-bookings/user/$userId',
+      if (userId != null) '/api/special-bookings/users/$userId',
+      if (userId != null) '/api/users/$userId/special-bookings',
+      '/api/special-bookings',
     ];
     for (final path in paths) {
       try {
         final res = await _apiClient.dio.get(path);
         final list = _extractRows(res.data);
-        if (list.isNotEmpty || res.statusCode == 200) {
-          return list;
-        }
-      } catch (_) {}
+        if (list.isNotEmpty) return list;
+      } catch (_) {
+        // Try next endpoint variant.
+      }
     }
     return [];
   }
 
   /// GET /api/special-bookings/consultant/{id} — By consultant
   Future<List<Map<String, dynamic>>> getSpecialBookingsByConsultant(int consultantId) async {
-    try {
-      final res = await _apiClient.dio.get('/api/special-bookings/consultant/$consultantId');
-      return _extractRows(res.data);
-    } catch (_) {
-      return [];
+    final paths = <String>[
+      '/api/special-bookings/consultant/$consultantId',
+      '/api/consultants/$consultantId/special-bookings',
+      '/api/special-bookings?consultantId=$consultantId',
+    ];
+    for (final path in paths) {
+      try {
+        final res = await _apiClient.dio.get(path);
+        final rows = _extractRows(res.data);
+        if (rows.isNotEmpty) return rows;
+      } catch (_) {
+        // Try next endpoint variant.
+      }
     }
+    return [];
   }
 
   /// GET /api/special-bookings — All special bookings (Admin)
   Future<List<Map<String, dynamic>>> getAllSpecialBookings() async {
-    final paths = [
+    final paths = <String>[
       '/api/special-bookings',
       '/api/special-bookings/admin',
+      '/api/special-bookings/all',
     ];
     for (final path in paths) {
       try {
@@ -509,10 +603,10 @@ class BookingService {
               : null,
         );
         final rows = _extractRows(res.data);
-        if (rows.isNotEmpty || res.statusCode == 200) {
-          return rows;
-        }
-      } catch (_) {}
+        if (rows.isNotEmpty) return rows;
+      } catch (_) {
+        // Try next endpoint variant.
+      }
     }
     return [];
   }
@@ -529,12 +623,20 @@ class BookingService {
 
   /// PUT /api/special-bookings/{id} — Generic update special booking
   Future<bool> updateSpecialBooking(int id, Map<String, dynamic> payload) async {
-    try {
-      await _apiClient.dio.put('/api/special-bookings/$id', data: payload);
-      return true;
-    } catch (_) {
-      return false;
+    final attempts = <Future<Response<dynamic>> Function()>[
+      () => _apiClient.dio.put('/api/special-bookings/$id', data: payload),
+      () => _apiClient.dio.patch('/api/special-bookings/$id', data: payload),
+      () => _apiClient.dio.put('/api/special-bookings/$id/schedule', data: payload),
+    ];
+    for (final attempt in attempts) {
+      try {
+        await attempt();
+        return true;
+      } catch (_) {
+        // Try next endpoint variant.
+      }
     }
+    return false;
   }
 
   /// PUT /api/special-bookings/{id}/reschedule — Reschedule confirmed special booking
@@ -543,18 +645,26 @@ class BookingService {
     required String newDate,
     required String newTime,
   }) async {
-    try {
-      await _apiClient.dio.put(
-        '/api/special-bookings/$id/reschedule',
-        data: {
-          'newDate': newDate,
-          'newTime': newTime,
-        },
-      );
-      return true;
-    } catch (_) {
-      return false;
+    final payload = {
+      'newDate': newDate,
+      'newTime': newTime,
+      'scheduledDate': newDate,
+      'scheduledTime': newTime,
+    };
+    final attempts = <Future<Response<dynamic>> Function()>[
+      () => _apiClient.dio.put('/api/special-bookings/$id/reschedule', data: payload),
+      () => _apiClient.dio.put('/api/special-bookings/$id/schedule', data: payload),
+      () => _apiClient.dio.patch('/api/special-bookings/$id', data: payload),
+    ];
+    for (final attempt in attempts) {
+      try {
+        await attempt();
+        return true;
+      } catch (_) {
+        // Try next endpoint variant.
+      }
     }
+    return false;
   }
 
   List<Map<String, dynamic>> _extractRows(dynamic data) {
@@ -565,12 +675,15 @@ class BookingService {
           .toList();
     }
     if (data is Map) {
-      final value = data['content'] ?? data['data'] ?? data['items'] ?? [];
-      if (value is List) {
-        return value
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
+      const keys = ['content', 'data', 'items', 'bookings', 'results', 'records'];
+      for (final key in keys) {
+        final value = data[key];
+        if (value is List) {
+          return value
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+        }
       }
     }
     return [];

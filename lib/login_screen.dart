@@ -39,6 +39,7 @@ class _LoginScreenState extends State<LoginScreen>
   final AuthService _auth = AuthService();
 
   final _credCtrl = TextEditingController();
+  final _credFocusNode = FocusNode();
   final _passCtrl = TextEditingController();
   final _passFocusNode = FocusNode();
   bool _passVisible = false;
@@ -56,6 +57,9 @@ class _LoginScreenState extends State<LoginScreen>
 
   bool _showResetPage = false;
   String _resetInitialEmail = '';
+
+  bool get _hasAuthFieldError =>
+      _apiError.isNotEmpty && _errorType == _ErrorType.auth;
 
   late AnimationController _shakeCtrl;
   late Animation<double> _shakeAnim;
@@ -77,10 +81,29 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void dispose() {
     _credCtrl.dispose();
+    _credFocusNode.dispose();
     _passCtrl.dispose();
     _passFocusNode.dispose();
     _shakeCtrl.dispose();
     super.dispose();
+  }
+
+  KeyEventResult _handleCredentialEnter(FocusNode _, KeyEvent event) {
+    final isEnter = event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    if (event is KeyDownEvent && isEnter && _passFocusNode.hasFocus) {
+      FocusScope.of(context).unfocus();
+
+      // Check if terms are accepted
+      if (!_termsAccepted) {
+        _shakeTerms();
+        return KeyEventResult.handled;
+      }
+
+      if (!_loading) _handleLogin();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   void _shakeTerms() {
@@ -330,22 +353,24 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Widget _buildCard() {
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 440),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withOpacity(0.15),
-              blurRadius: 40,
-              offset: const Offset(0, 20))
-        ],
-      ),
-      padding: const EdgeInsets.all(28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
+    return Focus(
+      onKeyEvent: _handleCredentialEnter,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 440),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withOpacity(0.15),
+                blurRadius: 40,
+                offset: const Offset(0, 20))
+          ],
+        ),
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
           Text('Login to Account',
               style: GoogleFonts.inter(
                   fontSize: 22, fontWeight: FontWeight.w800, color: const Color(0xFF0F172A))),
@@ -359,16 +384,18 @@ class _LoginScreenState extends State<LoginScreen>
           const SizedBox(height: 6),
           TextField(
             controller: _credCtrl,
+            focusNode: _credFocusNode,
             keyboardType: TextInputType.emailAddress,
             textInputAction: TextInputAction.next,
             onChanged: (_) => setState(() {
               _apiError = '';
               _errorType = _ErrorType.none;
             }),
+            onEditingComplete: () {},
             onSubmitted: (_) => _passFocusNode.requestFocus(),
             decoration: _inputDecoration(
               hint: 'Enter your email or mobile',
-              hasError: _apiError.isNotEmpty && _errorType == _ErrorType.auth,
+              hasError: _hasAuthFieldError,
             ),
           ),
           const SizedBox(height: 16),
@@ -385,10 +412,14 @@ class _LoginScreenState extends State<LoginScreen>
               _apiError = '';
               _errorType = _ErrorType.none;
             }),
-            onSubmitted: (_) => _handleLogin(),
+            onEditingComplete: () {},
+            onSubmitted: (_) {
+              FocusScope.of(context).unfocus();
+              if (!_loading) _handleLogin();
+            },
             decoration: _inputDecoration(
               hint: '••••••••',
-              hasError: _apiError.isNotEmpty && _errorType == _ErrorType.auth,
+              hasError: _hasAuthFieldError,
               suffix: IconButton(
                 icon: Icon(
                     _passVisible ? Icons.visibility_off : Icons.visibility,
@@ -473,6 +504,7 @@ class _LoginScreenState extends State<LoginScreen>
             ],
           ),
         ],
+        ),
       ),
     );
   }
@@ -499,15 +531,18 @@ class _LoginScreenState extends State<LoginScreen>
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Checkbox(
-            value: _termsAccepted,
-            onChanged: (v) => setState(() {
-              _termsAccepted = v ?? false;
-              _apiError = '';
-            }),
-            activeColor: AppColors.primaryLight,
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            visualDensity: VisualDensity.compact,
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Checkbox(
+              value: _termsAccepted,
+              onChanged: (v) => setState(() {
+                _termsAccepted = v ?? false;
+                _apiError = '';
+              }),
+              activeColor: AppColors.primaryLight,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -771,13 +806,20 @@ class _LoginScreenState extends State<LoginScreen>
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide:
-          BorderSide(color: AppColors.primaryLight, width: 1.5),
+          borderSide: BorderSide(
+            color: hasError ? const Color(0xFFFCA5A5) : AppColors.primaryLight,
+            width: 1.5,
+          ),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
           borderSide:
           const BorderSide(color: Color(0xFFFCA5A5), width: 1.5),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide:
+              const BorderSide(color: Color(0xFFFCA5A5), width: 1.5),
         ),
       );
 }

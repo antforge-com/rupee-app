@@ -182,6 +182,24 @@ class TicketService {
 
   Future<List<String>> getUniqueCategories() async {
     try {
+      final categoriesResponse =
+          await _apiClient.dio.get('/api/admin/config/categories');
+      final categories = _extractArray(
+        categoriesResponse.data,
+        keys: const ['content', 'data', 'items', 'categories'],
+      );
+      final mapped = categories
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .where((e) => (e['isActive'] ?? e['active'] ?? true) != false)
+          .map((e) => (e['name'] ?? e['category'] ?? '').toString().trim())
+          .where((s) => s.isNotEmpty)
+          .toSet()
+          .toList();
+      if (mapped.isNotEmpty) return mapped;
+    } catch (_) {}
+
+    try {
       final response =
           await _apiClient.dio.get('/api/tickets/unique-categories');
       final list = _extractArray(response.data,
@@ -189,8 +207,9 @@ class TicketService {
       return list
           .map((e) {
             if (e is String) return e.trim();
-            if (e is Map)
+            if (e is Map) {
               return (e['name'] ?? e['category'] ?? '').toString().trim();
+            }
             return e.toString().trim();
           })
           .where((s) => s.isNotEmpty)
@@ -251,7 +270,21 @@ class TicketService {
       );
       return Ticket.fromJson(response.data);
     } catch (_) {
-      return null;
+      try {
+        final fallbackBody = <String, dynamic>{
+          'userId': userId,
+          'category': category.trim(),
+          'description': description,
+          'priority': priority.toUpperCase(),
+          'status': 'NEW',
+          if (consultantId != null) 'consultantId': consultantId,
+        };
+        final response =
+            await _apiClient.dio.post('/api/tickets', data: fallbackBody);
+        return Ticket.fromJson(response.data);
+      } catch (_) {
+        return null;
+      }
     }
   }
 

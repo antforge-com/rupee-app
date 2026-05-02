@@ -13,9 +13,7 @@ public class GiveSlotRequest {
     @NotNull(message = "Start Time is required")
     private LocalTime startTime;
 
-    @NotNull(message = "Meeting Link is required")
     private String meetingLink;
 
-    @NotNull(message = "Meeting ID is required")
     private String meetingId;
 }

@@ -22,6 +22,7 @@ import 'package:finadvise/api_client.dart';
 import 'package:finadvise/app_theme.dart';
 import 'package:finadvise/email_to_ticket_screen.dart';
 import 'package:finadvise/models/models.dart';
+import 'package:finadvise/services/question_service.dart';
 import 'package:flutter/material.dart';
 
 class AdminSettingsTab extends StatelessWidget {
@@ -1918,7 +1919,7 @@ class SkillsQuestionsScreen extends StatefulWidget {
 class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabs;
-  final _dio = ApiClient().dio;
+  final _questionService = QuestionService();
 
   List<Map<String, dynamic>> _skills = [];
   List<Map<String, dynamic>> _questions = [];
@@ -1939,35 +1940,65 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
     super.dispose();
   }
 
+  void _showMessage(String message, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: error ? AppColors.danger : AppColors.success,
+        ),
+      );
+  }
+
+  String _skillLabel(Map<String, dynamic> skill) =>
+      (skill['skillName'] ?? skill['name'] ?? '').toString();
+
+  List<String> _questionOptions(Map<String, dynamic> question) =>
+      (question['options'] ?? '')
+          .toString()
+          .split(RegExp(r'[\n,]'))
+          .map((item) => item.trim())
+          .where((item) => item.isNotEmpty)
+          .toList();
+
+  String _prettyQuestionType(String raw) {
+    switch (raw.trim().toUpperCase()) {
+      case 'TEXTAREA':
+        return 'Paragraph';
+      case 'MULTIPLE_CHOICE':
+        return 'Multiple Choice';
+      case 'TEXT':
+      default:
+        return 'Short Text';
+    }
+  }
+
   Future<void> _loadSkills() async {
     setState(() => _loadingSkills = true);
-    try {
-      final res = await _dio.get('/api/skills');
-      final list = res.data is List
-          ? res.data as List
-          : (res.data?['content'] as List? ?? []);
-      setState(() => _skills =
-          list.map((e) => Map<String, dynamic>.from(e as Map)).toList());
-    } catch (_) {}
+    final result = await _questionService.getAllSkillsResult();
+    if (!mounted) return;
+    setState(() => _skills = result.items);
+    if (!result.ok) {
+      _showMessage(result.message, error: true);
+    }
     if (mounted) setState(() => _loadingSkills = false);
   }
 
   Future<void> _loadQuestions() async {
     setState(() => _loadingQuestions = true);
-    try {
-      final res = await _dio.get('/api/questions');
-      final list = res.data is List
-          ? res.data as List
-          : (res.data?['content'] as List? ?? []);
-      setState(() => _questions =
-          list.map((e) => Map<String, dynamic>.from(e as Map)).toList());
-    } catch (_) {}
+    final result = await _questionService.getAllQuestionsResult();
+    if (!mounted) return;
+    setState(() => _questions = result.items);
+    if (!result.ok) {
+      _showMessage(result.message, error: true);
+    }
     if (mounted) setState(() => _loadingQuestions = false);
   }
 
   void _showAddSkillSheet() {
     final nameCtrl = TextEditingController();
-    final descCtrl = TextEditingController();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1990,30 +2021,22 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
                 decoration: const InputDecoration(
                     labelText: 'Skill name *',
                     prefixIcon: Icon(Icons.star_outline))),
-            const SizedBox(height: 12),
-            TextField(
-                controller: descCtrl,
-                decoration: const InputDecoration(
-                    labelText: 'Description (optional)',
-                    prefixIcon: Icon(Icons.description_outlined))),
             const SizedBox(height: 20),
             SizedBox(
               width: double.infinity,
               height: 48,
               child: ElevatedButton(
                 onPressed: () async {
-                  if (nameCtrl.text.isEmpty) return;
-                  try {
-                    await _dio.post('/api/skills', data: {
-                      'name': nameCtrl.text.trim(),
-                      if (descCtrl.text.isNotEmpty)
-                        'description': descCtrl.text.trim()
-                    });
-                    if (mounted) {
-                      Navigator.pop(context);
-                      _loadSkills();
-                    }
-                  } catch (_) {}
+                  final name = nameCtrl.text.trim();
+                  if (name.isEmpty) return;
+                  final result = await _questionService.createSkillResult(name);
+                  if (context.mounted && result.ok) {
+                    Navigator.pop(context);
+                    _showMessage(result.message);
+                    _loadSkills();
+                  } else if (context.mounted) {
+                    _showMessage(result.message, error: true);
+                  }
                 },
                 child: const Text('Create Skill',
                     style: TextStyle(
@@ -2028,9 +2051,9 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
 
   void _showAddQuestionSheet() {
     final textCtrl = TextEditingController();
+    final placeholderCtrl = TextEditingController();
     final optionsCtrl = TextEditingController();
-    String type = 'radio';
-    const types = ['radio', 'multiselect', 'text', 'mobile'];
+    String type = 'TEXT';
 
     showModalBottomSheet(
       context: context,
@@ -2051,33 +2074,54 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SheetHandle(title: 'Add Question'),
+                DropdownButtonFormField<String>(
+                  initialValue: type,
+                  decoration: const InputDecoration(
+                    labelText: 'Question type *',
+                    prefixIcon: Icon(Icons.tune_rounded),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'TEXT',
+                      child: Text('Short Text'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'TEXTAREA',
+                      child: Text('Paragraph'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'MULTIPLE_CHOICE',
+                      child: Text('Multiple Choice'),
+                    ),
+                  ],
+                  onChanged: (value) => ss(() => type = value ?? 'TEXT'),
+                ),
+                const SizedBox(height: 12),
                 TextField(
                     controller: textCtrl,
-                    decoration:
-                        const InputDecoration(labelText: 'Question text *')),
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'Question text *',
+                      prefixIcon: Icon(Icons.quiz_outlined),
+                    )),
                 const SizedBox(height: 12),
-                Text('Answer Type *', style: AppTextStyles.label),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: types
-                      .map((t) => ChoiceChip(
-                            label: Text(t),
-                            selected: type == t,
-                            selectedColor:
-                                AppColors.primaryLight.withValues(alpha: 0.12),
-                            onSelected: (_) => ss(() => type = t),
-                          ))
-                      .toList(),
+                TextField(
+                  controller: placeholderCtrl,
+                  decoration: InputDecoration(
+                    labelText: type == 'MULTIPLE_CHOICE'
+                        ? 'Helper text (optional)'
+                        : 'Placeholder (optional)',
+                    prefixIcon: const Icon(Icons.short_text_rounded),
+                  ),
                 ),
-                if (type == 'radio' || type == 'multiselect') ...[
+                if (type == 'MULTIPLE_CHOICE') ...[
                   const SizedBox(height: 12),
                   TextField(
                       controller: optionsCtrl,
                       maxLines: 4,
                       decoration: const InputDecoration(
-                          labelText: 'Options (one per line, min 2)',
+                          labelText: 'Options *',
+                          hintText: 'One per line or comma separated',
                           alignLabelWithHint: true)),
                 ],
                 const SizedBox(height: 20),
@@ -2086,23 +2130,32 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
                   height: 48,
                   child: ElevatedButton(
                     onPressed: () async {
-                      if (textCtrl.text.isEmpty) return;
-                      try {
-                        final options = optionsCtrl.text
-                            .split('\n')
-                            .map((s) => s.trim())
-                            .where((s) => s.isNotEmpty)
-                            .toList();
-                        await _dio.post('/api/questions', data: {
-                          'text': textCtrl.text.trim(),
-                          'type': type,
-                          'options': options.join('|||')
-                        });
-                        if (mounted) {
-                          Navigator.pop(context);
-                          _loadQuestions();
-                        }
-                      } catch (_) {}
+                      final text = textCtrl.text.trim();
+                      if (text.isEmpty) return;
+                      final options = optionsCtrl.text
+                          .split(RegExp(r'[\n,]'))
+                          .map((s) => s.trim())
+                          .where((s) => s.isNotEmpty)
+                          .toList();
+                      if (type == 'MULTIPLE_CHOICE' && options.isEmpty) {
+                        _showMessage('Add at least one option', error: true);
+                        return;
+                      }
+                      final result =
+                          await _questionService.createQuestionResult({
+                        'text': text,
+                        'type': type,
+                        if (placeholderCtrl.text.trim().isNotEmpty)
+                          'placeholder': placeholderCtrl.text.trim(),
+                        if (options.isNotEmpty) 'options': options.join(', '),
+                      });
+                      if (context.mounted && result.ok) {
+                        Navigator.pop(context);
+                        _showMessage(result.message);
+                        _loadQuestions();
+                      } else if (context.mounted) {
+                        _showMessage(result.message, error: true);
+                      }
                     },
                     child: const Text('Add Question',
                         style: TextStyle(
@@ -2160,6 +2213,7 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
                       itemCount: _skills.length,
                       itemBuilder: (_, i) {
                         final s = _skills[i];
+                        final skillName = _skillLabel(s);
                         return Card(
                           margin: const EdgeInsets.only(bottom: 8),
                           child: ListTile(
@@ -2172,12 +2226,7 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
                               child: const Icon(Icons.star_rounded,
                                   color: Color(0xFF7C3AED), size: 18),
                             ),
-                            title:
-                                Text(s['name'] ?? '', style: AppTextStyles.h4),
-                            subtitle: s['description'] != null
-                                ? Text(s['description'],
-                                    style: AppTextStyles.caption)
-                                : null,
+                            title: Text(skillName, style: AppTextStyles.h4),
                             trailing: IconButton(
                               icon: const Icon(Icons.delete_outline,
                                   color: AppColors.danger),
@@ -2186,7 +2235,7 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
                                     context: context,
                                     builder: (_) => AlertDialog(
                                             title:
-                                                Text('Delete "${s['name']}"?'),
+                                                Text('Delete "$skillName"?'),
                                             content: const Text(
                                                 'This cannot be undone.'),
                                             actions: [
@@ -2208,8 +2257,14 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
                                                           color: Colors.white)))
                                             ]));
                                 if (ok == true) {
-                                  await _dio.delete('/api/skills/${s['id']}');
-                                  _loadSkills();
+                                  final result = await _questionService
+                                      .deleteSkillResult(s['id']);
+                                  if (result.ok) {
+                                    _showMessage(result.message);
+                                    _loadSkills();
+                                  } else {
+                                    _showMessage(result.message, error: true);
+                                  }
                                 }
                               },
                             ),
@@ -2232,11 +2287,11 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
                       itemCount: _questions.length,
                       itemBuilder: (_, i) {
                         final q = _questions[i];
-                        final type = q['type'] ?? 'radio';
-                        final options = (q['options'] as String? ?? '')
-                            .split('|||')
-                            .where((s) => s.isNotEmpty)
-                            .toList();
+                        final rawType = (q['type'] ?? 'TEXT').toString();
+                        final type = _prettyQuestionType(rawType);
+                        final placeholder =
+                            (q['placeholder'] ?? '').toString().trim();
+                        final options = _questionOptions(q);
                         return Card(
                           margin: const EdgeInsets.only(bottom: 10),
                           child: Padding(
@@ -2295,9 +2350,15 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
                                                                     .white)))
                                                   ]));
                                       if (ok == true) {
-                                        await _dio.delete(
-                                            '/api/questions/${q['id']}');
-                                        _loadQuestions();
+                                        final result = await _questionService
+                                            .deleteQuestionResult(q['id']);
+                                        if (result.ok) {
+                                          _showMessage(result.message);
+                                          _loadQuestions();
+                                        } else {
+                                          _showMessage(result.message,
+                                              error: true);
+                                        }
                                       }
                                     },
                                     padding: EdgeInsets.zero,
@@ -2331,15 +2392,13 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
                                         .toList(),
                                   ),
                                 ],
-                                if (type == 'mobile')
-                                  const Padding(
-                                    padding: EdgeInsets.only(top: 6),
-                                    child: Text(
-                                        'Validates: 10-digit Indian mobile',
-                                        style: TextStyle(
-                                            fontSize: 11,
-                                            color: AppColors.warning)),
+                                if (placeholder.isNotEmpty) ...[
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Placeholder: $placeholder',
+                                    style: AppTextStyles.caption,
                                   ),
+                                ],
                               ],
                             ),
                           ),
