@@ -26,6 +26,7 @@ import 'package:finadvise/models/models.dart';
 import 'package:finadvise/services/consultant_service.dart';
 import 'package:finadvise/services/email_to_ticket_service.dart';
 import 'package:finadvise/services/ticket_service.dart';
+import 'package:finadvise/shared/ticket_number_formatter.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
@@ -257,10 +258,16 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
 
   final _searchCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
+  final _statusChipScrollCtrl = ScrollController();
+  final _kpiScrollCtrl = ScrollController();
   Timer? _pollTimer;
+  late final Map<String, GlobalKey> _statusChipKeys = {
+    for (final status in _statuses) status: GlobalKey(),
+  };
 
   // Email-to-Ticket
   String _emailStatus = 'checking'; // checking | ok | down
+  String _emailMailbox = 'support@meetthemasters.in';
   bool _polling = false;
 
   static const _statuses = [
@@ -393,14 +400,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
   }
 
   String _ticketNumber(Ticket ticket) {
-    final idPart = ticket.id.toString().padLeft(2, '0');
-    if (ticket.createdAt?.isNotEmpty != true) return '#$idPart';
-    try {
-      final dt = DateTime.parse(_normTs(ticket.createdAt!)).toLocal();
-      return '${DateFormat('MM/dd').format(dt)}/$idPart';
-    } catch (_) {
-      return '#$idPart';
-    }
+    return formatTicketNumberFromTicket(ticket);
   }
 
   String _ticketCreatedText(Ticket ticket) {
@@ -474,6 +474,8 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
   void dispose() {
     _pollTimer?.cancel();
     _scrollCtrl.dispose();
+    _statusChipScrollCtrl.dispose();
+    _kpiScrollCtrl.dispose();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -489,21 +491,38 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
 
   // â”€â”€â”€ Email-to-Ticket â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  Future<void> _checkEmail() async {
+  Future<void> _checkEmail({bool notify = false}) async {
     if (mounted) setState(() => _emailStatus = 'checking');
     try {
       final result = await _emailSvc.getHealthStatus();
-      if (!result.ok) {
-        if (mounted) setState(() => _emailStatus = 'down');
-        return;
+      final emailMatch =
+          RegExp(r'[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}', caseSensitive: false)
+              .firstMatch(result.message);
+      if (emailMatch != null && emailMatch.group(0) != null) {
+        _emailMailbox = emailMatch.group(0)!.trim();
       }
       final normalized = result.message.toUpperCase();
       final down = normalized.contains('DOWN') ||
           normalized.contains('OFFLINE') ||
-          normalized.contains('FAIL');
+          normalized.contains('FAIL') ||
+          normalized.contains('UNREACHABLE') ||
+          normalized.contains('TIMEOUT');
+      if (!result.ok && _isExplicitDownMessage(result.message)) {
+        if (mounted) setState(() => _emailStatus = 'down');
+        if (notify && mounted) {
+          _toast(context, 'Email integration appears down', error: true);
+        }
+        return;
+      }
       if (mounted) setState(() => _emailStatus = down ? 'down' : 'ok');
+      if (notify && mounted) {
+        _toast(context, down ? 'Email integration down' : 'Email integration active');
+      }
     } catch (_) {
       if (mounted) setState(() => _emailStatus = 'down');
+      if (notify && mounted) {
+        _toast(context, 'Email check failed', error: true);
+      }
     }
   }
 
@@ -519,7 +538,13 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
         return;
       }
       setState(() => _emailStatus = 'ok');
-      _toast(context, result.message);
+      setState(() {
+        _priorityFilter = 'ALL';
+        _search = '';
+        _searchCtrl.clear();
+      });
+      _selectStatusFilter('ALL');
+      _toast(context, 'Email polled. New tickets appear below in the list.');
       _loadData(reset: true);
       _checkEmail();
     } finally {
@@ -673,7 +698,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       final lower = format.toLowerCase();
       final userName = _displayUserName(ticket);
       final consultantName = _displayConsultantName(ticket);
-      final ticketNo = _ticketNumber(ticket).replaceAll('/', '_');
+      final ticketNo = '${_ticketNumber(ticket).replaceAll('/', '_')}_${ticket.id}';
 
       if (lower == 'xls') {
         final csv = StringBuffer(
@@ -907,7 +932,9 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
                                 return;
                               }
                               Navigator.pop(ctx);
-                              _toast(context, 'Ticket #${t.id} created');
+                              _toast(
+                                  context,
+                                  'Ticket ${_ticketNumber(t)} created');
                               _loadData(reset: true);
                             },
                             child: const Text('Create Ticket',
@@ -1035,6 +1062,19 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
         : isChecking
             ? const Color(0xFFFFFBEB)
             : const Color(0xFFF0FDFA);
+    final statusChip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: accent.withValues(alpha: 0.35)),
+      ),
+      child: Text(
+        isChecking ? 'CHECKING' : (isDown ? 'DOWN' : 'ACTIVE'),
+        style: TextStyle(
+            fontSize: 12, fontWeight: FontWeight.w800, color: accent),
+      ),
+    );
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -1051,7 +1091,6 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
           children: [
             LayoutBuilder(
               builder: (_, constraints) {
-                final compact = constraints.maxWidth < 640;
                 final title = isChecking
                     ? 'Checking Email-to-Ticket'
                     : isDown
@@ -1060,8 +1099,8 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
                 final subtitle = isChecking
                     ? 'Checking mailbox integration health.'
                     : isDown
-                        ? 'Mailbox integration is unreachable or taking too long to respond.'
-                        : 'Inbound support emails processed by the mailbox integration.';
+                        ? 'Mailbox integration is unreachable right now. Existing tickets are still visible below.'
+                        : 'Emails sent to $_emailMailbox are automatically converted to tickets. Priority and category are auto-detected from email content. Duplicate emails are ignored.';
                 final info = Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1097,88 +1136,103 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
                     ),
                   ],
                 );
-
-                final statusChip = Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: accent.withValues(alpha: 0.14),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: accent.withValues(alpha: 0.35)),
-                  ),
-                  child: Text(
-                    isChecking ? 'CHECKING' : (isDown ? 'DOWN' : 'HEALTHY'),
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        color: accent),
-                  ),
-                );
-
-                if (compact) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      info,
-                      const SizedBox(height: 10),
-                      statusChip,
-                    ],
-                  );
-                }
-
-                return Row(
-                  children: [
-                    Expanded(child: info),
-                    const SizedBox(width: 12),
-                    statusChip,
-                  ],
-                );
+                return info;
               },
             ),
             const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton(
-                  onPressed: _checkEmail,
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: accent.withValues(alpha: 0.45)),
-                    foregroundColor: accent,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20)),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  statusChip,
+                  const SizedBox(width: 8),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(minWidth: 104),
+                    child: OutlinedButton(
+                      onPressed: () => _checkEmail(notify: true),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: accent.withValues(alpha: 0.45)),
+                        foregroundColor: accent,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 9),
+                      ),
+                      child: const Text(
+                        'Check',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
                   ),
-                  child: const Text('Check',
-                      style: TextStyle(fontWeight: FontWeight.w700)),
-                ),
-                FilledButton(
-                  onPressed: _polling ? null : _pollInbox,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF0F766E),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20)),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                  const SizedBox(width: 8),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(minWidth: 132),
+                    child: FilledButton(
+                      onPressed: _polling ? null : _pollInbox,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF0F766E),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 9),
+                      ),
+                      child: _polling
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Text(
+                              'Poll Inbox',
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                    ),
                   ),
-                  child: _polling
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Text('Poll Inbox',
-                          style: TextStyle(fontWeight: FontWeight.w700)),
-                ),
-              ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Email-created tickets appear in the Support Tickets list below. Open any row to view details.',
+              style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
             ),
           ],
         ),
       ),
     );
+  }
+
+  bool _isExplicitDownMessage(String raw) {
+    final msg = raw.toUpperCase();
+    return msg.contains('DOWN') ||
+        msg.contains('OFFLINE') ||
+        msg.contains('UNREACHABLE') ||
+        msg.contains('TIMEOUT') ||
+        msg.contains('TIMED OUT') ||
+        msg.contains('CONNECTION REFUSED') ||
+        msg.contains('FAILED');
+  }
+
+  void _scrollStatusChipIntoView(String status) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final chipContext = _statusChipKeys[status]?.currentContext;
+      if (chipContext == null) return;
+      Scrollable.ensureVisible(
+        chipContext,
+        alignment: 0.12,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  void _selectStatusFilter(String status) {
+    _statusFilter = status;
+    _applyFilters();
+    _scrollStatusChipIntoView(status);
   }
 
   Widget _buildHeader() => Padding(
@@ -1203,7 +1257,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
               ],
             );
 
-            final actions = _buildHeaderActions();
+            final actions = _buildHeaderActions(compact: compact);
 
             if (compact) {
               return Column(
@@ -1227,56 +1281,77 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
         ),
       );
 
-  Widget _buildHeaderActions() => Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        alignment: WrapAlignment.end,
-        children: [
-          FilledButton.icon(
-            onPressed: _openCreate,
-            icon: const Icon(Icons.add_rounded, size: 18),
-            label: const Text('New Ticket'),
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF0F766E),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-            ),
-          ),
-          OutlinedButton.icon(
-            onPressed: _export,
-            icon: const Icon(Icons.download_rounded, size: 16),
-            label: Text('Export ($_total)'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFF334155),
-              side: const BorderSide(color: Color(0xFFCBD5E1)),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-            ),
-          ),
-          OutlinedButton.icon(
-            onPressed: () => _loadData(reset: true),
-            icon: const Icon(Icons.refresh_rounded, size: 16),
-            label: const Text('Refresh'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFF0F766E),
-              side: const BorderSide(color: Color(0xFF99F6E4)),
-              backgroundColor: const Color(0xFFF0FDFA),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-            ),
-          ),
-        ],
+  Widget _buildHeaderActions({required bool compact}) {
+    final newTicketButton = FilledButton.icon(
+      onPressed: _openCreate,
+      icon: const Icon(Icons.add_rounded, size: 18),
+      label: const Text('New Ticket'),
+      style: FilledButton.styleFrom(
+        backgroundColor: const Color(0xFF0F766E),
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+
+    final exportButton = OutlinedButton.icon(
+      onPressed: _export,
+      icon: const Icon(Icons.download_rounded, size: 16),
+      label: Text('Export ($_total)'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: const Color(0xFF334155),
+        side: const BorderSide(color: Color(0xFFCBD5E1)),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+
+    final refreshButton = OutlinedButton.icon(
+      onPressed: () => _loadData(reset: true),
+      icon: const Icon(Icons.refresh_rounded, size: 16),
+      label: const Text('Refresh'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: const Color(0xFF0F766E),
+        side: const BorderSide(color: Color(0xFF99F6E4)),
+        backgroundColor: const Color(0xFFF0FDFA),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+
+    if (compact) {
+      return SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            SizedBox(width: 126, child: refreshButton),
+            const SizedBox(width: 8),
+            SizedBox(width: 150, child: exportButton),
+            const SizedBox(width: 8),
+            SizedBox(width: 146, child: newTicketButton),
+          ],
+        ),
       );
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      alignment: WrapAlignment.end,
+      children: [
+        newTicketButton,
+        exportButton,
+        refreshButton,
+      ],
+    );
+  }
 
   Widget _buildKpiRow() {
     final cards = <Map<String, dynamic>>[
       {
         'value': _total,
         'label': 'Total',
+        'mobileLabel': 'TOTAL',
         'color': const Color(0xFF0F766E),
         'bg': const Color(0xFFE6FFFA),
         'bd': const Color(0xFF99F6E4),
@@ -1284,6 +1359,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       {
         'value': _openCount,
         'label': 'Open / Active',
+        'mobileLabel': 'OPEN',
         'color': const Color(0xFFD97706),
         'bg': const Color(0xFFFFFBEB),
         'bd': const Color(0xFFFDE68A),
@@ -1291,20 +1367,23 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       {
         'value': _overdueCount,
         'label': 'Overdue (SLA)',
-        'color': const Color(0xFFDC2626),
+        'mobileLabel': 'OVERDUE',
+        'color': const Color(0xFFB91C1C),
         'bg': const Color(0xFFFEF2F2),
         'bd': const Color(0xFFFECACA),
       },
       {
         'value': _escalatedCount,
         'label': 'Escalated',
-        'color': const Color(0xFFDC2626),
-        'bg': const Color(0xFFFFF1F2),
-        'bd': const Color(0xFFFDA4AF),
+        'mobileLabel': 'ESCALATED',
+        'color': const Color(0xFF9A3412),
+        'bg': const Color(0xFFFFF7ED),
+        'bd': const Color(0xFFFED7AA),
       },
       {
         'value': _resolvedCount,
         'label': 'Resolved',
+        'mobileLabel': 'RESOLVED',
         'color': const Color(0xFF16A34A),
         'bg': const Color(0xFFF0FDF4),
         'bd': const Color(0xFFBBF7D0),
@@ -1312,13 +1391,15 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       {
         'value': _resolvedToday,
         'label': 'Resolved Today',
-        'color': const Color(0xFF16A34A),
+        'mobileLabel': 'TODAY',
+        'color': const Color(0xFF15803D),
         'bg': const Color(0xFFF0FDF4),
         'bd': const Color(0xFFBBF7D0),
       },
       {
         'value': _closedCount,
         'label': 'Closed',
+        'mobileLabel': 'CLOSED',
         'color': const Color(0xFF64748B),
         'bg': const Color(0xFFF1F5F9),
         'bd': const Color(0xFFCBD5E1),
@@ -1330,20 +1411,26 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       child: LayoutBuilder(
         builder: (_, constraints) {
           if (constraints.maxWidth < 900) {
+            final mobileCardWidth =
+                (constraints.maxWidth / 5.0).clamp(74.0, 104.0).toDouble();
             return SizedBox(
-              height: 98,
+              height: 86,
               child: ListView.separated(
+                controller: _kpiScrollCtrl,
+                physics: const BouncingScrollPhysics(),
                 scrollDirection: Axis.horizontal,
                 itemCount: cards.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 10),
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
                 itemBuilder: (_, i) => SizedBox(
-                  width: 136,
+                  width: mobileCardWidth,
                   child: _kpiCard(
                     value: cards[i]['value'] as int,
                     label: cards[i]['label'] as String,
+                    compactLabel: cards[i]['mobileLabel'] as String,
                     color: cards[i]['color'] as Color,
                     background: cards[i]['bg'] as Color,
                     border: cards[i]['bd'] as Color,
+                    compact: true,
                   ),
                 ),
               ),
@@ -1361,6 +1448,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
                   child: _kpiCard(
                     value: cards[i]['value'] as int,
                     label: cards[i]['label'] as String,
+                    compactLabel: cards[i]['mobileLabel'] as String,
                     color: cards[i]['color'] as Color,
                     background: cards[i]['bg'] as Color,
                     border: cards[i]['bd'] as Color,
@@ -1378,32 +1466,41 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
   Widget _kpiCard({
     required int value,
     required String label,
+    required String compactLabel,
     required Color color,
     required Color background,
     required Color border,
+    bool compact = false,
   }) =>
       Container(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+        padding: EdgeInsets.fromLTRB(10, compact ? 9 : 10, 10, compact ? 7 : 8),
         decoration: BoxDecoration(
           color: background,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(color: border),
         ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment:
+              compact ? CrossAxisAlignment.center : CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
               '$value',
               style: TextStyle(
-                  fontSize: 24, fontWeight: FontWeight.w900, color: color),
+                  fontSize: compact ? 18 : 22,
+                  fontWeight: FontWeight.w900,
+                  color: color),
             ),
             const SizedBox(height: 2),
-            Text(label,
-                maxLines: 1,
+            Text(compact ? compactLabel : label,
+                maxLines: compact ? 2 : 1,
                 overflow: TextOverflow.ellipsis,
+                textAlign: compact ? TextAlign.center : TextAlign.start,
                 style: TextStyle(
-                    fontSize: 12, color: color, fontWeight: FontWeight.w600)),
+                    fontSize: compact ? 10.5 : 11,
+                    letterSpacing: compact ? 0.2 : 0,
+                    color: color,
+                    fontWeight: FontWeight.w700)),
           ],
         ),
       );
@@ -1494,6 +1591,8 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
   Widget _buildStatusChips() => SizedBox(
         height: 44,
         child: ListView.separated(
+          controller: _statusChipScrollCtrl,
+          physics: const BouncingScrollPhysics(),
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
           itemCount: _statuses.length,
@@ -1507,11 +1606,9 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
             final border = s == 'ALL' ? const Color(0xFF0F766E) : _sbd(s);
 
             return GestureDetector(
-              onTap: () {
-                setState(() => _statusFilter = s);
-                _applyFilters();
-              },
+              onTap: () => _selectStatusFilter(s),
               child: Container(
+                key: _statusChipKeys[s],
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
                 decoration: BoxDecoration(
@@ -1705,7 +1802,7 @@ class _TicketCard extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                       Row(children: [
-                        Text('#${ticket.id}',
+                        Text(formatTicketNumberFromTicket(ticket),
                             style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w700,

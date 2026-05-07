@@ -24,6 +24,7 @@ import 'package:finadvise/meet_the_masters_brand.dart';
 import 'package:finadvise/models/models.dart';
 import 'package:finadvise/notifications_screen.dart';
 import 'package:finadvise/services/services.dart';
+import 'package:finadvise/shared/ticket_number_formatter.dart';
 import 'package:finadvise/shared_widgets.dart';
 import 'package:finadvise/admin_missing_features.dart';
 import 'package:finadvise/ticket_detail_screen.dart' hide EmptyState;
@@ -288,7 +289,7 @@ class _StatCard extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [
@@ -307,38 +308,49 @@ class _StatCard extends StatelessWidget {
                 offset: const Offset(0, 4))
           ],
         ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10)),
-              child: Icon(icon, color: color, size: 18),
+        child: LayoutBuilder(builder: (context, constraints) {
+          final compact = constraints.maxHeight < 120;
+          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10)),
+                child: Icon(icon, color: color, size: 18),
+              ),
+              if (onTap != null) const Spacer(),
+              if (onTap != null)
+                Icon(Icons.arrow_forward_ios_rounded,
+                    size: 12, color: color.withValues(alpha: 0.5)),
+            ]),
+            SizedBox(height: compact ? 8 : 10),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(value,
+                  style: TextStyle(
+                      fontSize: compact ? 20 : 22,
+                      fontWeight: FontWeight.w800,
+                      color: color,
+                      letterSpacing: -0.5)),
             ),
-            if (onTap != null) const Spacer(),
-            if (onTap != null)
-              Icon(Icons.arrow_forward_ios_rounded,
-                  size: 12, color: color.withValues(alpha: 0.5)),
-          ]),
-          const SizedBox(height: 12),
-          Text(value,
-              style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800,
-                  color: color,
-                  letterSpacing: -0.5)),
-          const SizedBox(height: 2),
-          Text(title,
-              style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.textSecondary)),
-          if (subtitle != null)
-            Text(subtitle!,
-                style: TextStyle(
-                    fontSize: 10, color: color.withValues(alpha: 0.7))),
-        ]),
+            const SizedBox(height: 2),
+            Text(title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.textSecondary)),
+            if (subtitle != null)
+              Text(subtitle!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 10, color: color.withValues(alpha: 0.7))),
+          ]);
+        }),
       ),
     );
   }
@@ -410,6 +422,7 @@ class AdminDashboard extends StatefulWidget {
 }
 
 class _AdminDashboardState extends State<AdminDashboard> {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   int _bottomIdx = 0;
   AdminSection _section = AdminSection.overview;
 
@@ -422,12 +435,15 @@ class _AdminDashboardState extends State<AdminDashboard> {
   ];
 
   void _go(AdminSection s) {
+    final shouldCloseDrawer = _scaffoldKey.currentState?.isDrawerOpen ?? false;
     setState(() {
       _section = s;
       final bi = _bottomSections.indexOf(s);
       if (bi >= 0) _bottomIdx = bi;
     });
-    Navigator.pop(context);
+    if (shouldCloseDrawer) {
+      Navigator.of(context).pop();
+    }
   }
 
   Future<void> _logout() async {
@@ -553,6 +569,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: AppColors.background,
       drawer: _AdminDrawer(current: _section, onSelect: _go, onLogout: _logout),
       appBar: AppBar(
@@ -1158,6 +1175,8 @@ class _OverviewTabState extends State<_OverviewTab> {
     final maxRev = stats.fold(1.0, (m, s) => s.revenue > m ? s.revenue : m);
     final maxBks =
         stats.fold(1, (m, s) => s.bookings > m ? s.bookings : m).toDouble();
+    final kpiAspectRatio =
+        MediaQuery.of(context).size.width < 430 ? 1.32 : 1.55;
 
     return RefreshIndicator(
       onRefresh: () => _load(),
@@ -1220,7 +1239,7 @@ class _OverviewTabState extends State<_OverviewTab> {
             physics: const NeverScrollableScrollPhysics(),
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,
-            childAspectRatio: 1.55,
+            childAspectRatio: kpiAspectRatio,
             children: [
               _StatCard(
                   title: 'Total Bookings',
@@ -1286,7 +1305,7 @@ class _OverviewTabState extends State<_OverviewTab> {
                     context,
                     Icons.timer_off_rounded,
                     '$_slaBreachedCount SLA Breached',
-                    const Color(0xFFF97316),
+                    const Color(0xFFC0841A),
                     () => Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -1297,7 +1316,7 @@ class _OverviewTabState extends State<_OverviewTab> {
                     context,
                     Icons.escalator_warning_rounded,
                     '$_escalatedCount Escalated',
-                    const Color(0xFFDC2626),
+                    const Color(0xFF7C3AED),
                     () => Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -1969,7 +1988,9 @@ class _TicketsTabState extends State<_TicketsTab> {
                         }
                         if (!mounted) return;
                         Navigator.pop(ctx);
-                        _snack(context, 'Ticket #${created.id} created',
+                        _snack(
+                            context,
+                            'Ticket ${formatTicketNumberFromTicket(created)} created',
                             icon: Icons.confirmation_number_outlined);
                         _loadData(reset: true);
                       },
@@ -2196,7 +2217,8 @@ class _TicketCard extends StatelessWidget {
                                 color: AppColors.primaryLight
                                     .withValues(alpha: 0.1),
                                 borderRadius: BorderRadius.circular(6)),
-                            child: Text('Ticket Number: ${t.id}',
+                            child: Text(
+                                'Ticket Number: ${formatTicketNumberFromTicket(t)}',
                                 style: const TextStyle(
                                     fontSize: 10,
                                     fontWeight: FontWeight.w700,
@@ -3319,6 +3341,8 @@ class _AnalyticsTabState extends State<_AnalyticsTab> {
     final d = _data!;
     final resRate =
         d.totalTickets > 0 ? (d.resolvedTickets * 100 / d.totalTickets) : 0.0;
+    final kpiAspectRatio =
+        MediaQuery.of(context).size.width < 430 ? 1.32 : 1.55;
 
     return RefreshIndicator(
         onRefresh: () => _load(),
@@ -3340,7 +3364,7 @@ class _AnalyticsTabState extends State<_AnalyticsTab> {
                   physics: const NeverScrollableScrollPhysics(),
                   crossAxisSpacing: 12,
                   mainAxisSpacing: 12,
-                  childAspectRatio: 1.55,
+                  childAspectRatio: kpiAspectRatio,
                   children: [
                     _StatCard(
                         title: 'Total Tickets',
@@ -10055,7 +10079,7 @@ class _SlaBreachedScreenState extends State<SlaBreachedScreen> {
                                     const SizedBox(width: 8),
                                     Expanded(
                                         child: Text(
-                                            '#${t.id} - ${t.category}',
+                                            '${formatTicketNumberFromTicket(t)} - ${t.category}',
                                             style: const TextStyle(
                                                 fontWeight: FontWeight.w700,
                                                 fontSize: 13))),
@@ -10181,7 +10205,7 @@ class _EscalatedTicketsScreenState extends State<EscalatedTicketsScreen> {
                                     const SizedBox(width: 8),
                                     Expanded(
                                         child: Text(
-                                            '#${t.id} - ${t.category}',
+                                            '${formatTicketNumberFromTicket(t)} - ${t.category}',
                                             style: const TextStyle(
                                                 fontWeight: FontWeight.w700,
                                                 fontSize: 13,

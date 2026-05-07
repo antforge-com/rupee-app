@@ -27,6 +27,7 @@ import 'package:finadvise/api_client.dart';
 import 'package:finadvise/models/models.dart';
 import 'package:finadvise/services/admin_service.dart';
 import 'package:finadvise/services/ticket_service.dart';
+import 'package:finadvise/shared/ticket_number_formatter.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
@@ -593,15 +594,16 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
   Future<void> _export(String fmt) async {
     try {
       final dir = await getTemporaryDirectory();
-      final txt = 'Ticket #${_t.id}\nCategory: ${_t.category}\n'
+      final txt = 'Ticket $_displayId\nCategory: ${_t.category}\n'
           'Status: ${_t.status}\nPriority: ${_t.priority}\n'
           'Description: ${_t.description ?? ''}\n'
           'User: $_userDisplayName\n'
           'Consultant: $_consultantDisplayName\n'
           'Created: ${_fmtDT(_t.createdAt)}\n';
-      final file = File('${dir.path}/ticket_${_t.id}.txt');
+      final fileToken = _displayId.replaceAll('/', '_');
+      final file = File('${dir.path}/ticket_${fileToken}_${_t.id}.txt');
       await file.writeAsString(txt);
-      await Share.shareXFiles([XFile(file.path)], subject: 'Ticket #${_t.id}');
+      await Share.shareXFiles([XFile(file.path)], subject: 'Ticket $_displayId');
     } catch (_) {
       if (mounted) _toast(context, 'Export failed', ok: false);
     }
@@ -609,7 +611,7 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
 
   // ─── Getters ─────────────────────────────────────────────────────────────
 
-  String get _displayId => '04/26/${_t.id}';
+  String get _displayId => formatTicketNumber(createdAt: _t.createdAt);
   bool get _isTerminal => ['RESOLVED', 'CLOSED', 'ESCALATED'].contains(_status);
 
   String _prettyName(String raw) {

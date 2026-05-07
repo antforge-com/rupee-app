@@ -3830,6 +3830,19 @@ class _TicketsTabState extends State<_TicketsTab> {
   List<Map<String, dynamic>> _tickets = [];
   bool _loading = true;
   bool _guestExpiryPromptShown = false;
+  final ScrollController _filterChipScrollCtrl = ScrollController();
+  static const List<String> _ticketFilters = [
+    'ALL',
+    'NEW',
+    'OPEN',
+    'IN_PROGRESS',
+    'PENDING',
+    'RESOLVED',
+    'CLOSED',
+  ];
+  late final Map<String, GlobalKey> _filterChipKeys = {
+    for (final f in _ticketFilters) f: GlobalKey(),
+  };
   String _filter =
       'ALL'; // ALL | NEW | OPEN | IN_PROGRESS | PENDING | RESOLVED | CLOSED
 
@@ -3837,6 +3850,12 @@ class _TicketsTabState extends State<_TicketsTab> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _filterChipScrollCtrl.dispose();
+    super.dispose();
   }
 
   int get _uid => (widget.user['id'] as num?)?.toInt() ?? 0;
@@ -3882,6 +3901,25 @@ class _TicketsTabState extends State<_TicketsTab> {
     }).toList();
   }
 
+  void _scrollFilterIntoView(String filter) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final chipContext = _filterChipKeys[filter]?.currentContext;
+      if (chipContext == null) return;
+      Scrollable.ensureVisible(
+        chipContext,
+        alignment: 0.12,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  void _setFilter(String filter) {
+    setState(() => _filter = filter);
+    _scrollFilterIntoView(filter);
+  }
+
   @override
   Widget build(BuildContext context) {
     final isGuest = _isGuest(widget.user);
@@ -3923,7 +3961,7 @@ class _TicketsTabState extends State<_TicketsTab> {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const EmailToTicketScreen(),
+                      builder: (_) => const EmailToTicketScreen(readOnly: true),
                     ),
                   );
                 },
@@ -3997,17 +4035,11 @@ class _TicketsTabState extends State<_TicketsTab> {
 
                     // Filter chips
                     SingleChildScrollView(
+                      controller: _filterChipScrollCtrl,
                       scrollDirection: Axis.horizontal,
+                      physics: const BouncingScrollPhysics(),
                       child: Row(children: [
-                        for (final f in [
-                          'ALL',
-                          'NEW',
-                          'OPEN',
-                          'IN_PROGRESS',
-                          'PENDING',
-                          'RESOLVED',
-                          'CLOSED'
-                        ])
+                        for (final f in _ticketFilters)
                           _filterChip(f),
                       ]),
                     ),
@@ -4154,8 +4186,9 @@ class _TicketsTabState extends State<_TicketsTab> {
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: GestureDetector(
-        onTap: () => setState(() => _filter = f),
+        onTap: () => _setFilter(f),
         child: Container(
+          key: _filterChipKeys[f],
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
             color: sel ? _C.blue : Colors.white,
@@ -5282,7 +5315,7 @@ class _SettingsTab extends StatefulWidget {
 
 class _SettingsTabState extends State<_SettingsTab> {
   String _view =
-      'menu'; // menu | profile | security | plans | contact
+      'menu'; // menu | profile | security | plans
   Map<String, dynamic> _profile = {};
   bool _loadingProfile = false;
 
@@ -5333,12 +5366,6 @@ class _SettingsTabState extends State<_SettingsTab> {
             onUpdated: (u) {
               widget.onUpdated(u);
             });
-      case 'contact':
-        return _ContactView(
-          onBack: () => setState(() => _view = 'menu'),
-          user: widget.user,
-          profile: _profile,
-        );
       default:
         return _SettingsMenu(
             user: widget.user,
@@ -5452,10 +5479,6 @@ class _SettingsMenu extends StatelessWidget {
           _menuItem(Icons.lock_rounded, 'Privacy & Security',
               'Change password, security settings', () => onNav('security'),
               color: _C.warning),
-          _divider(),
-          _menuItem(Icons.mail_rounded, 'Contact Us',
-              'Reach out to our support team', () => onNav('contact'),
-              color: _C.success),
         ]),
       ),
 

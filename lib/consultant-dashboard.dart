@@ -22,6 +22,7 @@ import 'package:finadvise/login_screen.dart';
 import 'package:finadvise/meet_the_masters_brand.dart';
 import 'package:finadvise/models/models.dart';
 import 'package:finadvise/services/services.dart';
+import 'package:finadvise/shared/ticket_number_formatter.dart';
 import 'package:finadvise/shared_widgets.dart';
 import 'package:flutter/material.dart' hide Feedback;
 import 'package:flutter/services.dart';
@@ -135,6 +136,25 @@ String _sanitizeDisplayText(dynamic value, {String fallback = ''}) {
       .trim();
 
   return text.isEmpty ? fallback : text;
+}
+
+String _cleanSpecialBookingNotes(dynamic value, {String fallback = ''}) {
+  final raw = value?.toString().trim() ?? '';
+  if (raw.isEmpty) return fallback;
+  const prefix = '[[SPECIAL_BOOKING_META]]';
+  var cleaned = raw;
+
+  if (cleaned.startsWith(prefix)) {
+    final remainder = cleaned.substring(prefix.length);
+    final lines = remainder.split('\n');
+    if (lines.isNotEmpty && lines.first.trim().startsWith('{')) {
+      cleaned = lines.skip(1).join('\n').trim();
+    } else {
+      cleaned = remainder.trim();
+    }
+  }
+
+  return _sanitizeDisplayText(cleaned, fallback: fallback);
 }
 
 
@@ -928,39 +948,6 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
                   ),
                 );
               }),
-              if ((b.meetingMode ?? '').toUpperCase() == 'ONLINE' &&
-                  (b.meetingLink ?? '').trim().isEmpty)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEFF6FF),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFFBFDBFE)),
-                    ),
-                    child: const Row(
-                      children: [
-                        Icon(
-                          Icons.auto_awesome_rounded,
-                          size: 16,
-                          color: Color(0xFF2563EB),
-                        ),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Meeting links are generated automatically and will appear here once ready.',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF1D4ED8),
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
               if (b.status.toUpperCase() == 'PENDING')
                 _actionTile(Icons.check_circle_outline, 'Confirm Booking',
                     AppColors.success, () {
@@ -1004,6 +991,8 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
         color: AppColors.surface,
         child: TabBar(
           controller: _tabs,
+          isScrollable: true,
+          labelPadding: const EdgeInsets.symmetric(horizontal: 14),
           labelColor: AppColors.accent,
           unselectedLabelColor: AppColors.textMuted,
           indicatorColor: AppColors.accent,
@@ -1170,31 +1159,6 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
                                 borderRadius: BorderRadius.circular(8)),
                           ),
                         )),
-                        const SizedBox(width: 8),
-                      ],
-                      if (b.meetingMode?.toUpperCase() == 'ONLINE' &&
-                          (b.meetingLink ?? '').trim().isEmpty) ...[
-                        Expanded(
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFEFF6FF),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                  color: const Color(0xFFBFDBFE)),
-                            ),
-                            child: const Text(
-                              'Meeting link will be added automatically',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF1D4ED8),
-                              ),
-                            ),
-                          ),
-                        ),
                         const SizedBox(width: 8),
                       ],
                       if (b.status.toUpperCase() == 'CONFIRMED')
@@ -1389,7 +1353,7 @@ class _SpecialBookingCard extends StatelessWidget {
     final mode =
         _sanitizeDisplayText(booking['meetingMode'], fallback: 'ONLINE')
             .toUpperCase();
-    final notes = _sanitizeDisplayText(booking['userNotes']);
+    final notes = _cleanSpecialBookingNotes(booking['userNotes']);
     final amount =
         double.tryParse(booking['totalAmount']?.toString() ?? '0') ?? 0;
     final schedDate = _sanitizeDisplayText(booking['scheduledDate']);
@@ -1535,32 +1499,6 @@ class _SpecialBookingCard extends StatelessWidget {
                         fontWeight: FontWeight.w600,
                         color: AppColors.success),
                   )),
-                ]),
-              ),
-            ] else if (mode == 'ONLINE' && (isConfirmed || isCompleted)) ...[
-              const SizedBox(height: 8),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEFF6FF),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFFBFDBFE)),
-                ),
-                child: const Row(children: [
-                  Icon(Icons.auto_awesome_rounded,
-                      size: 14, color: Color(0xFF2563EB)),
-                  SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      'Meeting link is generated automatically and will sync here.',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF1D4ED8),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
                 ]),
               ),
             ],
@@ -2005,31 +1943,6 @@ class _GiveSlotSheetState extends State<_GiveSlotSheet> {
                         )),
                   ]),
                 ),
-              ),
-              const SizedBox(height: 14),
-
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEFF6FF),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFFBFDBFE)),
-                ),
-                child: const Row(children: [
-                  Icon(Icons.auto_awesome_rounded,
-                      size: 16, color: Color(0xFF2563EB)),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'For online sessions, the system generates the meeting ID and join link automatically after you assign the slot.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF1D4ED8),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ]),
               ),
               const SizedBox(height: 24),
 
@@ -2586,7 +2499,7 @@ class _TicketListCard extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                       Text(
-                          '#${ticket.id}  ${ticket.category.isEmpty ? "General" : ticket.category}',
+                          '${formatTicketNumberFromTicket(ticket)}  ${ticket.category.isEmpty ? "General" : ticket.category}',
                           style: AppTextStyles.h4,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis),
@@ -2894,7 +2807,8 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                  Text('#${widget.ticket.id}  ${widget.ticket.category}',
+                  Text(
+                      '${formatTicketNumberFromTicket(widget.ticket)}  ${widget.ticket.category}',
                       style: AppTextStyles.h3),
                   if (widget.ticket.userName != null)
                     Text('Client: ${widget.ticket.userName}',
@@ -3198,7 +3112,8 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
               controller: widget.scrollController,
               padding: const EdgeInsets.all(16),
               children: [
-                _detailRow('Ticket Number', '${widget.ticket.id}'),
+                _detailRow('Ticket Number',
+                    formatTicketNumberFromTicket(widget.ticket)),
                 if (widget.ticket.ticketNumber != null)
                   _detailRow('Reference Number', widget.ticket.ticketNumber!),
                 _detailRow('Category', widget.ticket.category),
@@ -4001,6 +3916,16 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
                                 if (!isBooked)
                                   Checkbox(
                                     value: isSelected,
+                                    shape: const CircleBorder(),
+                                    side: BorderSide(
+                                      color: isSelected
+                                          ? AppColors.accent
+                                          : AppColors.textMuted,
+                                      width: 1.4,
+                                    ),
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    visualDensity: VisualDensity.compact,
                                     onChanged: (_) {
                                       setState(() {
                                         if (isSelected) {
@@ -4040,22 +3965,30 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
                                   GestureDetector(
                                     onTap: _saving
                                         ? null
-                                        : () => _toggleDisplaySlot(slot),
+                                        : !isSelected
+                                            ? () => _snack(
+                                                'Select the checkbox first, then use Block/Restore.',
+                                                false)
+                                            : () => _toggleDisplaySlot(slot),
                                     child: Container(
                                       padding: const EdgeInsets.symmetric(
                                           horizontal: 12, vertical: 6),
                                       decoration: BoxDecoration(
-                                          color: slot.status == 'UNAVAILABLE'
-                                              ? AppColors.success
-                                                  .withValues(alpha: 0.1)
-                                              : AppColors.warning
-                                                  .withValues(alpha: 0.1),
+                                          color: !isSelected
+                                              ? AppColors.surfaceVariant
+                                              : slot.status == 'UNAVAILABLE'
+                                                  ? AppColors.success
+                                                      .withValues(alpha: 0.1)
+                                                  : AppColors.warning
+                                                      .withValues(alpha: 0.1),
                                           borderRadius:
                                               BorderRadius.circular(8),
                                           border: Border.all(
-                                              color: slot.status == 'UNAVAILABLE'
-                                                  ? AppColors.success
-                                                  : AppColors.warning)),
+                                              color: !isSelected
+                                                  ? AppColors.border
+                                                  : slot.status == 'UNAVAILABLE'
+                                                      ? AppColors.success
+                                                      : AppColors.warning)),
                                       child: Text(
                                           slot.status == 'UNAVAILABLE'
                                               ? 'Restore'
@@ -4063,9 +3996,11 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
                                           style: TextStyle(
                                               fontSize: 12,
                                               fontWeight: FontWeight.w700,
-                                              color: slot.status == 'UNAVAILABLE'
-                                                  ? AppColors.success
-                                                  : AppColors.warning)),
+                                              color: !isSelected
+                                                  ? AppColors.textMuted
+                                                  : slot.status == 'UNAVAILABLE'
+                                                      ? AppColors.success
+                                                      : AppColors.warning)),
                                     ),
                                   )
                                 else
