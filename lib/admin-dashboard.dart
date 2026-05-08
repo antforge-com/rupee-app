@@ -310,46 +310,48 @@ class _StatCard extends StatelessWidget {
         ),
         child: LayoutBuilder(builder: (context, constraints) {
           final compact = constraints.maxHeight < 120;
-          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(10)),
-                child: Icon(icon, color: color, size: 18),
-              ),
-              if (onTap != null) const Spacer(),
-              if (onTap != null)
-                Icon(Icons.arrow_forward_ios_rounded,
-                    size: 12, color: color.withValues(alpha: 0.5)),
-            ]),
-            SizedBox(height: compact ? 8 : 10),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Text(value,
-                  style: TextStyle(
-                      fontSize: compact ? 20 : 22,
-                      fontWeight: FontWeight.w800,
-                      color: color,
-                      letterSpacing: -0.5)),
-            ),
-            const SizedBox(height: 2),
-            Text(title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: AppColors.textSecondary)),
-            if (subtitle != null)
-              Text(subtitle!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      fontSize: 10, color: color.withValues(alpha: 0.7))),
-          ]);
+          return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                        color: color.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10)),
+                    child: Icon(icon, color: color, size: 18),
+                  ),
+                  if (onTap != null) const Spacer(),
+                  if (onTap != null)
+                    Icon(Icons.arrow_forward_ios_rounded,
+                        size: 12, color: color.withValues(alpha: 0.5)),
+                ]),
+                SizedBox(height: compact ? 8 : 10),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(value,
+                      style: TextStyle(
+                          fontSize: compact ? 20 : 22,
+                          fontWeight: FontWeight.w800,
+                          color: color,
+                          letterSpacing: -0.5)),
+                ),
+                const SizedBox(height: 2),
+                Text(title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.textSecondary)),
+                if (subtitle != null)
+                  Text(subtitle!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 10, color: color.withValues(alpha: 0.7))),
+              ]);
         }),
       ),
     );
@@ -588,11 +590,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
           onTap: () => _go(AdminSection.overview),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             const MeetTheMastersLogoBadge(
-              size: 30,
-              padding: 4,
+              size: 40,
+              padding: 5,
               showAmbientGlow: false,
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 10),
             Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
@@ -919,7 +921,8 @@ class _OverviewTabState extends State<_OverviewTab> {
   int get _slaBreachedCount =>
       _tickets.where((t) => _calcSla(t)?.breached ?? false).length;
   int get _escalatedCount => _tickets
-      .where((t) => t.escalated == true || t.status.toUpperCase() == 'ESCALATED')
+      .where(
+          (t) => t.escalated == true || t.status.toUpperCase() == 'ESCALATED')
       .length;
 
   @override
@@ -1023,7 +1026,8 @@ class _OverviewTabState extends State<_OverviewTab> {
     return out;
   }
 
-  Map<int, String> _buildConsultantLookup(List<ConsultantModel> consultants) => {
+  Map<int, String> _buildConsultantLookup(List<ConsultantModel> consultants) =>
+      {
         for (final consultant in consultants)
           if (_normalizeName(consultant.name).isNotEmpty)
             consultant.id: _normalizeName(consultant.name),
@@ -1988,8 +1992,7 @@ class _TicketsTabState extends State<_TicketsTab> {
                         }
                         if (!mounted) return;
                         Navigator.pop(ctx);
-                        _snack(
-                            context,
+                        _snack(context,
                             'Ticket ${formatTicketNumberFromTicket(created)} created',
                             icon: Icons.confirmation_number_outlined);
                         _loadData(reset: true);
@@ -2906,8 +2909,7 @@ class _AdvisorFormState extends State<_AdvisorForm> {
       _nameC.text = a.name;
       _emailC.text = a.email;
       _desigC.text = a.designation ?? '';
-      _chargesC.text =
-          _normalizeSessionFee(a.charges).toStringAsFixed(0);
+      _chargesC.text = _normalizeSessionFee(a.charges).toStringAsFixed(0);
       _descC.text = a.description ?? '';
       _experienceC.text = a.yearsOfExperience?.toStringAsFixed(1) ?? '';
       _slotDuration = a.slotsDuration ?? 60;
@@ -4395,12 +4397,14 @@ class _OfferFormState extends State<_OfferForm> {
 
   Future<void> _loadConsultants() async {
     final consultants = await ConsultantService().getAllConsultants();
-    consultants.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    consultants
+        .sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     if (!mounted) return;
     setState(() {
       _consultants = consultants;
       if (_selectedConsultantId != null &&
-          !_consultants.any((consultant) => consultant.id == _selectedConsultantId)) {
+          !_consultants
+              .any((consultant) => consultant.id == _selectedConsultantId)) {
         _selectedConsultantId = null;
       }
       _loadingConsultants = false;
@@ -4429,7 +4433,8 @@ class _OfferFormState extends State<_OfferForm> {
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(24),
             ),
-            headerBackgroundColor: AppColors.primaryLight.withValues(alpha: 0.08),
+            headerBackgroundColor:
+                AppColors.primaryLight.withValues(alpha: 0.08),
             headerForegroundColor: AppColors.textPrimary,
             dayShape: MaterialStateProperty.all(
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -4554,7 +4559,8 @@ class _OfferFormState extends State<_OfferForm> {
                   ..._consultants.map(
                     (consultant) => DropdownMenuItem<int?>(
                       value: consultant.id,
-                      child: Text(consultant.name, overflow: TextOverflow.ellipsis),
+                      child: Text(consultant.name,
+                          overflow: TextOverflow.ellipsis),
                     ),
                   ),
                 ],
@@ -7762,8 +7768,7 @@ class _MasterTimeRangePickerDialogState
     final next = mappedHour * 60;
     setState(() {
       final target = next + _duration > 24 * 60 ? ((am ? 11 : 8) * 60) : next;
-      _selectedStartMinutes =
-          _normalizeStartForDuration(target, preferAm: am);
+      _selectedStartMinutes = _normalizeStartForDuration(target, preferAm: am);
     });
   }
 
@@ -7886,10 +7891,11 @@ class _MasterTimeRangePickerDialogState
                               onTap: () {
                                 setState(() {
                                   _duration = minutes;
-                                  final capped = _selectedStartMinutes + _duration >
-                                          24 * 60
-                                      ? (24 * 60) - _duration
-                                      : _selectedStartMinutes;
+                                  final capped =
+                                      _selectedStartMinutes + _duration >
+                                              24 * 60
+                                          ? (24 * 60) - _duration
+                                          : _selectedStartMinutes;
                                   _selectedStartMinutes =
                                       _normalizeStartForDuration(
                                     capped,
@@ -8615,9 +8621,8 @@ class _CannedResponsesScreenState extends State<_CannedResponsesScreen> {
 
   void _addSheet() {
     final tc = TextEditingController(), cc = TextEditingController();
-    String? selectedCategory = _categories.isNotEmpty
-        ? _categories.first['name']?.toString()
-        : null;
+    String? selectedCategory =
+        _categories.isNotEmpty ? _categories.first['name']?.toString() : null;
     showModalBottomSheet(
         context: context,
         isScrollControlled: true,
@@ -8643,8 +8648,8 @@ class _CannedResponsesScreenState extends State<_CannedResponsesScreen> {
                     DropdownButtonFormField<String>(
                       value: selectedCategory,
                       isExpanded: true,
-                      decoration: _inp('Category *',
-                          icon: Icons.label_outline_rounded),
+                      decoration:
+                          _inp('Category *', icon: Icons.label_outline_rounded),
                       items: _categories
                           .map((category) => DropdownMenuItem<String>(
                                 value: category['name']?.toString(),
@@ -8672,7 +8677,8 @@ class _CannedResponsesScreenState extends State<_CannedResponsesScreen> {
                                   content.isEmpty ||
                                   selectedCategory == null ||
                                   selectedCategory!.isEmpty) {
-                                _snack(context, 'Title, category, and content are required',
+                                _snack(context,
+                                    'Title, category, and content are required',
                                     error: true);
                                 return;
                               }
@@ -8687,7 +8693,8 @@ class _CannedResponsesScreenState extends State<_CannedResponsesScreen> {
                               }
                             },
                             child: const Text('Add Response',
-                                style: TextStyle(fontWeight: FontWeight.w700)))),
+                                style:
+                                    TextStyle(fontWeight: FontWeight.w700)))),
                   ])),
             ));
   }

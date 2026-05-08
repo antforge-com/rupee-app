@@ -1,4 +1,4 @@
-﻿// lib/admin_tickets_tab.dart
+// lib/admin_tickets_tab.dart
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // ADMIN TICKETS TAB â€” 100% web-parity, 100% dynamic
 //
@@ -38,29 +38,39 @@ import 'ticket_detail_screen.dart';
 final _dio = ApiClient().dio;
 
 void _toast(BuildContext ctx, String msg, {bool error = false}) {
-  ScaffoldMessenger.of(ctx)
+  if (!ctx.mounted) return;
+  final messenger = ScaffoldMessenger.maybeOf(ctx);
+  if (messenger == null) return;
+  messenger
     ..clearSnackBars()
-    ..showSnackBar(SnackBar(
-      content: Row(children: [
-        Icon(
-          error
-              ? Icons.error_outline_rounded
-              : Icons.check_circle_outline_rounded,
-          color: Colors.white,
-          size: 18,
+    ..showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              error
+                  ? Icons.error_outline_rounded
+                  : Icons.check_circle_outline_rounded,
+              color: Colors.white,
+              size: 18,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                msg,
+                style: const TextStyle(fontWeight: FontWeight.w500),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 10),
-        Expanded(
-            child:
-                Text(msg, style: const TextStyle(fontWeight: FontWeight.w500))),
-      ]),
-      backgroundColor:
-          error ? const Color(0xFFDC2626) : const Color(0xFF059669),
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-      duration: Duration(seconds: error ? 4 : 2),
-    ));
+        backgroundColor:
+            error ? const Color(0xFFDC2626) : const Color(0xFF059669),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        duration: Duration(seconds: error ? 4 : 2),
+      ),
+    );
 }
 
 List<dynamic> _arr(dynamic raw,
@@ -260,7 +270,13 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
   final _scrollCtrl = ScrollController();
   final _statusChipScrollCtrl = ScrollController();
   final _kpiScrollCtrl = ScrollController();
+  final _headerActionScrollCtrl = ScrollController();
   Timer? _pollTimer;
+  late final Map<String, GlobalKey> _headerActionKeys = {
+    'refresh': GlobalKey(),
+    'export': GlobalKey(),
+    'new': GlobalKey(),
+  };
   late final Map<String, GlobalKey> _statusChipKeys = {
     for (final status in _statuses) status: GlobalKey(),
   };
@@ -476,6 +492,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     _scrollCtrl.dispose();
     _statusChipScrollCtrl.dispose();
     _kpiScrollCtrl.dispose();
+    _headerActionScrollCtrl.dispose();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -516,7 +533,8 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       }
       if (mounted) setState(() => _emailStatus = down ? 'down' : 'ok');
       if (notify && mounted) {
-        _toast(context, down ? 'Email integration down' : 'Email integration active');
+        _toast(context,
+            down ? 'Email integration down' : 'Email integration active');
       }
     } catch (_) {
       if (mounted) setState(() => _emailStatus = 'down');
@@ -528,14 +546,36 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
 
   Future<void> _pollInbox() async {
     if (_polling) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final previousTicketIds = _all.map((ticket) => ticket.id).toSet();
     setState(() => _polling = true);
 
     try {
       final result = await _emailSvc.triggerPolling();
       if (!mounted) return;
-      if (!result.ok) {
+      final pollingTimedOut =
+          !result.ok && _isPollingTimeoutMessage(result.message);
+      if (!result.ok && !pollingTimedOut) {
         _toast(context, result.message, error: true);
         return;
+      }
+      if (pollingTimedOut) {
+        messenger
+          ?..clearSnackBars()
+          ..showSnackBar(
+            SnackBar(
+              content: const Text(
+                'Poll request timed out, but inbox processing may still continue. Refreshing ticket list now.',
+              ),
+              backgroundColor: const Color(0xFFB45309),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+              duration: const Duration(seconds: 4),
+            ),
+          );
       }
       setState(() => _emailStatus = 'ok');
       setState(() {
@@ -544,12 +584,40 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
         _searchCtrl.clear();
       });
       _selectStatusFilter('ALL');
-      _toast(context, 'Email polled. New tickets appear below in the list.');
-      _loadData(reset: true);
-      _checkEmail();
+      final hasNewTickets = await _refreshTicketsAfterPoll(previousTicketIds);
+      if (!mounted) return;
+      _toast(
+        context,
+        hasNewTickets
+            ? 'Email polled. New tickets appear below in the list.'
+            : 'Email polled successfully. Inbox is synced with the ticket list.',
+      );
+      await _checkEmail();
     } finally {
       if (mounted) setState(() => _polling = false);
     }
+  }
+
+  Future<bool> _refreshTicketsAfterPoll(Set<int> previousTicketIds) async {
+    await _loadData(reset: true);
+    if (!mounted) return false;
+
+    bool hasNewTickets =
+        _all.any((ticket) => !previousTicketIds.contains(ticket.id));
+    if (hasNewTickets) return true;
+
+    for (var attempt = 0; attempt < 2; attempt++) {
+      await Future<void>.delayed(const Duration(seconds: 2));
+      if (!mounted) return false;
+      await _loadData(reset: true, silent: true);
+      if (!mounted) return false;
+      hasNewTickets =
+          _all.any((ticket) => !previousTicketIds.contains(ticket.id));
+      if (hasNewTickets) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // â”€â”€â”€ Data loading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -698,7 +766,8 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       final lower = format.toLowerCase();
       final userName = _displayUserName(ticket);
       final consultantName = _displayConsultantName(ticket);
-      final ticketNo = '${_ticketNumber(ticket).replaceAll('/', '_')}_${ticket.id}';
+      final ticketNo =
+          '${_ticketNumber(ticket).replaceAll('/', '_')}_${ticket.id}';
 
       if (lower == 'xls') {
         final csv = StringBuffer(
@@ -932,8 +1001,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
                                 return;
                               }
                               Navigator.pop(ctx);
-                              _toast(
-                                  context,
+                              _toast(context,
                                   'Ticket ${_ticketNumber(t)} created');
                               _loadData(reset: true);
                             },
@@ -1071,8 +1139,8 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       ),
       child: Text(
         isChecking ? 'CHECKING' : (isDown ? 'DOWN' : 'ACTIVE'),
-        style: TextStyle(
-            fontSize: 12, fontWeight: FontWeight.w800, color: accent),
+        style:
+            TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: accent),
       ),
     );
 
@@ -1215,18 +1283,71 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
         msg.contains('FAILED');
   }
 
+  bool _isPollingTimeoutMessage(String raw) {
+    final msg = raw.toUpperCase();
+    return msg.contains('TIMED OUT') ||
+        msg.contains('TIMEOUT') ||
+        msg.contains('RECEIVE TIMEOUT') ||
+        msg.contains('SEND TIMEOUT') ||
+        msg.contains('CONNECTION TIMEOUT') ||
+        msg.contains('SOCKET');
+  }
+
   void _scrollStatusChipIntoView(String status) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      if (!mounted || !_statusChipScrollCtrl.hasClients) return;
       final chipContext = _statusChipKeys[status]?.currentContext;
-      if (chipContext == null) return;
-      Scrollable.ensureVisible(
-        chipContext,
-        alignment: 0.12,
-        duration: const Duration(milliseconds: 260),
-        curve: Curves.easeOutCubic,
-      );
+      if (chipContext == null || !chipContext.mounted) return;
+      try {
+        final scrollContext =
+            _statusChipScrollCtrl.position.context.storageContext;
+        final chipBox = chipContext.findRenderObject() as RenderBox?;
+        final scrollBox = scrollContext.findRenderObject() as RenderBox?;
+        if (chipBox == null || scrollBox == null) {
+          Scrollable.ensureVisible(
+            chipContext,
+            alignment: 0.12,
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic,
+          );
+          return;
+        }
+        final chipOffset =
+            chipBox.localToGlobal(Offset.zero, ancestor: scrollBox).dx;
+        final targetOffset = (_statusChipScrollCtrl.offset + chipOffset - 12)
+            .clamp(0.0, _statusChipScrollCtrl.position.maxScrollExtent);
+        _statusChipScrollCtrl.animateTo(
+          targetOffset.toDouble(),
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+        );
+      } catch (_) {
+        return;
+      }
     });
+  }
+
+  void _scrollHeaderActionIntoView(String actionId) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_headerActionScrollCtrl.hasClients) return;
+      final actionContext = _headerActionKeys[actionId]?.currentContext;
+      if (actionContext == null || !actionContext.mounted) return;
+      try {
+        Scrollable.ensureVisible(
+          actionContext,
+          alignment: actionId == 'new' ? 1.0 : 0.84,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+        );
+      } catch (_) {
+        return;
+      }
+    });
+  }
+
+  void _runHeaderAction(String actionId, VoidCallback action) {
+    action();
+    _scrollHeaderActionIntoView(actionId);
   }
 
   void _selectStatusFilter(String status) {
@@ -1283,7 +1404,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
 
   Widget _buildHeaderActions({required bool compact}) {
     final newTicketButton = FilledButton.icon(
-      onPressed: _openCreate,
+      onPressed: () => _runHeaderAction('new', _openCreate),
       icon: const Icon(Icons.add_rounded, size: 18),
       label: const Text('New Ticket'),
       style: FilledButton.styleFrom(
@@ -1295,7 +1416,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     );
 
     final exportButton = OutlinedButton.icon(
-      onPressed: _export,
+      onPressed: () => _runHeaderAction('export', () => _export()),
       icon: const Icon(Icons.download_rounded, size: 16),
       label: Text('Export ($_total)'),
       style: OutlinedButton.styleFrom(
@@ -1307,7 +1428,8 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     );
 
     final refreshButton = OutlinedButton.icon(
-      onPressed: () => _loadData(reset: true),
+      onPressed: () =>
+          _runHeaderAction('refresh', () => _loadData(reset: true)),
       icon: const Icon(Icons.refresh_rounded, size: 16),
       label: const Text('Refresh'),
       style: OutlinedButton.styleFrom(
@@ -1321,14 +1443,24 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
 
     if (compact) {
       return SingleChildScrollView(
+        controller: _headerActionScrollCtrl,
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            SizedBox(width: 126, child: refreshButton),
+            KeyedSubtree(
+              key: _headerActionKeys['refresh'],
+              child: SizedBox(width: 126, child: refreshButton),
+            ),
             const SizedBox(width: 8),
-            SizedBox(width: 150, child: exportButton),
+            KeyedSubtree(
+              key: _headerActionKeys['export'],
+              child: SizedBox(width: 150, child: exportButton),
+            ),
             const SizedBox(width: 8),
-            SizedBox(width: 146, child: newTicketButton),
+            KeyedSubtree(
+              key: _headerActionKeys['new'],
+              child: SizedBox(width: 146, child: newTicketButton),
+            ),
           ],
         ),
       );
@@ -1339,9 +1471,9 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       runSpacing: 8,
       alignment: WrapAlignment.end,
       children: [
-        newTicketButton,
-        exportButton,
-        refreshButton,
+        KeyedSubtree(key: _headerActionKeys['new'], child: newTicketButton),
+        KeyedSubtree(key: _headerActionKeys['export'], child: exportButton),
+        KeyedSubtree(key: _headerActionKeys['refresh'], child: refreshButton),
       ],
     );
   }
@@ -1412,9 +1544,9 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
         builder: (_, constraints) {
           if (constraints.maxWidth < 900) {
             final mobileCardWidth =
-                (constraints.maxWidth / 5.0).clamp(74.0, 104.0).toDouble();
+                (constraints.maxWidth / 5.6).clamp(66.0, 88.0).toDouble();
             return SizedBox(
-              height: 86,
+              height: 78,
               child: ListView.separated(
                 controller: _kpiScrollCtrl,
                 physics: const BouncingScrollPhysics(),
@@ -1473,7 +1605,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     bool compact = false,
   }) =>
       Container(
-        padding: EdgeInsets.fromLTRB(10, compact ? 9 : 10, 10, compact ? 7 : 8),
+        padding: EdgeInsets.fromLTRB(8, compact ? 7 : 10, 8, compact ? 6 : 8),
         decoration: BoxDecoration(
           color: background,
           borderRadius: BorderRadius.circular(12),
@@ -1487,20 +1619,40 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
             Text(
               '$value',
               style: TextStyle(
-                  fontSize: compact ? 18 : 22,
+                  fontSize: compact ? 16 : 22,
                   fontWeight: FontWeight.w900,
                   color: color),
             ),
-            const SizedBox(height: 2),
-            Text(compact ? compactLabel : label,
-                maxLines: compact ? 2 : 1,
+            SizedBox(height: compact ? 1 : 2),
+            if (compact)
+              SizedBox(
+                height: 12,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    compactLabel,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 9.8,
+                      letterSpacing: 0.2,
+                      color: color,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              )
+            else
+              Text(
+                label,
+                maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                textAlign: compact ? TextAlign.center : TextAlign.start,
+                textAlign: TextAlign.start,
                 style: TextStyle(
-                    fontSize: compact ? 10.5 : 11,
-                    letterSpacing: compact ? 0.2 : 0,
-                    color: color,
-                    fontWeight: FontWeight.w700)),
+                  fontSize: 11,
+                  color: color,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
           ],
         ),
       );

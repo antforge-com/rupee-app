@@ -364,6 +364,7 @@ class _BookingItem {
     if (_isPastBookingDate(slotDate)) return 'COMPLETED';
     return rawStatusUpper;
   }
+
   String get specialStatusUpper => (specialStatus ?? '').toUpperCase();
   String get displayStatus => isSpecial && specialStatusUpper == 'REQUESTED'
       ? 'REQUESTED'
@@ -400,6 +401,15 @@ class _BookingsPageState extends State<BookingsPage> {
   String _filter = 'ALL';
   String _search = '';
   Timer? _pollTimer;
+  final ScrollController _filterChipScrollCtrl = ScrollController();
+  late final Map<String, GlobalKey> _filterChipKeys = {
+    'ALL': GlobalKey(),
+    'PENDING': GlobalKey(),
+    'CONFIRMED': GlobalKey(),
+    'COMPLETED': GlobalKey(),
+    'CANCELLED': GlobalKey(),
+    'SPECIAL': GlobalKey(),
+  };
 
   static const _pageSize = 10;
   static const _baseFilters = [
@@ -423,6 +433,7 @@ class _BookingsPageState extends State<BookingsPage> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _filterChipScrollCtrl.dispose();
     super.dispose();
   }
 
@@ -432,6 +443,45 @@ class _BookingsPageState extends State<BookingsPage> {
 
   List<_BookingItem> get _mergedBookings =>
       _sortChronologically([..._specialBookings, ..._regularBookings]);
+
+  void _scrollFilterChipIntoView(String filter) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_filterChipScrollCtrl.hasClients) return;
+      final chipContext = _filterChipKeys[filter]?.currentContext;
+      if (chipContext == null) return;
+      final scrollContext =
+          _filterChipScrollCtrl.position.context.storageContext;
+      final chipBox = chipContext.findRenderObject() as RenderBox?;
+      final scrollBox = scrollContext.findRenderObject() as RenderBox?;
+      if (chipBox == null || scrollBox == null) {
+        Scrollable.ensureVisible(
+          chipContext,
+          alignment: 0.12,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+        );
+        return;
+      }
+      final chipOffset =
+          chipBox.localToGlobal(Offset.zero, ancestor: scrollBox).dx;
+      final targetOffset = (_filterChipScrollCtrl.offset + chipOffset - 12)
+          .clamp(0.0, _filterChipScrollCtrl.position.maxScrollExtent);
+      _filterChipScrollCtrl.animateTo(
+        targetOffset.toDouble(),
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  void _setFilter(String filter) {
+    setState(() {
+      _filter = filter;
+      _search = '';
+    });
+    _load(reset: true);
+    _scrollFilterChipIntoView(filter);
+  }
 
   String _normalizeName(String raw) {
     final text = raw.trim();
@@ -1057,23 +1107,19 @@ class _BookingsPageState extends State<BookingsPage> {
               ),
               const SizedBox(height: 10),
               SingleChildScrollView(
+                controller: _filterChipScrollCtrl,
                 scrollDirection: Axis.horizontal,
                 child: Row(
                   children: _filters.map((f) {
                     final active = _filter == f;
                     final count = counts[f] ?? 0;
                     return Padding(
+                      key: _filterChipKeys[f],
                       padding: const EdgeInsets.only(right: 8, bottom: 10),
                       child: FilterChip(
                         label: Text('$f${f != 'ALL' ? ' ($count)' : ''}'),
                         selected: active,
-                        onSelected: (_) {
-                          setState(() {
-                            _filter = f;
-                            _search = '';
-                          });
-                          _load(reset: true);
-                        },
+                        onSelected: (_) => _setFilter(f),
                         selectedColor: f == 'SPECIAL'
                             ? const Color(0xFFB45309).withValues(alpha: 0.12)
                             : (f != 'ALL'
@@ -1175,10 +1221,7 @@ class _BookingsPageState extends State<BookingsPage> {
                           ),
                           if (_filter != 'ALL')
                             TextButton(
-                              onPressed: () {
-                                setState(() => _filter = 'ALL');
-                                _load(reset: true);
-                              },
+                              onPressed: () => _setFilter('ALL'),
                               child: const Text('Show all bookings'),
                             ),
                         ],
@@ -1400,7 +1443,8 @@ class _BookingCard extends StatelessWidget {
                         color: AppColors.textSecondary, size: 18),
                     onSelected: onStatusChanged,
                     itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'PENDING', child: Text('Mark Pending')),
+                      PopupMenuItem(
+                          value: 'PENDING', child: Text('Mark Pending')),
                       PopupMenuItem(
                           value: 'CONFIRMED', child: Text('Mark Confirmed')),
                       PopupMenuItem(
@@ -1496,38 +1540,6 @@ class _BookingCard extends StatelessWidget {
                           fontWeight: FontWeight.w600,
                         ),
                         overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ] else if ((b.meetingMode ?? '').toUpperCase() == 'ONLINE' &&
-                isConfirmed) ...[
-              const SizedBox(height: 8),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEFF6FF),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFFBFDBFE)),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(
-                      Icons.auto_awesome_rounded,
-                      size: 14,
-                      color: Color(0xFF2563EB),
-                    ),
-                    SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        'Meeting link is generated automatically and will appear here once available.',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF1D4ED8),
-                          fontWeight: FontWeight.w600,
-                        ),
                       ),
                     ),
                   ],

@@ -20,12 +20,12 @@ class MeetTheMastersBrand extends StatelessWidget {
     super.key,
     this.subtitle = 'Experience the Experience',
     this.onDark = false,
-    this.logoSize = 96,
+    this.logoSize = 104,
     this.logoPadding = 14,
     this.titleSize = 22,
     this.subtitleSize = 12,
     this.titleLetterSpacing = 3.2,
-    this.gap = 14,
+    this.gap = 8,
     this.logoAssetPath = 'assets/images/meet_the_masters_logo.png',
     this.titleColor,
     this.subtitleColor,
@@ -97,6 +97,10 @@ class MeetTheMastersLogoBadge extends StatelessWidget {
   final String assetPath;
   final bool onDark;
   final bool showAmbientGlow;
+  final bool showBackground;
+  final Color? backgroundColor;
+  final Color? borderColor;
+  final double borderRadius;
 
   const MeetTheMastersLogoBadge({
     super.key,
@@ -105,29 +109,49 @@ class MeetTheMastersLogoBadge extends StatelessWidget {
     this.assetPath = 'assets/images/meet_the_masters_logo.png',
     this.onDark = false,
     this.showAmbientGlow = true,
+    this.showBackground = true,
+    this.backgroundColor = Colors.white,
+    this.borderColor,
+    this.borderRadius = 14,
   });
 
   @override
   Widget build(BuildContext context) {
     final width = size;
     final height = size;
+    final resolvedBorderColor = borderColor ??
+        (onDark
+            ? Colors.white.withValues(alpha: 0.52)
+            : const Color(0xFFE2E8F0));
 
     return SizedBox(
       width: width,
       height: height,
-      child: Stack(
-        alignment: Alignment.center,
-        clipBehavior: Clip.none,
-        children: [
-          Padding(
-            padding: EdgeInsets.all(padding),
-            child: Image.asset(
-              assetPath,
-              fit: BoxFit.contain,
-              filterQuality: FilterQuality.high,
-            ),
+      child: DecoratedBox(
+        decoration: showBackground
+            ? BoxDecoration(
+                color: backgroundColor ?? Colors.white,
+                borderRadius: BorderRadius.circular(borderRadius),
+                border: Border.all(color: resolvedBorderColor, width: 1),
+                boxShadow: showAmbientGlow
+                    ? [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.08),
+                          blurRadius: 18,
+                          offset: const Offset(0, 8),
+                        ),
+                      ]
+                    : null,
+              )
+            : const BoxDecoration(),
+        child: Padding(
+          padding: EdgeInsets.all(padding),
+          child: Image.asset(
+            assetPath,
+            fit: BoxFit.contain,
+            filterQuality: FilterQuality.high,
           ),
-        ],
+        ),
       ),
     );
   }

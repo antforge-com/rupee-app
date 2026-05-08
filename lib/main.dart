@@ -87,8 +87,7 @@ class _SplashScreenState extends State<SplashScreen>
     _ctrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 1200));
     _fadeAnim = Tween<double>(begin: 0, end: 1).animate(CurvedAnimation(
-        parent: _ctrl,
-        curve: const Interval(0, 0.6, curve: Curves.easeOut)));
+        parent: _ctrl, curve: const Interval(0, 0.6, curve: Curves.easeOut)));
     _scaleAnim = Tween<double>(begin: 0.7, end: 1).animate(CurvedAnimation(
         parent: _ctrl,
         curve: const Interval(0, 0.6, curve: Curves.elasticOut)));
@@ -152,11 +151,14 @@ class _SplashScreenState extends State<SplashScreen>
   Widget _screenForRole(String role) {
     final clean = role.toUpperCase().replaceFirst(RegExp(r'^ROLE_'), '');
     switch (clean) {
-      case 'ADMIN': return const AdminDashboard();
+      case 'ADMIN':
+        return const AdminDashboard();
       case 'CONSULTANT':
       case 'ADVISOR':
-      case 'AGENT': return const ConsultantDashboard();
-      default: return const UserDashboard();
+      case 'AGENT':
+        return const ConsultantDashboard();
+      default:
+        return const UserDashboard();
     }
   }
 
@@ -195,12 +197,12 @@ class _SplashScreenState extends State<SplashScreen>
                 children: [
                   MeetTheMastersBrand(
                     onDark: true,
-                    logoSize: 122,
-                    logoPadding: 16,
+                    logoSize: 132,
+                    logoPadding: 14,
                     titleSize: 29,
                     subtitleSize: 13.5,
                     titleLetterSpacing: 4.0,
-                    gap: 18,
+                    gap: 10,
                     showAmbientGlow: true,
                   ),
                   SizedBox(height: 56),

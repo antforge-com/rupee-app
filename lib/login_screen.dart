@@ -110,7 +110,7 @@ class _LoginScreenState extends State<LoginScreen>
     setState(() => _termsShake = true);
     _shakeCtrl.forward(from: 0);
     Future.delayed(const Duration(milliseconds: 600),
-            () => mounted ? setState(() => _termsShake = false) : null);
+        () => mounted ? setState(() => _termsShake = false) : null);
   }
 
   Future<void> _loadTerms() async {
@@ -144,22 +144,22 @@ class _LoginScreenState extends State<LoginScreen>
         msg.contains('socketexception') ||
         msg.contains('connection refused')) {
       return (
-      msg: 'Cannot reach the server. Please check your connection.',
-      type: _ErrorType.network
+        msg: 'Cannot reach the server. Please check your connection.',
+        type: _ErrorType.network
       );
     }
     if (msg.contains('500') || msg.contains('internal server')) {
       return (
-      msg: 'Server error occurred. Please try again later.',
-      type: _ErrorType.server
+        msg: 'Server error occurred. Please try again later.',
+        type: _ErrorType.server
       );
     }
     if (msg.contains('already registered') ||
         msg.contains('already exists') ||
         msg.contains('conflict')) {
       return (
-      msg: 'Email already registered. Please log in or reset password.',
-      type: _ErrorType.registered
+        msg: 'Email already registered. Please log in or reset password.',
+        type: _ErrorType.registered
       );
     }
     if (msg.contains('401') ||
@@ -169,16 +169,16 @@ class _LoginScreenState extends State<LoginScreen>
         msg.contains('bad credentials') ||
         msg.contains('incorrect')) {
       return (
-      msg:
-      'Incorrect email or password. If you recently changed your password, use Forgot Password.',
-      type: _ErrorType.auth
+        msg:
+            'Incorrect email or password. If you recently changed your password, use Forgot Password.',
+        type: _ErrorType.auth
       );
     }
     return (
-    msg: raw.isNotEmpty
-        ? raw
-        : 'Login failed. Please try Forgot Password if you recently changed your password.',
-    type: _ErrorType.auth
+      msg: raw.isNotEmpty
+          ? raw
+          : 'Login failed. Please try Forgot Password if you recently changed your password.',
+      type: _ErrorType.auth
     );
   }
 
@@ -310,12 +310,12 @@ class _LoginScreenState extends State<LoginScreen>
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  Color(0xFFEFF6FF),
-                  Color(0xFF93C5FD),
-                  Color(0xFF2563EB),
                   Color(0xFF0F766E),
+                  Color(0xFF2563EB),
+                  Color(0xFF93C5FD),
+                  Color(0xFFEFF6FF),
                 ],
-                stops: [0.0, 0.28, 0.64, 1.0],
+                stops: [0.0, 0.32, 0.68, 1.0],
               ),
             ),
           ),
@@ -346,12 +346,12 @@ class _LoginScreenState extends State<LoginScreen>
       logoAssetPath: isMobile
           ? 'assets/images/rupee_mobile_logo.png'
           : 'assets/images/meet_the_masters_logo.png',
-      logoSize: isMobile ? 78 : 94,
-      logoPadding: isMobile ? 10 : 13,
+      logoSize: isMobile ? 94 : 110,
+      logoPadding: isMobile ? 10 : 12,
       titleSize: 23,
       subtitleSize: 12.5,
       titleLetterSpacing: 3.8,
-      gap: 10,
+      gap: 6,
       showAmbientGlow: true,
     );
   }
@@ -375,139 +375,142 @@ class _LoginScreenState extends State<LoginScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-          Text('Login to Account',
-              style: GoogleFonts.inter(
-                  fontSize: 22, fontWeight: FontWeight.w800, color: const Color(0xFF0F172A))),
-          const SizedBox(height: 4),
-          Text('Welcome back! Please enter your credentials.',
-              style: GoogleFonts.inter(fontSize: 13, color: const Color(0xFF64748B))),
-          const SizedBox(height: 24),
+            Text('Login to Account',
+                style: GoogleFonts.inter(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFF0F172A))),
+            const SizedBox(height: 4),
+            Text('Welcome back! Please enter your credentials.',
+                style: GoogleFonts.inter(
+                    fontSize: 13, color: const Color(0xFF64748B))),
+            const SizedBox(height: 24),
 
-          // Email / Mobile
-          _label('EMAIL OR MOBILE'),
-          const SizedBox(height: 6),
-          TextField(
-            controller: _credCtrl,
-            focusNode: _credFocusNode,
-            keyboardType: TextInputType.emailAddress,
-            textInputAction: TextInputAction.next,
-            onChanged: (_) => setState(() {
-              _apiError = '';
-              _errorType = _ErrorType.none;
-            }),
-            onEditingComplete: () {},
-            onSubmitted: (_) => _passFocusNode.requestFocus(),
-            decoration: _inputDecoration(
-              hint: 'Enter your email or mobile',
-              hasError: _hasAuthFieldError,
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Password
-          _label('PASSWORD'),
-          const SizedBox(height: 6),
-          TextField(
-            controller: _passCtrl,
-            obscureText: !_passVisible,
-            focusNode: _passFocusNode,
-            textInputAction: TextInputAction.done,
-            onChanged: (_) => setState(() {
-              _apiError = '';
-              _errorType = _ErrorType.none;
-            }),
-            onEditingComplete: () {},
-            onSubmitted: (_) {
-              FocusScope.of(context).unfocus();
-              if (!_loading) _handleLogin();
-            },
-            decoration: _inputDecoration(
-              hint: '••••••••',
-              hasError: _hasAuthFieldError,
-              suffix: IconButton(
-                icon: Icon(
-                    _passVisible ? Icons.visibility_off : Icons.visibility,
-                    size: 20,
-                    color: _passVisible
-                        ? AppColors.primaryLight
-                        : AppColors.textSecondary),
-                onPressed: () => setState(() => _passVisible = !_passVisible),
+            // Email / Mobile
+            _label('EMAIL OR MOBILE'),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _credCtrl,
+              focusNode: _credFocusNode,
+              keyboardType: TextInputType.emailAddress,
+              textInputAction: TextInputAction.next,
+              onChanged: (_) => setState(() {
+                _apiError = '';
+                _errorType = _ErrorType.none;
+              }),
+              onEditingComplete: () {},
+              onSubmitted: (_) => _passFocusNode.requestFocus(),
+              decoration: _inputDecoration(
+                hint: 'Enter your email or mobile',
+                hasError: _hasAuthFieldError,
               ),
             ),
-          ),
+            const SizedBox(height: 16),
 
-          // Forgot password
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              onPressed: _openResetPage,
-              style: TextButton.styleFrom(padding: EdgeInsets.zero),
-              child: Text('Forgot Password?',
-                  style: GoogleFonts.inter(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.primaryLight)),
-            ),
-          ),
-
-          // Terms checkbox with shake
-          AnimatedBuilder(
-            animation: _shakeAnim,
-            builder: (_, child) => Transform.translate(
-              offset: Offset(_shakeAnim.value, 0),
-              child: child,
-            ),
-            child: _buildTermsBox(),
-          ),
-          const SizedBox(height: 16),
-
-          // Error banner
-          if (_apiError.isNotEmpty) _buildErrorBanner(),
-          if (_apiError.isNotEmpty) const SizedBox(height: 16),
-
-          // Login button
-          SizedBox(
-            height: 52,
-            child: ElevatedButton(
-              onPressed: _loading ? null : _handleLogin,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primaryLight,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-                elevation: 0,
+            // Password
+            _label('PASSWORD'),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _passCtrl,
+              obscureText: !_passVisible,
+              focusNode: _passFocusNode,
+              textInputAction: TextInputAction.done,
+              onChanged: (_) => setState(() {
+                _apiError = '';
+                _errorType = _ErrorType.none;
+              }),
+              onEditingComplete: () {},
+              onSubmitted: (_) {
+                FocusScope.of(context).unfocus();
+                if (!_loading) _handleLogin();
+              },
+              decoration: _inputDecoration(
+                hint: '••••••••',
+                hasError: _hasAuthFieldError,
+                suffix: IconButton(
+                  icon: Icon(
+                      _passVisible ? Icons.visibility_off : Icons.visibility,
+                      size: 20,
+                      color: _passVisible
+                          ? AppColors.primaryLight
+                          : AppColors.textSecondary),
+                  onPressed: () => setState(() => _passVisible = !_passVisible),
+                ),
               ),
-              child: _loading
-                  ? const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                      color: Colors.white, strokeWidth: 2.5))
-                  : Text('Login to Account',
-                  style: GoogleFonts.inter(
-                      fontSize: 16, fontWeight: FontWeight.w700)),
             ),
-          ),
-          const SizedBox(height: 20),
 
-          // Register link
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text("Don't have an account? ",
-                  style: GoogleFonts.inter(
-                      fontSize: 13, color: AppColors.textSecondary)),
-              GestureDetector(
-                onTap: () => Navigator.pushNamed(context, '/register'),
-                child: Text('Create Account',
+            // Forgot password
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: _openResetPage,
+                style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                child: Text('Forgot Password?',
                     style: GoogleFonts.inter(
                         fontSize: 13,
-                        fontWeight: FontWeight.w700,
+                        fontWeight: FontWeight.w600,
                         color: AppColors.primaryLight)),
               ),
-            ],
-          ),
-        ],
+            ),
+
+            // Terms checkbox with shake
+            AnimatedBuilder(
+              animation: _shakeAnim,
+              builder: (_, child) => Transform.translate(
+                offset: Offset(_shakeAnim.value, 0),
+                child: child,
+              ),
+              child: _buildTermsBox(),
+            ),
+            const SizedBox(height: 16),
+
+            // Error banner
+            if (_apiError.isNotEmpty) _buildErrorBanner(),
+            if (_apiError.isNotEmpty) const SizedBox(height: 16),
+
+            // Login button
+            SizedBox(
+              height: 52,
+              child: ElevatedButton(
+                onPressed: _loading ? null : _handleLogin,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryLight,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  elevation: 0,
+                ),
+                child: _loading
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2.5))
+                    : Text('Login to Account',
+                        style: GoogleFonts.inter(
+                            fontSize: 16, fontWeight: FontWeight.w700)),
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Register link
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text("Don't have an account? ",
+                    style: GoogleFonts.inter(
+                        fontSize: 13, color: AppColors.textSecondary)),
+                GestureDetector(
+                  onTap: () => Navigator.pushNamed(context, '/register'),
+                  child: Text('Create Account',
+                      style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.primaryLight)),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
@@ -520,14 +523,14 @@ class _LoginScreenState extends State<LoginScreen>
         color: _termsAccepted
             ? const Color(0xFFF0FDF4)
             : _termsShake
-            ? const Color(0xFFFEF2F2)
-            : const Color(0xFFF8FAFC),
+                ? const Color(0xFFFEF2F2)
+                : const Color(0xFFF8FAFC),
         border: Border.all(
           color: _termsAccepted
               ? const Color(0xFF86EFAC)
               : _termsShake
-              ? const Color(0xFFFCA5A5)
-              : const Color(0xFFE2E8F0),
+                  ? const Color(0xFFFCA5A5)
+                  : const Color(0xFFE2E8F0),
           width: 1.5,
         ),
         borderRadius: BorderRadius.circular(10),
@@ -726,13 +729,13 @@ class _LoginScreenState extends State<LoginScreen>
                     child: _termsLoading
                         ? const Center(child: CircularProgressIndicator())
                         : SingleChildScrollView(
-                      padding: const EdgeInsets.all(20),
-                      child: Text(_termsContent,
-                          style: GoogleFonts.inter(
-                              fontSize: 13,
-                              color: AppColors.textSecondary,
-                              height: 1.7)),
-                    ),
+                            padding: const EdgeInsets.all(20),
+                            child: Text(_termsContent,
+                                style: GoogleFonts.inter(
+                                    fontSize: 13,
+                                    color: AppColors.textSecondary,
+                                    height: 1.7)),
+                          ),
                   ),
                   const Divider(height: 1),
                   Padding(
@@ -796,18 +799,15 @@ class _LoginScreenState extends State<LoginScreen>
         fillColor: const Color(0xFFF8FAFC),
         suffixIcon: suffix,
         contentPadding:
-        const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide:
-          const BorderSide(color: Color(0xFFE2E8F0), width: 1.5),
+          borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 1.5),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
           borderSide: BorderSide(
-            color: hasError
-                ? const Color(0xFFFCA5A5)
-                : const Color(0xFFE2E8F0),
+            color: hasError ? const Color(0xFFFCA5A5) : const Color(0xFFE2E8F0),
             width: 1.5,
           ),
         ),
@@ -820,13 +820,11 @@ class _LoginScreenState extends State<LoginScreen>
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide:
-          const BorderSide(color: Color(0xFFFCA5A5), width: 1.5),
+          borderSide: const BorderSide(color: Color(0xFFFCA5A5), width: 1.5),
         ),
         focusedErrorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide:
-              const BorderSide(color: Color(0xFFFCA5A5), width: 1.5),
+          borderSide: const BorderSide(color: Color(0xFFFCA5A5), width: 1.5),
         ),
       );
 }

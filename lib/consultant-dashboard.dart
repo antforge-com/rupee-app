@@ -1,4 +1,4 @@
-﻿// lib/features/consultant/consultant_dashboard.dart
+// lib/features/consultant/consultant_dashboard.dart
 // ignore_for_file: file_names, unnecessary_non_null_assertion, use_of_void_result
 //
 // FIXED:
@@ -31,8 +31,6 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-
-
 extension _TicketCompat on Ticket {
   String? get attachmentUrl {
     try {
@@ -55,10 +53,10 @@ extension _ConsultantCompat on ConsultantModel {
   double get experience =>
       ((this as dynamic).yearsOfExperience as num?)?.toDouble() ?? 0.0;
 
-  /// Returns HH:mm string for start time, empty if missing
+  /// Returns h:mm AM/PM string for start time, empty if missing
   String get shiftStart => _parseLocalTime((this as dynamic).shiftStartTime);
 
-  /// Returns HH:mm string for end time, empty if missing
+  /// Returns h:mm AM/PM string for end time, empty if missing
   String get shiftEnd => _parseLocalTime((this as dynamic).shiftEndTime);
 
   String get shiftTimingsDisplay {
@@ -83,21 +81,58 @@ extension _ConsultantCompat on ConsultantModel {
 String _parseLocalTime(dynamic raw) {
   if (raw == null) return '';
   try {
-    if (raw is Map) {
-      final h = (raw['hour'] as num? ?? 0).toInt();
-      final m = (raw['minute'] as num? ?? 0).toInt();
-      return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
-    }
+    final minutes = _timeToMinutes(raw);
+    if (minutes != null) return _minutesToAmPm(minutes);
+
     final s = _sanitizeDisplayText(raw);
-    final match = RegExp(r'(\d{1,2}):(\d{2})').firstMatch(s);
-    if (match != null) {
-      final h = match.group(1)!;
-      final m = match.group(2)!;
-      return '${h.padLeft(2, '0')}:$m';
-    }
-    if (s.length >= 5) return s.substring(0, 5);
+    final fallbackMinutes = _timeToMinutes(s);
+    if (fallbackMinutes != null) return _minutesToAmPm(fallbackMinutes);
+
+    if (s.isNotEmpty) return s;
   } catch (_) {}
   return '';
+}
+
+int? _timeToMinutes(dynamic raw) {
+  if (raw == null) return null;
+  if (raw is Map) {
+    final hour = (raw['hour'] as num?)?.toInt();
+    final minute = (raw['minute'] as num?)?.toInt();
+    if (hour == null || minute == null) return null;
+    return (hour * 60) + minute;
+  }
+
+  final value = raw.toString().trim().toUpperCase();
+  if (value.isEmpty) return null;
+
+  final hhmm = RegExp(r'^(\d{1,2}):(\d{2})(?::\d{2})?$').firstMatch(value);
+  if (hhmm != null) {
+    final hour = int.tryParse(hhmm.group(1) ?? '');
+    final minute = int.tryParse(hhmm.group(2) ?? '');
+    if (hour == null || minute == null) return null;
+    return (hour * 60) + minute;
+  }
+
+  final ampm = RegExp(r'^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$').firstMatch(value);
+  if (ampm != null) {
+    var hour = int.tryParse(ampm.group(1) ?? '') ?? 0;
+    final minute = int.tryParse(ampm.group(2) ?? '0') ?? 0;
+    final period = ampm.group(3) ?? 'AM';
+    if (period == 'PM' && hour != 12) hour += 12;
+    if (period == 'AM' && hour == 12) hour = 0;
+    return (hour * 60) + minute;
+  }
+
+  return null;
+}
+
+String _minutesToAmPm(int totalMinutes) {
+  final normalized = ((totalMinutes % 1440) + 1440) % 1440;
+  final hour24 = normalized ~/ 60;
+  final minute = normalized % 60;
+  final suffix = hour24 >= 12 ? 'PM' : 'AM';
+  final hour12 = hour24 % 12 == 0 ? 12 : hour24 % 12;
+  return '$hour12:${minute.toString().padLeft(2, '0')} $suffix';
 }
 
 String _sanitizeDisplayText(dynamic value, {String fallback = ''}) {
@@ -156,7 +191,6 @@ String _cleanSpecialBookingNotes(dynamic value, {String fallback = ''}) {
 
   return _sanitizeDisplayText(cleaned, fallback: fallback);
 }
-
 
 enum _SlaState { onTrack, warning, breached }
 
@@ -236,7 +270,6 @@ Color _priorityColor(String p) {
       return AppColors.textMuted;
   }
 }
-
 
 final _ticketService = TicketService();
 final _offerService = OfferService();
@@ -436,9 +469,7 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
         _userId = uId;
         _authLoading = false;
       });
-      context
-          .read<NotificationService>()
-          .initialize('CONSULTANT', uId ?? cId);
+      context.read<NotificationService>().initialize('CONSULTANT', uId ?? cId);
       _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
         if (mounted) context.read<NotificationService>().refresh();
       });
@@ -567,11 +598,11 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
           onTap: () => setState(() => _selectedIndex = 0),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             const SizedBox(
-              width: 34,
-              height: 34,
+              width: 40,
+              height: 40,
               child: MeetTheMastersLogoBadge(
-                size: 34,
-                padding: 3,
+                size: 40,
+                padding: 5,
                 showAmbientGlow: false,
               ),
             ),
@@ -730,9 +761,8 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
       });
   }
 
-  List<Booking> get _upcoming => _bookings
-      .where((b) => _isUpcomingBooking(b))
-      .toList();
+  List<Booking> get _upcoming =>
+      _bookings.where((b) => _isUpcomingBooking(b)).toList();
   List<Booking> get _pending =>
       _bookings.where((b) => b.status.toUpperCase() == 'PENDING').toList();
   List<Booking> get _history => _bookings
@@ -793,8 +823,9 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
     }
 
     final slotDateRaw = (booking.slotDate ?? '').trim();
-    final parsedDate =
-        slotDateRaw.isNotEmpty ? DateTime.tryParse(slotDateRaw)?.toLocal() : null;
+    final parsedDate = slotDateRaw.isNotEmpty
+        ? DateTime.tryParse(slotDateRaw)?.toLocal()
+        : null;
     if (parsedDate != null) {
       final now = DateTime.now();
       final today = DateTime(now.year, now.month, now.day);
@@ -876,7 +907,8 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _handleBar(),
-              Text('Meeting Link for Booking #${b.id}', style: AppTextStyles.h3),
+              Text('Meeting Link for Booking #${b.id}',
+                  style: AppTextStyles.h3),
               const SizedBox(height: 16),
               TextField(
                   controller: ctrl,
@@ -942,8 +974,8 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
                       bookingId: b.id,
                       bookingType: 'NORMAL',
                       userId: b.userId,
-                      clientName:
-                          _sanitizeDisplayText(b.clientName, fallback: 'Client'),
+                      clientName: _sanitizeDisplayText(b.clientName,
+                          fallback: 'Client'),
                     ),
                   ),
                 );
@@ -1452,7 +1484,6 @@ class _SpecialBookingCard extends StatelessWidget {
             ),
           ]),
         ),
-
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
           child:
@@ -1583,7 +1614,6 @@ class _SpecialBookingCard extends StatelessWidget {
             ],
           ]),
         ),
-
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
           child: SizedBox(
@@ -1603,17 +1633,18 @@ class _SpecialBookingCard extends StatelessWidget {
                 );
               },
               icon: const Icon(Icons.assignment_ind_outlined, size: 16),
-              label: const Text('View Client Assessment', style: TextStyle(fontSize: 13)),
+              label: const Text('View Client Assessment',
+                  style: TextStyle(fontSize: 13)),
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 10),
                 foregroundColor: AppColors.primaryLight,
                 side: const BorderSide(color: AppColors.primaryLight),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
               ),
             ),
           ),
         ),
-
         if (!isCancelled && !isCompleted)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
@@ -1959,7 +1990,8 @@ class _GiveSlotSheetState extends State<_GiveSlotSheet> {
                               color: Colors.white, strokeWidth: 2))
                       : const Icon(Icons.check_circle_outline_rounded,
                           color: Colors.white, size: 18),
-                  label: Text(_saving ? 'Assigning...' : 'Confirm & Assign Slot',
+                  label: Text(
+                      _saving ? 'Assigning...' : 'Confirm & Assign Slot',
                       style: const TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w700,
@@ -2326,7 +2358,11 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
   List<Ticket> _tickets = [];
   bool _loading = true;
   String _filter = 'ALL';
+  final ScrollController _filterChipScrollCtrl = ScrollController();
   static const _filters = ['ALL', 'NEW', 'OPEN', 'IN_PROGRESS', 'RESOLVED'];
+  late final Map<String, GlobalKey> _filterChipKeys = {
+    for (final f in _filters) f: GlobalKey(),
+  };
 
   @override
   void initState() {
@@ -2340,6 +2376,12 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
     if (mounted) setState(() => _loading = false);
   }
 
+  @override
+  void dispose() {
+    _filterChipScrollCtrl.dispose();
+    super.dispose();
+  }
+
   List<Ticket> get _filtered => _filter == 'ALL'
       ? _tickets
       : _tickets.where((t) => t.status.toUpperCase() == _filter).toList();
@@ -2348,6 +2390,25 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
         final s = _computeSla(t);
         return s?.state == _SlaState.breached || s?.state == _SlaState.warning;
       }).length;
+
+  void _scrollFilterIntoView(String filter) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final chipContext = _filterChipKeys[filter]?.currentContext;
+      if (chipContext == null) return;
+      Scrollable.ensureVisible(
+        chipContext,
+        alignment: 0.12,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  void _setFilter(String filter) {
+    setState(() => _filter = filter);
+    _scrollFilterIntoView(filter);
+  }
 
   void _openDetail(Ticket t) {
     showModalBottomSheet(
@@ -2415,6 +2476,7 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
         color: AppColors.surface,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: SingleChildScrollView(
+          controller: _filterChipScrollCtrl,
           scrollDirection: Axis.horizontal,
           child: Row(
               children: _filters.map((f) {
@@ -2423,6 +2485,7 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
                 : _tickets.where((t) => t.status.toUpperCase() == f).length;
             final active = _filter == f;
             return Padding(
+              key: _filterChipKeys[f],
               padding: const EdgeInsets.only(right: 8),
               child: ChoiceChip(
                 label: Text('$f ($count)',
@@ -2433,7 +2496,7 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
                 selected: active,
                 selectedColor: AppColors.primaryLight,
                 backgroundColor: AppColors.surfaceVariant,
-                onSelected: (_) => setState(() => _filter = f),
+                onSelected: (_) => _setFilter(f),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(20)),
                 side: BorderSide.none,
@@ -3176,8 +3239,9 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
                   const SizedBox(height: 12),
                   _detailRow('SLA Deadline', () {
                     try {
-                      return DateFormat('d MMM yyyy, HH:mm')
-                          .format(DateTime.parse(widget.ticket.slaResolveBy!).toLocal());
+                      return DateFormat('d MMM yyyy, HH:mm').format(
+                          DateTime.parse(widget.ticket.slaResolveBy!)
+                              .toLocal());
                     } catch (_) {
                       return widget.ticket.slaResolveBy!;
                     }
@@ -3186,8 +3250,8 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
                 if (widget.ticket.createdAt != null)
                   _detailRow('Created', () {
                     try {
-                      return DateFormat('d MMM yyyy, HH:mm')
-                          .format(DateTime.parse(widget.ticket.createdAt!).toLocal());
+                      return DateFormat('d MMM yyyy, HH:mm').format(
+                          DateTime.parse(widget.ticket.createdAt!).toLocal());
                     } catch (_) {
                       return widget.ticket.createdAt!;
                     }
@@ -3378,9 +3442,8 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
       dynamic raw, ConsultantModel? consultant, int fallbackMinutes) {
     if (raw is! Map) return null;
     final map = Map<String, dynamic>.from(raw);
-    final id = (map['id'] as num?)?.toInt() ??
-        int.tryParse('${map['id'] ?? ''}') ??
-        0;
+    final id =
+        (map['id'] as num?)?.toInt() ?? int.tryParse('${map['id'] ?? ''}') ?? 0;
     final timeRange = (map['timeRange'] ?? '').toString().trim();
     if (id <= 0 || timeRange.isEmpty) return null;
 
@@ -3390,11 +3453,10 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
     final endMinutes = _parseMinutes(parts.last);
     if (startMinutes == null || endMinutes == null) return null;
 
-    var durationMinutes =
-        (map['durationMinutes'] as num?)?.toInt() ??
-            (map['duration'] as num?)?.toInt() ??
-            (map['durationInMinutes'] as num?)?.toInt() ??
-            (endMinutes - startMinutes);
+    var durationMinutes = (map['durationMinutes'] as num?)?.toInt() ??
+        (map['duration'] as num?)?.toInt() ??
+        (map['durationInMinutes'] as num?)?.toInt() ??
+        (endMinutes - startMinutes);
     if (durationMinutes <= 0) {
       durationMinutes = fallbackMinutes > 0 ? fallbackMinutes : 60;
     }
@@ -3444,7 +3506,8 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
     for (final slot in _allSlots) {
       if (slot.slotDate != _selectedDate) continue;
       final matchesMaster = slot.masterTimeSlotId == master.id;
-      final matchesStart = _slotStartKey(slot.timeRange) == _masterSlotKey(master);
+      final matchesStart =
+          _slotStartKey(slot.timeRange) == _masterSlotKey(master);
       if (matchesMaster || matchesStart) {
         existing = slot;
         break;
@@ -3605,7 +3668,8 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
 
   @override
   Widget build(BuildContext context) {
-    final available = _slotsForDate.where((s) => s.status == 'AVAILABLE').length;
+    final available =
+        _slotsForDate.where((s) => s.status == 'AVAILABLE').length;
     final booked = _slotsForDate.where((s) => s.status == 'BOOKED').length;
     final blocked =
         _slotsForDate.where((s) => s.status == 'UNAVAILABLE').length;
@@ -3631,12 +3695,12 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
                     const SizedBox(width: 8),
                     _statPill(blocked, AppColors.warning, 'Blocked'),
                     const SizedBox(width: 8),
-                    _statPill(_specialDays.length, AppColors.warning, 'Special'),
+                    _statPill(
+                        _specialDays.length, AppColors.warning, 'Special'),
                     const Spacer(),
                     Flexible(
                       child: Text(
-                        _sanitizeDisplayText(
-                            _consultant?.shiftTimingsDisplay,
+                        _sanitizeDisplayText(_consultant?.shiftTimingsDisplay,
                             fallback: 'Shift not set'),
                         style: AppTextStyles.caption,
                         maxLines: 1,
@@ -4252,7 +4316,6 @@ class _ConsultantFeedbacksTabState extends State<_ConsultantFeedbacksTab> {
   }
 }
 
-
 class _ConsultantOffersTab extends StatefulWidget {
   final int consultantId;
   const _ConsultantOffersTab({required this.consultantId});
@@ -4505,8 +4568,8 @@ class _OfferFormState extends State<_OfferForm> {
   final _discCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
   String _validFrom = DateFormat('yyyy-MM-dd').format(DateTime.now());
-  String _validTo =
-      DateFormat('yyyy-MM-dd').format(DateTime.now().add(const Duration(days: 30)));
+  String _validTo = DateFormat('yyyy-MM-dd')
+      .format(DateTime.now().add(const Duration(days: 30)));
   bool _active = true;
   bool _saving = false;
   String _err = '';
@@ -4615,87 +4678,88 @@ class _OfferFormState extends State<_OfferForm> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-              Row(children: [
-                Expanded(
-                    child: Text(
-                        widget.offer != null ? 'Edit Offer' : 'New Offer',
+                Row(children: [
+                  Expanded(
+                      child: Text(
+                          widget.offer != null ? 'Edit Offer' : 'New Offer',
+                          style: const TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w800))),
+                  IconButton(
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: () => Navigator.pop(context)),
+                ]),
+                if (_err.isNotEmpty)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                        color: AppColors.danger.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8)),
+                    child: Text(_err,
                         style: const TextStyle(
-                            fontSize: 18, fontWeight: FontWeight.w800))),
-                IconButton(
-                    icon: const Icon(Icons.close_rounded),
-                    onPressed: () => Navigator.pop(context)),
-              ]),
-              if (_err.isNotEmpty)
-                Container(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                      color: AppColors.danger.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8)),
-                  child: Text(_err,
-                      style: const TextStyle(
-                          color: AppColors.danger,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600)),
-                ),
-              _field('Title *', _titleCtrl, 'e.g. Early Bird Discount'),
-              const SizedBox(height: 12),
-              _field('Discount *', _discCtrl, 'e.g. 20% off, Rs 500 off'),
-              const SizedBox(height: 12),
-              Row(children: [
-                Expanded(
-                  child: _dateField(
-                    label: 'Valid From *',
-                    value: _validFrom,
-                    onTap: () => _pickDate(isFrom: true),
+                            color: AppColors.danger,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600)),
                   ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _dateField(
-                    label: 'Valid To *',
-                    value: _validTo,
-                    onTap: () => _pickDate(isFrom: false),
+                _field('Title *', _titleCtrl, 'e.g. Early Bird Discount'),
+                const SizedBox(height: 12),
+                _field('Discount *', _discCtrl, 'e.g. 20% off, Rs 500 off'),
+                const SizedBox(height: 12),
+                Row(children: [
+                  Expanded(
+                    child: _dateField(
+                      label: 'Valid From *',
+                      value: _validFrom,
+                      onTap: () => _pickDate(isFrom: true),
+                    ),
                   ),
-                ),
-              ]),
-              const SizedBox(height: 12),
-              _field('Description', _descCtrl, 'Brief description (optional)'),
-              const SizedBox(height: 14),
-              Row(children: [
-                const Text('Active',
-                    style:
-                        TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                const Spacer(),
-                Switch(
-                    value: _active,
-                    onChanged: (v) => setState(() => _active = v),
-                    activeColor: AppColors.primaryLight),
-              ]),
-              const SizedBox(height: 16),
-              SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _saving ? null : _save,
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primaryLight,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12))),
-                    child: _saving
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                                color: Colors.white, strokeWidth: 2))
-                        : Text(
-                            widget.offer != null
-                                ? 'Update Offer'
-                                : 'Create Offer',
-                            style: const TextStyle(
-                                fontSize: 14, fontWeight: FontWeight.w700)),
-                  )),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _dateField(
+                      label: 'Valid To *',
+                      value: _validTo,
+                      onTap: () => _pickDate(isFrom: false),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 12),
+                _field(
+                    'Description', _descCtrl, 'Brief description (optional)'),
+                const SizedBox(height: 14),
+                Row(children: [
+                  const Text('Active',
+                      style:
+                          TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  const Spacer(),
+                  Switch(
+                      value: _active,
+                      onChanged: (v) => setState(() => _active = v),
+                      activeColor: AppColors.primaryLight),
+                ]),
+                const SizedBox(height: 16),
+                SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _saving ? null : _save,
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primaryLight,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12))),
+                      child: _saving
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                  color: Colors.white, strokeWidth: 2))
+                          : Text(
+                              widget.offer != null
+                                  ? 'Update Offer'
+                                  : 'Create Offer',
+                              style: const TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w700)),
+                    )),
               ]),
         ),
       );
@@ -4762,8 +4826,7 @@ class _OfferFormState extends State<_OfferForm> {
                     borderSide: const BorderSide(color: AppColors.border)),
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                suffixIcon:
-                    const Icon(Icons.calendar_today_outlined, size: 16),
+                suffixIcon: const Icon(Icons.calendar_today_outlined, size: 16),
                 filled: true,
                 fillColor: AppColors.background,
               ),
@@ -4773,7 +4836,6 @@ class _OfferFormState extends State<_OfferForm> {
         ],
       );
 }
-
 
 class _ConsultantProfileTab extends StatefulWidget {
   final int consultantId;
@@ -4833,7 +4895,6 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
     super.dispose();
   }
 
-
   Future<void> _loadProfile() async {
     if (!mounted) return;
     setState(() {
@@ -4888,7 +4949,6 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
     if (mounted) setState(() => _loadingOffers = false);
   }
 
-
   Future<void> _pickPhoto() async {
     try {
       final picker = ImagePicker();
@@ -4901,16 +4961,29 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
     }
   }
 
-
   Future<void> _pickTime(TextEditingController ctrl) async {
     TimeOfDay? initial;
     try {
       if (ctrl.text.isNotEmpty) {
-        final parts = ctrl.text.split(':');
-        if (parts.length >= 2) {
+        final value = ctrl.text.trim().toUpperCase();
+        final hhmm =
+            RegExp(r'^(\d{1,2}):(\d{2})(?::\d{2})?$').firstMatch(value);
+        if (hhmm != null) {
           initial = TimeOfDay(
-              hour: int.tryParse(parts[0]) ?? 0,
-              minute: int.tryParse(parts[1]) ?? 0);
+            hour: int.tryParse(hhmm.group(1) ?? '') ?? 0,
+            minute: int.tryParse(hhmm.group(2) ?? '') ?? 0,
+          );
+        } else {
+          final ampm =
+              RegExp(r'^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$').firstMatch(value);
+          if (ampm != null) {
+            var hour = int.tryParse(ampm.group(1) ?? '') ?? 0;
+            final minute = int.tryParse(ampm.group(2) ?? '0') ?? 0;
+            final period = ampm.group(3) ?? 'AM';
+            if (period == 'PM' && hour != 12) hour += 12;
+            if (period == 'AM' && hour == 12) hour = 0;
+            initial = TimeOfDay(hour: hour, minute: minute);
+          }
         }
       }
     } catch (_) {}
@@ -4918,16 +4991,13 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
     final picked = await showTimePicker(
       context: context,
       initialTime: initial ?? TimeOfDay.now(),
-      builder: (ctx, child) => MediaQuery(
-          data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: true),
-          child: child!),
     );
     if (picked != null) {
-      ctrl.text =
-          '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
+      final suffix = picked.hour >= 12 ? 'PM' : 'AM';
+      final hour12 = picked.hour % 12 == 0 ? 12 : picked.hour % 12;
+      ctrl.text = '$hour12:${picked.minute.toString().padLeft(2, '0')} $suffix';
     }
   }
-
 
   Future<void> _saveProfile() async {
     final name = _nameCtrl.text.trim();
@@ -4940,21 +5010,43 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
 
     final email = (_profile?.email ?? '').trim();
     if (email.isEmpty) {
-      _snack('Email is missing in profile. Please reload and try again.', false);
+      _snack(
+          'Email is missing in profile. Please reload and try again.', false);
       return;
     }
 
     String? normalizeShift(String raw) {
       final t = raw.trim();
       if (t.isEmpty) return null;
-      if (RegExp(r'^\d{1,2}:\d{2}$').hasMatch(t)) return '$t:00';
-      return t;
+      final upper = t.toUpperCase();
+      int? hour;
+      int? minute;
+
+      final hhmm = RegExp(r'^(\d{1,2}):(\d{2})(?::\d{2})?$').firstMatch(upper);
+      if (hhmm != null) {
+        hour = int.tryParse(hhmm.group(1) ?? '');
+        minute = int.tryParse(hhmm.group(2) ?? '');
+      } else {
+        final ampm =
+            RegExp(r'^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$').firstMatch(upper);
+        if (ampm != null) {
+          hour = int.tryParse(ampm.group(1) ?? '') ?? 0;
+          minute = int.tryParse(ampm.group(2) ?? '0') ?? 0;
+          final period = ampm.group(3) ?? 'AM';
+          if (period == 'PM' && hour != 12) hour += 12;
+          if (period == 'AM' && hour == 12) hour = 0;
+        }
+      }
+
+      if (hour == null || minute == null) return null;
+      if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+      return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:00';
     }
 
     final shiftStart = normalizeShift(_shiftStartCtrl.text);
     final shiftEnd = normalizeShift(_shiftEndCtrl.text);
     if (shiftStart == null || shiftEnd == null) {
-      _snack('Shift start and end time are required', false);
+      _snack('Shift start and end time are required (example: 9:00 AM)', false);
       return;
     }
 
@@ -5020,7 +5112,6 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
     }
   }
 
-
   void _openOfferForm({Map<String, dynamic>? existing}) {
     final isEdit = existing != null;
     final titleCtrl =
@@ -5030,8 +5121,8 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
     final discCtrl =
         TextEditingController(text: isEdit ? existing['discount'] : '');
     final defaultFrom = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    final defaultTo =
-        DateFormat('yyyy-MM-dd').format(DateTime.now().add(const Duration(days: 30)));
+    final defaultTo = DateFormat('yyyy-MM-dd')
+        .format(DateTime.now().add(const Duration(days: 30)));
     final fromCtrl = TextEditingController(
         text: isEdit && existing['validFrom'] != null
             ? existing['validFrom'].toString().substring(0, 10)
@@ -5102,8 +5193,8 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
                   })),
                   const SizedBox(width: 12),
                   Expanded(
-                      child: _field(toCtrl, 'Valid To *', hintText: 'YYYY-MM-DD',
-                          onTap: () async {
+                      child: _field(toCtrl, 'Valid To *',
+                          hintText: 'YYYY-MM-DD', onTap: () async {
                     final d = await showDatePicker(
                         context: ctx,
                         initialDate:
@@ -5135,8 +5226,7 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
                                 'Valid From and Valid To dates are required')));
                         return;
                       }
-                      final fromDate =
-                          DateTime.tryParse(fromCtrl.text.trim());
+                      final fromDate = DateTime.tryParse(fromCtrl.text.trim());
                       final toDate = DateTime.tryParse(toCtrl.text.trim());
                       if (fromDate == null || toDate == null) {
                         ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
@@ -5225,7 +5315,6 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
       duration: const Duration(seconds: 2),
     ));
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -5536,12 +5625,12 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
                 Row(children: [
                   Expanded(
                       child: _field(_shiftStartCtrl, 'Shift Start',
-                          hintText: 'e.g. 09:00',
+                          hintText: 'e.g. 9:00 AM',
                           onTap: () => _pickTime(_shiftStartCtrl))),
                   const SizedBox(width: 12),
                   Expanded(
                       child: _field(_shiftEndCtrl, 'Shift End',
-                          hintText: 'e.g. 18:00',
+                          hintText: 'e.g. 6:00 PM',
                           onTap: () => _pickTime(_shiftEndCtrl))),
                 ]),
                 const SizedBox(height: 4),
@@ -5579,7 +5668,6 @@ class _ConsultantProfileTabState extends State<_ConsultantProfileTab>
             ]),
           ),
         ),
-
         Column(children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
@@ -5943,7 +6031,6 @@ T? _safeRead<T>(dynamic obj, String key) {
     return null;
   }
 }
-
 
 Widget _handleBar() => Center(
         child: Container(

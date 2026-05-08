@@ -7,11 +7,38 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class EmailToTicketScreen extends StatefulWidget {
-  const EmailToTicketScreen({super.key, this.readOnly});
+  const EmailToTicketScreen({
+    super.key,
+    this.readOnly,
+    this.allowDirectTicketCreation = false,
+  });
   final bool? readOnly;
+  final bool allowDirectTicketCreation;
 
   @override
   State<EmailToTicketScreen> createState() => _EmailToTicketScreenState();
+}
+
+class _ComposeSupportResult {
+  final bool emailOpened;
+  final String? ticketNo;
+
+  const _ComposeSupportResult._({
+    required this.emailOpened,
+    this.ticketNo,
+  });
+
+  const _ComposeSupportResult.emailOpened()
+      : this._(
+          emailOpened: true,
+          ticketNo: null,
+        );
+
+  const _ComposeSupportResult.ticketCreated(String ticketNo)
+      : this._(
+          emailOpened: false,
+          ticketNo: ticketNo,
+        );
 }
 
 class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
@@ -119,14 +146,38 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
       );
       return;
     }
+    final pollingTimedOut =
+        !result.ok && _isPollingTimeoutMessage(result.message);
+    if (!result.ok && !pollingTimedOut) {
+      setState(() => _polling = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.message),
+          backgroundColor: AppColors.danger,
+        ),
+      );
+      return;
+    }
+    if (pollingTimedOut) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Polling request timed out, but processing may continue in background. Refreshing status now.',
+          ),
+          backgroundColor: AppColors.warning,
+        ),
+      );
+    }
     setState(() {
-      _lastActionMessage = result.message;
+      _lastActionMessage = pollingTimedOut
+          ? 'Polling started. It may take longer than expected to complete.'
+          : result.message;
       _polling = false;
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(_lastActionMessage!),
-        backgroundColor: result.ok ? AppColors.success : AppColors.danger,
+        backgroundColor: AppColors.success,
       ),
     );
     if (_canManageInbox) {
@@ -142,6 +193,16 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
         value.contains('not authorized') ||
         value.contains('access denied') ||
         value.contains('403');
+  }
+
+  bool _isPollingTimeoutMessage(String message) {
+    final value = message.toLowerCase();
+    return value.contains('timed out') ||
+        value.contains('timeout') ||
+        value.contains('receive timeout') ||
+        value.contains('send timeout') ||
+        value.contains('connection timeout') ||
+        value.contains('socket');
   }
 
   Future<List<String>> _ensureTicketCategories() async {
@@ -183,16 +244,23 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
     if (trimmedSubject.isNotEmpty) query['subject'] = trimmedSubject;
     if (trimmedBody.isNotEmpty) query['body'] = trimmedBody;
 
+    final encodedQuery = query.isEmpty
+        ? null
+        : query.entries
+            .map((entry) =>
+                '${Uri.encodeComponent(entry.key)}=${Uri.encodeComponent(entry.value)}')
+            .join('&');
     final uri = Uri(
       scheme: 'mailto',
       path: _mailbox,
-      queryParameters: query.isEmpty ? null : query,
+      query: encodedQuery,
     );
 
     try {
       return await launchUrl(
         uri,
         mode: LaunchMode.externalApplication,
+        webOnlyWindowName: '_self',
       );
     } catch (_) {
       return false;
@@ -200,19 +268,26 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
   }
 
   Future<void> _composeSupportEmail() async {
-    final categories = await _ensureTicketCategories();
+    final allowDirectCreation = widget.allowDirectTicketCreation;
+    final categories =
+        allowDirectCreation ? await _ensureTicketCategories() : ['General'];
     if (!mounted) return;
 
-    final userId = int.tryParse(await _authService.getUserId() ?? '');
+    final userId = allowDirectCreation
+        ? int.tryParse(await _authService.getUserId() ?? '')
+        : null;
+    if (!mounted) return;
     final subjectCtrl = TextEditingController(text: 'Support Request');
     final bodyCtrl = TextEditingController();
     String selectedCategory = categories.first;
     String selectedPriority = 'MEDIUM';
     bool creatingTicket = false;
+    bool composingSheetClosed = false;
 
     try {
-      await showModalBottomSheet(
+      final composeResult = await showModalBottomSheet<_ComposeSupportResult>(
         context: context,
+        useRootNavigator: true,
         isScrollControlled: true,
         backgroundColor: Colors.white,
         shape: const RoundedRectangleBorder(
@@ -221,6 +296,18 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
         builder: (sheetContext) {
           return StatefulBuilder(
             builder: (sheetContext, setSheetState) {
+              Future<void> closeComposerSheetIfOpen([
+                _ComposeSupportResult? result,
+              ]) async {
+                if (composingSheetClosed) return;
+                composingSheetClosed = true;
+                if (!sheetContext.mounted) return;
+                await Navigator.of(
+                  sheetContext,
+                  rootNavigator: true,
+                ).maybePop(result);
+              }
+
               Future<void> openEmailApp() async {
                 final subject = subjectCtrl.text.trim().isEmpty
                     ? 'Support Request'
@@ -241,16 +328,14 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
                   );
                   return;
                 }
-                Navigator.pop(sheetContext);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Email app opened for $_mailbox'),
-                    backgroundColor: AppColors.success,
-                  ),
+                await closeComposerSheetIfOpen(
+                  const _ComposeSupportResult.emailOpened(),
                 );
               }
 
               Future<void> createTicketNow() async {
+                if (!allowDirectCreation) return;
+                if (creatingTicket) return;
                 if (userId == null) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
@@ -274,6 +359,7 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
                   return;
                 }
 
+                if (composingSheetClosed || !sheetContext.mounted) return;
                 setSheetState(() => creatingTicket = true);
                 final subject = subjectCtrl.text.trim();
                 final ticketDescription = subject.isEmpty
@@ -286,9 +372,10 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
                   priority: selectedPriority,
                 );
                 if (!mounted) return;
-                try {
+
+                if (!composingSheetClosed && sheetContext.mounted) {
                   setSheetState(() => creatingTicket = false);
-                } catch (_) {}
+                }
 
                 if (ticket == null) {
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -302,18 +389,8 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
                 }
 
                 final ticketNo = formatTicketNumberFromTicket(ticket);
-                Navigator.pop(sheetContext);
-                setState(() {
-                  _lastActionMessage =
-                      'Ticket $ticketNo created. Admin can now see it in Support Tickets.';
-                });
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Ticket $ticketNo created successfully and added to admin queue.',
-                    ),
-                    backgroundColor: AppColors.success,
-                  ),
+                await closeComposerSheetIfOpen(
+                  _ComposeSupportResult.ticketCreated(ticketNo),
                 );
               }
 
@@ -343,7 +420,7 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
                           ),
                           IconButton(
                             icon: const Icon(Icons.close_rounded),
-                            onPressed: () => Navigator.pop(sheetContext),
+                            onPressed: closeComposerSheetIfOpen,
                           ),
                         ],
                       ),
@@ -369,54 +446,56 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
                         ),
                       ),
                       const SizedBox(height: 10),
-                      DropdownButtonFormField<String>(
-                        value: selectedCategory,
-                        decoration: InputDecoration(
-                          labelText: 'Category',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
+                      if (allowDirectCreation) ...[
+                        DropdownButtonFormField<String>(
+                          initialValue: selectedCategory,
+                          decoration: InputDecoration(
+                            labelText: 'Category',
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            filled: true,
+                            fillColor: const Color(0xFFF8FAFC),
                           ),
-                          filled: true,
-                          fillColor: const Color(0xFFF8FAFC),
+                          items: categories
+                              .map(
+                                (item) => DropdownMenuItem<String>(
+                                  value: item,
+                                  child: Text(item),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setSheetState(() => selectedCategory = value);
+                          },
                         ),
-                        items: categories
-                            .map(
-                              (item) => DropdownMenuItem<String>(
-                                value: item,
-                                child: Text(item),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          if (value == null) return;
-                          setSheetState(() => selectedCategory = value);
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                      DropdownButtonFormField<String>(
-                        value: selectedPriority,
-                        decoration: InputDecoration(
-                          labelText: 'Priority',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
+                        const SizedBox(height: 10),
+                        DropdownButtonFormField<String>(
+                          initialValue: selectedPriority,
+                          decoration: InputDecoration(
+                            labelText: 'Priority',
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            filled: true,
+                            fillColor: const Color(0xFFF8FAFC),
                           ),
-                          filled: true,
-                          fillColor: const Color(0xFFF8FAFC),
+                          items: _composePriorities
+                              .map(
+                                (item) => DropdownMenuItem<String>(
+                                  value: item,
+                                  child: Text(item),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setSheetState(() => selectedPriority = value);
+                          },
                         ),
-                        items: _composePriorities
-                            .map(
-                              (item) => DropdownMenuItem<String>(
-                                value: item,
-                                child: Text(item),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          if (value == null) return;
-                          setSheetState(() => selectedPriority = value);
-                        },
-                      ),
-                      const SizedBox(height: 10),
+                        const SizedBox(height: 10),
+                      ],
                       TextField(
                         controller: bodyCtrl,
                         maxLines: 6,
@@ -449,36 +528,40 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: creatingTicket ? null : createTicketNow,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.primary,
-                            padding: const EdgeInsets.symmetric(vertical: 13),
+                      if (allowDirectCreation) ...[
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: creatingTicket ? null : createTicketNow,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              padding: const EdgeInsets.symmetric(vertical: 13),
+                            ),
+                            child: creatingTicket
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : Text(
+                                    'Create Ticket Now',
+                                    style: GoogleFonts.inter(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
                           ),
-                          child: creatingTicket
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : Text(
-                                  'Create Ticket Now',
-                                  style: GoogleFonts.inter(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
                         ),
-                      ),
+                      ],
                       const SizedBox(height: 8),
                       Text(
-                        'Create Ticket Now sends directly to backend, so it appears in Admin Support Tickets immediately.',
+                        allowDirectCreation
+                            ? 'Create Ticket Now sends directly to backend, so it appears in Admin Support Tickets immediately.'
+                            : 'Send this email from your registered account. Admin must click Poll Inbox to convert it into a ticket.',
                         style: GoogleFonts.inter(
                           fontSize: 11.5,
                           fontWeight: FontWeight.w600,
@@ -492,6 +575,32 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
             },
           );
         },
+      ).whenComplete(() {
+        composingSheetClosed = true;
+      });
+      if (!mounted || composeResult == null) return;
+      if (composeResult.emailOpened) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Email app opened for $_mailbox'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        return;
+      }
+      final ticketNo = composeResult.ticketNo;
+      if (ticketNo == null || ticketNo.isEmpty) return;
+      setState(() {
+        _lastActionMessage =
+            'Ticket $ticketNo created. Admin can now see it in Support Tickets.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Ticket $ticketNo created successfully and added to admin queue.',
+          ),
+          backgroundColor: AppColors.success,
+        ),
       );
     } finally {
       subjectCtrl.dispose();
@@ -637,6 +746,15 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
                             style: GoogleFonts.inter(
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
+                              color: AppColors.textMuted,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Use your registered account email while sending to $_mailbox so backend can map it to your profile.',
+                            style: GoogleFonts.inter(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w500,
                               color: AppColors.textMuted,
                             ),
                           ),

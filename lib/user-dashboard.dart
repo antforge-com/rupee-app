@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'api_client.dart';
 import 'assessment_sheet.dart';
@@ -20,6 +21,7 @@ import 'booking_answers_screen.dart';
 import 'email_to_ticket_screen.dart';
 import 'login_screen.dart';
 import 'models/models.dart';
+import 'shared/ticket_number_formatter.dart';
 import 'services/services.dart';
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -274,6 +276,51 @@ String _normalizeTimeRange(dynamic raw, {dynamic durationMinutes}) {
   final safeDuration = duration > 0 ? duration : 60;
   final end = start + safeDuration;
   return '${_formatMinutesLabel(start)} - ${_formatMinutesLabel(end)}';
+}
+
+int? _minutesFromTimePayload(dynamic raw) {
+  if (raw == null) return null;
+  if (raw is Map) {
+    final hour = _toInt(raw['hour']);
+    final minute = _toInt(raw['minute']);
+    if (hour == null || minute == null) return null;
+    return (hour * 60) + minute;
+  }
+  final value = raw.toString().trim();
+  if (value.isEmpty) return null;
+  return _parseClockMinutes(value);
+}
+
+String _consultantShiftWindow(Map<String, dynamic> consultant,
+    {String fallback = 'Not set'}) {
+  final displayCandidates = [
+    consultant['shiftDisplay'],
+    consultant['shiftTimingsDisplay'],
+    consultant['availability'],
+    consultant['workingHours'],
+  ];
+
+  for (final candidate in displayCandidates) {
+    final raw = (candidate ?? '').toString().trim();
+    if (raw.isEmpty) continue;
+    final normalized = _normalizeTimeRange(raw).trim();
+    if (normalized.isEmpty) continue;
+    final upper = normalized.toUpperCase();
+    if (upper == 'NOT SET' || upper == 'N/A' || upper == 'NA') continue;
+    return normalized;
+  }
+
+  final start = _minutesFromTimePayload(
+      consultant['shiftStartTime'] ?? consultant['shiftStart']);
+  final end = _minutesFromTimePayload(
+      consultant['shiftEndTime'] ?? consultant['shiftEnd']);
+
+  if (start != null && end != null) {
+    return '${_formatMinutesLabel(start)} - ${_formatMinutesLabel(end)}';
+  }
+  if (start != null) return '${_formatMinutesLabel(start)} onward';
+  if (end != null) return 'Until ${_formatMinutesLabel(end)}';
+  return fallback;
 }
 
 int _slotSortMinutes(Map<String, dynamic> slot) {
@@ -846,6 +893,7 @@ class _ConsultantsTabState extends State<_ConsultantsTab> {
   List<String> _cats = ['All'];
   bool _loading = true;
   final _searchCtrl = TextEditingController();
+  final ScrollController _categoryScrollCtrl = ScrollController();
 
   @override
   void initState() {
@@ -856,6 +904,7 @@ class _ConsultantsTabState extends State<_ConsultantsTab> {
   @override
   void dispose() {
     _searchCtrl.dispose();
+    _categoryScrollCtrl.dispose();
     super.dispose();
   }
 
@@ -876,11 +925,18 @@ class _ConsultantsTabState extends State<_ConsultantsTab> {
         if (s.toString().isNotEmpty) cats.add(s.toString());
       }
     }
+    final orderedCats = [
+      'All',
+      ...cats.where((item) => item != 'All').toList()
+        ..sort(
+            (a, b) => a.toLowerCase().trim().compareTo(b.toLowerCase().trim())),
+    ];
     if (mounted)
       setState(() {
         _consultants = consultants;
         _feeConfig = feeRaw;
-        _cats = cats.toList();
+        _cats = orderedCats;
+        if (!_cats.contains(_selCat)) _selCat = 'All';
         _loading = false;
       });
   }
@@ -907,6 +963,31 @@ class _ConsultantsTabState extends State<_ConsultantsTab> {
       final matchC = _selCat == 'All' || skills.contains(_selCat.toLowerCase());
       return matchQ && matchC;
     }).toList();
+  }
+
+  void _scrollCategoryIntoView(String category) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_categoryScrollCtrl.hasClients) return;
+      if ((ModalRoute.of(context)?.isCurrent ?? true) == false) return;
+      final index = _cats.indexOf(category);
+      if (index < 0 || _cats.length <= 1) return;
+
+      final maxExtent = _categoryScrollCtrl.position.maxScrollExtent;
+      if (maxExtent <= 0) return;
+
+      final ratio = index / (_cats.length - 1);
+      final target = (maxExtent * ratio).clamp(0.0, maxExtent);
+      _categoryScrollCtrl.animateTo(
+        target,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  void _setCategory(String category) {
+    setState(() => _selCat = category);
+    _scrollCategoryIntoView(category);
   }
 
   @override
@@ -986,6 +1067,7 @@ class _ConsultantsTabState extends State<_ConsultantsTab> {
           SizedBox(
             height: 36,
             child: ListView.separated(
+              controller: _categoryScrollCtrl,
               scrollDirection: Axis.horizontal,
               itemCount: _cats.length,
               separatorBuilder: (_, __) => const SizedBox(width: 8),
@@ -993,8 +1075,9 @@ class _ConsultantsTabState extends State<_ConsultantsTab> {
                 final cat = _cats[i];
                 final sel = _selCat == cat;
                 return GestureDetector(
-                  onTap: () => setState(() => _selCat = cat),
+                  onTap: () => _setCategory(cat),
                   child: AnimatedContainer(
+                    key: ValueKey('cat_$cat'),
                     duration: const Duration(milliseconds: 180),
                     padding:
                         const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -1069,10 +1152,13 @@ class _ConsultantCard extends StatelessWidget {
     final skills = (c['skills'] as List? ?? []).cast<String>();
     final rating = double.tryParse(c['rating']?.toString() ?? '0') ?? 0.0;
     final exp = _toDouble(c['yearsOfExperience'] ?? c['experience'] ?? 0);
+    final availability = _consultantShiftWindow(c);
     final base = double.tryParse(c['charges']?.toString() ?? '0') ?? 0;
     final total = _calcFee(base, feeConfig);
     final avatar = _photoUrl(c['profilePhoto'] ?? c['photo']);
     final about = c['description'] ?? c['about'] ?? '';
+    final hasAvailability = availability.trim().isNotEmpty &&
+        availability.trim().toUpperCase() != 'NOT SET';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -1132,7 +1218,9 @@ class _ConsultantCard extends StatelessWidget {
                       const Icon(Icons.schedule_rounded,
                           size: 13, color: _C.text4),
                       const SizedBox(width: 4),
-                      Text(_formatExperience(exp, consultantName: name.toString()),
+                      Text(
+                          _formatExperience(exp,
+                              consultantName: name.toString()),
                           style: _ts(12, FontWeight.w500, _C.text3)),
                       const SizedBox(width: 12),
                     ],
@@ -1143,6 +1231,24 @@ class _ConsultantCard extends StatelessWidget {
                           style: _ts(12, FontWeight.w700, _C.text1)),
                     ],
                   ]),
+                  if (hasAvailability) ...[
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        const Icon(Icons.access_time_rounded,
+                            size: 13, color: _C.text4),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            availability,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: _ts(12, FontWeight.w600, _C.text3),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ])),
           ]),
         ),
@@ -1201,12 +1307,16 @@ class _ConsultantCard extends StatelessWidget {
         context: ctx,
         isScrollControlled: true,
         backgroundColor: Colors.transparent,
-        builder: (_) => _ProfileSheet(
+        builder: (sheetContext) => _ProfileSheet(
           c: c,
           feeConfig: feeConfig,
           onBook: () {
-            Navigator.pop(ctx);
-            Future.delayed(Duration.zero, () => _openBooking(ctx));
+            Navigator.of(sheetContext).pop();
+            Future.microtask(() {
+              if (ctx.mounted) {
+                _openBooking(ctx);
+              }
+            });
           },
         ),
       );
@@ -1240,6 +1350,7 @@ class _ProfileSheet extends StatelessWidget {
     final loc = c['location'] ?? 'Remote';
     final lang = c['languages'] ?? 'English';
     final exp = _toDouble(c['yearsOfExperience'] ?? c['experience'] ?? 0);
+    final availability = _consultantShiftWindow(c);
 
     return DraggableScrollableSheet(
       initialChildSize: 0.85,
@@ -1353,8 +1464,8 @@ class _ProfileSheet extends StatelessWidget {
                         const SizedBox(height: 16),
                         Row(children: [
                           Expanded(
-                              child: _profileInfoBox(Icons.call_outlined,
-                                  'CONTACT', 'On request')),
+                              child: _profileInfoBox(Icons.access_time_rounded,
+                                  'AVAILABILITY', availability)),
                           const SizedBox(width: 16),
                           Expanded(
                               child: _profileInfoBox(
@@ -1362,6 +1473,9 @@ class _ProfileSheet extends StatelessWidget {
                                   'CONSULTATION FEE',
                                   '₹${total.toStringAsFixed(0)}')),
                         ]),
+                        const SizedBox(height: 16),
+                        _profileInfoBox(
+                            Icons.call_outlined, 'CONTACT', 'On request'),
 
                         const SizedBox(height: 32),
                         Text('EXPERTISE',
@@ -2010,7 +2124,8 @@ class _BookingSheetState extends State<_BookingSheet> {
     double discount = 0;
     if (_selOffer != null) {
       final d = double.tryParse(_selOffer!['discount']?.toString() ?? '0') ?? 0;
-      final type = (_selOffer!['discountType'] ?? 'FLAT').toString().toUpperCase();
+      final type =
+          (_selOffer!['discountType'] ?? 'FLAT').toString().toUpperCase();
       if (type == 'PERCENTAGE') {
         discount = base * d / 100;
       } else {
@@ -2715,7 +2830,8 @@ class _BookingSheetState extends State<_BookingSheet> {
                                   const SizedBox(height: 32),
                                   if (_offers.isNotEmpty) ...[
                                     Text('AVAILABLE OFFERS',
-                                        style: _ts(11, FontWeight.w800, _C.text1,
+                                        style: _ts(
+                                            11, FontWeight.w800, _C.text1,
                                             ls: 0.5)),
                                     const SizedBox(height: 16),
                                     SizedBox(
@@ -2727,7 +2843,8 @@ class _BookingSheetState extends State<_BookingSheet> {
                                             const SizedBox(width: 12),
                                         itemBuilder: (_, i) {
                                           final o = _offers[i];
-                                          final sel = _selOffer?['id'] == o['id'];
+                                          final sel =
+                                              _selOffer?['id'] == o['id'];
                                           return GestureDetector(
                                             onTap: () => setState(() =>
                                                 _selOffer = sel ? null : o),
@@ -2841,10 +2958,15 @@ class _BookingSheetState extends State<_BookingSheet> {
                                                 MainAxisAlignment.spaceBetween,
                                             children: [
                                               Text('Offer Applied',
-                                                  style: _ts(14, FontWeight.w600,
+                                                  style: _ts(
+                                                      14,
+                                                      FontWeight.w600,
                                                       _C.success)),
-                                              Text('-₹${discount.toStringAsFixed(0)}',
-                                                  style: _ts(14, FontWeight.w700,
+                                              Text(
+                                                  '-₹${discount.toStringAsFixed(0)}',
+                                                  style: _ts(
+                                                      14,
+                                                      FontWeight.w700,
                                                       _C.success)),
                                             ]),
                                       ],
@@ -3831,6 +3953,7 @@ class _TicketsTabState extends State<_TicketsTab> {
   bool _loading = true;
   bool _guestExpiryPromptShown = false;
   final ScrollController _filterChipScrollCtrl = ScrollController();
+  final ScrollController _ticketActionScrollCtrl = ScrollController();
   static const List<String> _ticketFilters = [
     'ALL',
     'NEW',
@@ -3840,11 +3963,9 @@ class _TicketsTabState extends State<_TicketsTab> {
     'RESOLVED',
     'CLOSED',
   ];
-  late final Map<String, GlobalKey> _filterChipKeys = {
-    for (final f in _ticketFilters) f: GlobalKey(),
-  };
   String _filter =
       'ALL'; // ALL | NEW | OPEN | IN_PROGRESS | PENDING | RESOLVED | CLOSED
+  static const String _supportMailbox = 'support@meetthemasters.in';
 
   @override
   void initState() {
@@ -3855,6 +3976,7 @@ class _TicketsTabState extends State<_TicketsTab> {
   @override
   void dispose() {
     _filterChipScrollCtrl.dispose();
+    _ticketActionScrollCtrl.dispose();
     super.dispose();
   }
 
@@ -3903,12 +4025,18 @@ class _TicketsTabState extends State<_TicketsTab> {
 
   void _scrollFilterIntoView(String filter) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final chipContext = _filterChipKeys[filter]?.currentContext;
-      if (chipContext == null) return;
-      Scrollable.ensureVisible(
-        chipContext,
-        alignment: 0.12,
+      if (!mounted || !_filterChipScrollCtrl.hasClients) return;
+      if ((ModalRoute.of(context)?.isCurrent ?? true) == false) return;
+      final index = _ticketFilters.indexOf(filter);
+      if (index < 0 || _ticketFilters.length <= 1) return;
+
+      final maxExtent = _filterChipScrollCtrl.position.maxScrollExtent;
+      if (maxExtent <= 0) return;
+
+      final ratio = index / (_ticketFilters.length - 1);
+      final target = (maxExtent * ratio).clamp(0.0, maxExtent);
+      _filterChipScrollCtrl.animateTo(
+        target,
         duration: const Duration(milliseconds: 260),
         curve: Curves.easeOutCubic,
       );
@@ -3918,6 +4046,120 @@ class _TicketsTabState extends State<_TicketsTab> {
   void _setFilter(String filter) {
     setState(() => _filter = filter);
     _scrollFilterIntoView(filter);
+  }
+
+  void _scrollActionIntoView(String actionId) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_ticketActionScrollCtrl.hasClients) return;
+      if ((ModalRoute.of(context)?.isCurrent ?? true) == false) return;
+
+      final maxExtent = _ticketActionScrollCtrl.position.maxScrollExtent;
+      if (maxExtent <= 0) return;
+
+      final target = switch (actionId) {
+        'refresh' => 0.0,
+        'ticket' => maxExtent,
+        _ => maxExtent * 0.5,
+      };
+
+      _ticketActionScrollCtrl.animateTo(
+        target.clamp(0.0, maxExtent),
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  void _runAction(String actionId, VoidCallback action,
+      {bool scrollAfter = true}) {
+    action();
+    if (scrollAfter) {
+      _scrollActionIntoView(actionId);
+    }
+  }
+
+  String? _mailtoQuery(Map<String, String> params) {
+    if (params.isEmpty) return null;
+    return params.entries
+        .map((entry) =>
+            '${Uri.encodeComponent(entry.key)}=${Uri.encodeComponent(entry.value)}')
+        .join('&');
+  }
+
+  Future<void> _openSupportEmailApp() async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    const template = 'Hi Support Team,\n\n'
+        'I need help with:\n\n'
+        '- Issue:\n'
+        '- Steps to reproduce:\n'
+        '- Expected result:\n'
+        '- Actual result:\n\n'
+        'Thanks,';
+    final uri = Uri(
+      scheme: 'mailto',
+      path: _supportMailbox,
+      query: _mailtoQuery({
+        'subject': 'Support Request',
+        'body': template,
+      }),
+    );
+
+    bool opened = false;
+    try {
+      opened = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+        webOnlyWindowName: '_self',
+      );
+    } catch (_) {
+      opened = false;
+    }
+    if (!mounted) return;
+
+    if (opened) {
+      messenger
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              'Email app opened. Send to $_supportMailbox. Ticket appears after admin clicks Poll Inbox.',
+              style: _ts(12.5, FontWeight.w600, Colors.white),
+            ),
+            backgroundColor: _C.success,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            margin: const EdgeInsets.all(16),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const EmailToTicketScreen(readOnly: true),
+      ),
+    );
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not open a default email app. Use the Email-to-Ticket page to copy/send details.',
+            style: _ts(12.5, FontWeight.w600, Colors.white),
+          ),
+          backgroundColor: _C.warning,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 4),
+        ),
+      );
   }
 
   @override
@@ -3945,34 +4187,41 @@ class _TicketsTabState extends State<_TicketsTab> {
             _headerProfileButton(widget.user, widget.onOpenAccount),
           ]),
           const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _ticketActionBtn(
-                label: 'Refresh',
-                icon: Icons.refresh_rounded,
-                onTap: _load,
-              ),
-              _ticketActionBtn(
-                label: 'Email',
-                icon: Icons.mail_outlined,
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const EmailToTicketScreen(readOnly: true),
-                    ),
-                  );
-                },
-              ),
-              _ticketActionBtn(
-                label: 'Ticket',
-                icon: Icons.add_rounded,
-                onTap: () => _openCreate(context),
-                primary: true,
-              ),
-            ],
+          SingleChildScrollView(
+            controller: _ticketActionScrollCtrl,
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _ticketActionBtn(
+                  label: 'Refresh',
+                  icon: Icons.refresh_rounded,
+                  onTap: () => _runAction('refresh', _load),
+                ),
+                const SizedBox(width: 8),
+                _ticketActionBtn(
+                  label: 'Email to Ticket',
+                  icon: Icons.mail_outlined,
+                  onTap: () => _runAction(
+                    'email',
+                    () => _openSupportEmailApp(),
+                    scrollAfter: false,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _ticketActionBtn(
+                  label: 'Ticket',
+                  icon: Icons.add_rounded,
+                  onTap: () => _runAction(
+                    'ticket',
+                    () {
+                      _openCreate(context);
+                    },
+                    scrollAfter: false,
+                  ),
+                  primary: true,
+                ),
+              ],
+            ),
           ),
         ]),
       ),
@@ -4039,8 +4288,7 @@ class _TicketsTabState extends State<_TicketsTab> {
                       scrollDirection: Axis.horizontal,
                       physics: const BouncingScrollPhysics(),
                       child: Row(children: [
-                        for (final f in _ticketFilters)
-                          _filterChip(f),
+                        for (final f in _ticketFilters) _filterChip(f),
                       ]),
                     ),
                     const SizedBox(height: 14),
@@ -4049,41 +4297,76 @@ class _TicketsTabState extends State<_TicketsTab> {
                     Container(
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: const Color(0xFFF0FDFA),
                         borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: _C.border),
+                        border: Border.all(color: const Color(0xFF99F6E4)),
                       ),
-                      child: Row(
+                      child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Container(
-                              width: 36,
-                              height: 36,
-                              decoration: BoxDecoration(
-                                  color: _C.blueLight,
-                                  borderRadius: BorderRadius.circular(10)),
-                              child: const Icon(Icons.mail_rounded,
-                                  color: _C.blue, size: 18),
+                            Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Container(
+                                    width: 36,
+                                    height: 36,
+                                    decoration: BoxDecoration(
+                                        color: _C.blueLight,
+                                        borderRadius:
+                                            BorderRadius.circular(10)),
+                                    child: const Icon(Icons.mail_rounded,
+                                        color: _C.blue, size: 18),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                      child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                        Text(
+                                            'Email-to-Ticket: Send an email to get help automatically',
+                                            style: _ts(13, FontWeight.w700,
+                                                const Color(0xFF1E3A8A))),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                            'You can also raise a support ticket by sending an email directly to our support inbox. Your email will be converted into a ticket and visible in Tickets.',
+                                            style: _ts(
+                                                12, FontWeight.w400, _C.text3,
+                                                height: 1.4)),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                            'support@meetthemasters.in • Use keywords like "urgent" or "billing" for faster routing.',
+                                            style: _ts(
+                                                12, FontWeight.w600, _C.blue,
+                                                height: 1.35)),
+                                      ])),
+                                ]),
+                            const SizedBox(height: 10),
+                            SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton.icon(
+                                onPressed: () => _runAction('email', () {
+                                  _openSupportEmailApp();
+                                }, scrollAfter: false),
+                                icon: const Icon(Icons.open_in_new_rounded,
+                                    size: 16),
+                                label: const Text('Open Email App'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: _C.blue,
+                                  side: const BorderSide(color: _C.blueBorder),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 10),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                              ),
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                                child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                  Text(
-                                      'Email-to-Ticket: Send an email to get help automatically',
-                                      style:
-                                          _ts(13, FontWeight.w700, _C.text1)),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                      'You can also raise a support ticket by sending an email directly to our support inbox.',
-                                      style: _ts(12, FontWeight.w400, _C.text3,
-                                          height: 1.4)),
-                                  const SizedBox(height: 6),
-                                  Text('support@meetthemasters.in',
-                                      style: _ts(12, FontWeight.w600, _C.blue)),
-                                ])),
+                            const SizedBox(height: 6),
+                            Text(
+                                'After sending from your email app, admin can click Poll Inbox to convert it into a ticket in the Tickets queue.',
+                                style: _ts(11.5, FontWeight.w500, _C.text3,
+                                    height: 1.3)),
                           ]),
                     ),
                     const SizedBox(height: 14),
@@ -4143,8 +4426,9 @@ class _TicketsTabState extends State<_TicketsTab> {
             horizontal: primary ? 14 : 12, vertical: primary ? 9 : 8),
         decoration: BoxDecoration(
           color: primary ? null : Colors.white,
-          gradient:
-              primary ? const LinearGradient(colors: [_C.blue, _C.blueMid]) : null,
+          gradient: primary
+              ? const LinearGradient(colors: [_C.blue, _C.blueMid])
+              : null,
           border: primary ? null : Border.all(color: _C.border),
           borderRadius: BorderRadius.circular(10),
           boxShadow: primary
@@ -4188,7 +4472,7 @@ class _TicketsTabState extends State<_TicketsTab> {
       child: GestureDetector(
         onTap: () => _setFilter(f),
         child: Container(
-          key: _filterChipKeys[f],
+          key: ValueKey('ticket_filter_$f'),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
             color: sel ? _C.blue : Colors.white,
@@ -4202,23 +4486,46 @@ class _TicketsTabState extends State<_TicketsTab> {
     );
   }
 
-  void _openCreate(BuildContext ctx) {
+  Future<void> _openCreate(BuildContext ctx) async {
     if (_isGuestTicketAccessExpired(widget.user)) {
       _showGuestTicketExpiredDialog(ctx);
       return;
     }
-    showModalBottomSheet(
+    final messenger = ScaffoldMessenger.maybeOf(ctx);
+    final createdResult = await showModalBottomSheet<_CreateTicketSheetResult>(
       context: ctx,
+      useRootNavigator: true,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _CreateTicketSheet(userId: _uid, onCreated: _load),
+      builder: (_) => _CreateTicketSheet(userId: _uid),
     );
+
+    if (!mounted || createdResult == null) return;
+    await _load();
+    if (!mounted) return;
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            'Ticket #${createdResult.ticketRef} created. Our team will respond shortly.',
+            style: _ts(13, FontWeight.w600, Colors.white),
+          ),
+          backgroundColor: _C.success,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 3),
+        ),
+      );
   }
 
   void _showGuestTicketExpiredDialog(BuildContext ctx) {
     showDialog(
       context: ctx,
-      builder: (_) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text('Guest Ticket Access Expired',
             style: _ts(17, FontWeight.w800, _C.text1)),
@@ -4228,7 +4535,7 @@ class _TicketsTabState extends State<_TicketsTab> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () => Navigator.of(dialogContext).pop(),
             child: Text('OK', style: _ts(14, FontWeight.w700, _C.blue)),
           ),
         ],
@@ -4247,12 +4554,15 @@ class _TicketCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final id = (t['id'] as num?)?.toInt() ?? 0;
     final status = (t['status'] ?? 'NEW').toString().toUpperCase();
     final priority = (t['priority'] ?? 'MEDIUM').toString().toUpperCase();
     final category = _prettifyLabel((t['category'] ?? 'General').toString());
     final desc = t['description'] ?? '';
     final created = t['createdAt'] ?? '';
+    final ticketRef = formatTicketNumber(
+      ticketNumber: t['ticketNumber']?.toString(),
+      createdAt: created.toString(),
+    );
     final slaBreached = t['slaBreached'] == true;
 
     final prioColors = {
@@ -4290,7 +4600,8 @@ class _TicketCard extends StatelessWidget {
             Row(children: [
               Expanded(
                   child: Row(children: [
-                Text('Ticket #$id', style: _ts(14, FontWeight.w800, _C.text1)),
+                Text('Ticket #$ticketRef',
+                    style: _ts(14, FontWeight.w800, _C.text1)),
                 if (slaBreached) ...[
                   const SizedBox(width: 8),
                   _chip('SLA BREACH',
@@ -4338,10 +4649,14 @@ class _TicketCard extends StatelessWidget {
 }
 
 // ── Create Ticket Sheet ────────────────────────────────────────────────────────
+class _CreateTicketSheetResult {
+  final String ticketRef;
+  const _CreateTicketSheetResult(this.ticketRef);
+}
+
 class _CreateTicketSheet extends StatefulWidget {
   final int userId;
-  final VoidCallback onCreated;
-  const _CreateTicketSheet({required this.userId, required this.onCreated});
+  const _CreateTicketSheet({required this.userId});
   @override
   State<_CreateTicketSheet> createState() => _CreateTicketSheetState();
 }
@@ -4354,6 +4669,7 @@ class _CreateTicketSheetState extends State<_CreateTicketSheet> {
   final _descCtrl = TextEditingController();
   bool _saving = false;
   String _err = '';
+  bool _sheetClosed = false;
 
   final _priorities = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];
   final _prioLabels = {
@@ -4385,6 +4701,7 @@ class _CreateTicketSheetState extends State<_CreateTicketSheet> {
   }
 
   Future<void> _submit() async {
+    if (_saving) return;
     if (_category == null) {
       setState(() => _err = 'Please select a category.');
       return;
@@ -4403,17 +4720,16 @@ class _CreateTicketSheetState extends State<_CreateTicketSheet> {
       description: _descCtrl.text.trim(),
       priority: _priority,
     );
-    if (mounted) {
-      setState(() => _saving = false);
-      if (result != null) {
-        Navigator.pop(context);
-        widget.onCreated();
-        _toast(context,
-            'Ticket #${result.id} created. Our team will respond shortly.');
-      } else {
-        setState(() => _err = 'Failed to create ticket. Please try again.');
-      }
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (result == null) {
+      setState(() => _err = 'Failed to create ticket. Please try again.');
+      return;
     }
+    final ticketRef = formatTicketNumberFromTicket(result);
+    if (_sheetClosed || !context.mounted) return;
+    _sheetClosed = true;
+    await Navigator.of(context).maybePop(_CreateTicketSheetResult(ticketRef));
   }
 
   @override
@@ -4449,7 +4765,11 @@ class _CreateTicketSheetState extends State<_CreateTicketSheet> {
                           style: _ts(12, FontWeight.w400, Colors.white70)),
                     ])),
                 GestureDetector(
-                  onTap: () => Navigator.pop(context),
+                  onTap: () {
+                    if (_sheetClosed || !context.mounted) return;
+                    _sheetClosed = true;
+                    Navigator.of(context).maybePop();
+                  },
                   child: const Icon(Icons.close_rounded, color: Colors.white70),
                 ),
               ]),
@@ -5314,8 +5634,7 @@ class _SettingsTab extends StatefulWidget {
 }
 
 class _SettingsTabState extends State<_SettingsTab> {
-  String _view =
-      'menu'; // menu | profile | security | plans
+  String _view = 'menu'; // menu | profile | security | plans
   Map<String, dynamic> _profile = {};
   bool _loadingProfile = false;
 
@@ -6227,8 +6546,8 @@ class _PlansViewState extends State<_PlansView> {
   @override
   void initState() {
     super.initState();
-    _currentPlanId =
-        _toInt(widget.user['subscriptionPlanId'] ?? widget.user['subscriptionPlan']?['id']);
+    _currentPlanId = _toInt(widget.user['subscriptionPlanId'] ??
+        widget.user['subscriptionPlan']?['id']);
     _load();
   }
 

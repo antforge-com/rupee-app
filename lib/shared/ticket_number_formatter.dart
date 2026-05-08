@@ -1,10 +1,16 @@
 import 'package:finadvise/models/models.dart';
 import 'package:intl/intl.dart';
 
-String formatTicketNumberFromTicket(Ticket ticket) =>
-    formatTicketNumber(createdAt: ticket.createdAt);
+String formatTicketNumberFromTicket(Ticket ticket) => formatTicketNumber(
+      ticketNumber: ticket.ticketNumber,
+      createdAt: ticket.createdAt,
+    );
 
-String formatTicketNumber({String? createdAt}) {
+String formatTicketNumber({String? ticketNumber, String? createdAt}) {
+  final backendNumber = ticketNumber?.trim() ?? '';
+  if (backendNumber.isNotEmpty) {
+    return backendNumber;
+  }
   final resolvedDate = _parseTicketDate(createdAt) ?? DateTime.now();
   return DateFormat('MM/yy/dd').format(resolvedDate);
 }
