@@ -9,6 +9,8 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:dio/dio.dart' show MultipartFile;
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -3962,9 +3964,10 @@ class _TicketsTabState extends State<_TicketsTab> {
     'PENDING',
     'RESOLVED',
     'CLOSED',
+    'ESCALATED',
   ];
   String _filter =
-      'ALL'; // ALL | NEW | OPEN | IN_PROGRESS | PENDING | RESOLVED | CLOSED
+      'ALL'; // ALL | NEW | OPEN | IN_PROGRESS | PENDING | RESOLVED | CLOSED | ESCALATED
   static const String _supportMailbox = 'support@meetthemasters.in';
 
   @override
@@ -3982,12 +3985,89 @@ class _TicketsTabState extends State<_TicketsTab> {
 
   int get _uid => (widget.user['id'] as num?)?.toInt() ?? 0;
 
+  String _normalizeTicketStatus(dynamic raw) {
+    final value = raw
+        .toString()
+        .toUpperCase()
+        .replaceAll('-', '_')
+        .replaceAll(RegExp(r'\s+'), '_')
+        .trim();
+    const map = <String, String>{
+      'NEW': 'NEW',
+      'OPEN': 'OPEN',
+      'IN_PROGRESS': 'IN_PROGRESS',
+      'INPROGRESS': 'IN_PROGRESS',
+      'PENDING': 'PENDING',
+      'RESOLVED': 'RESOLVED',
+      'CLOSED': 'CLOSED',
+      'ESCALATED': 'ESCALATED',
+      'ESCALATE': 'ESCALATED',
+    };
+    return map[value] ?? value;
+  }
+
+  bool _isEscalated(Map<String, dynamic> ticket) {
+    final status = _normalizeTicketStatus(ticket['status']);
+    final escalated =
+        ticket['escalated'] == true || ticket['isEscalated'] == true;
+    return status == 'ESCALATED' || escalated;
+  }
+
+  Map<String, dynamic> _normalizeTicket(Map<String, dynamic> raw) {
+    final out = Map<String, dynamic>.from(raw);
+    out['status'] = _normalizeTicketStatus(out['status']);
+
+    final category = out['category'];
+    if (category is Map) {
+      out['category'] = (category['name'] ??
+              category['categoryName'] ??
+              category['label'] ??
+              category['id'] ??
+              out['categoryName'] ??
+              out['category_name'] ??
+              out['categoryTitle'] ??
+              'General')
+          .toString()
+          .trim();
+    } else {
+      final cat = (category ??
+              out['categoryName'] ??
+              out['category_name'] ??
+              out['categoryTitle'] ??
+              'General')
+          .toString()
+          .trim();
+      out['category'] = cat.isEmpty ? 'General' : cat;
+    }
+
+    final priority = (out['priority'] ?? 'MEDIUM')
+        .toString()
+        .toUpperCase()
+        .replaceAll('-', '_')
+        .replaceAll(RegExp(r'\s+'), '_')
+        .trim();
+    out['priority'] = priority.isEmpty ? 'MEDIUM' : priority;
+
+    return out;
+  }
+
   Future<void> _load() async {
     setState(() => _loading = true);
     final list = await _ticketService.getTicketsByUser(_uid);
     if (mounted)
       setState(() {
-        _tickets = list.map((t) => t.toJson()).toList();
+        final normalized =
+            list.map((t) => _normalizeTicket(t.toJson())).toList()
+              ..sort((a, b) {
+                final bDate =
+                    DateTime.tryParse((b['createdAt'] ?? '').toString()) ??
+                        DateTime.fromMillisecondsSinceEpoch(0);
+                final aDate =
+                    DateTime.tryParse((a['createdAt'] ?? '').toString()) ??
+                        DateTime.fromMillisecondsSinceEpoch(0);
+                return bDate.compareTo(aDate);
+              });
+        _tickets = normalized;
         _loading = false;
       });
     if (mounted &&
@@ -4010,7 +4090,8 @@ class _TicketsTabState extends State<_TicketsTab> {
   int _countByStatus(String status) {
     if (status == 'ALL') return _tickets.length;
     return _tickets.where((t) {
-      final s = (t['status'] ?? '').toString().toUpperCase();
+      final s = _normalizeTicketStatus(t['status']);
+      if (status == 'ESCALATED') return _isEscalated(t);
       return s == status;
     }).length;
   }
@@ -4018,7 +4099,8 @@ class _TicketsTabState extends State<_TicketsTab> {
   List<Map<String, dynamic>> get _filtered {
     if (_filter == 'ALL') return _tickets;
     return _tickets.where((t) {
-      final s = (t['status'] ?? '').toString().toUpperCase();
+      final s = _normalizeTicketStatus(t['status']);
+      if (_filter == 'ESCALATED') return _isEscalated(t);
       return s == _filter;
     }).toList();
   }
@@ -4086,21 +4168,18 @@ class _TicketsTabState extends State<_TicketsTab> {
         .join('&');
   }
 
-  Future<void> _openSupportEmailApp() async {
+  // ── Actual mailto: launcher (called from within the compose dialog) ────────
+  Future<void> _launchMailto({
+    required String subject,
+    String body = '',
+  }) async {
     final messenger = ScaffoldMessenger.maybeOf(context);
-    const template = 'Hi Support Team,\n\n'
-        'I need help with:\n\n'
-        '- Issue:\n'
-        '- Steps to reproduce:\n'
-        '- Expected result:\n'
-        '- Actual result:\n\n'
-        'Thanks,';
     final uri = Uri(
       scheme: 'mailto',
       path: _supportMailbox,
       query: _mailtoQuery({
-        'subject': 'Support Request',
-        'body': template,
+        if (subject.isNotEmpty) 'subject': subject,
+        if (body.isNotEmpty) 'body': body,
       }),
     );
 
@@ -4162,10 +4241,305 @@ class _TicketsTabState extends State<_TicketsTab> {
       );
   }
 
+  // ── Shows the web-style compose dialog BEFORE launching the email app ──────
+  Future<void> _openSupportEmailApp() async {
+    const template = 'Hi Support Team,\n\n'
+        'I need help with:\n\n'
+        '- Issue:\n'
+        '- Steps to reproduce:\n'
+        '- Expected result:\n'
+        '- Actual result:\n\n'
+        'Thanks,';
+
+    final subjectCtrl = TextEditingController(text: 'Support Request');
+    final bodyCtrl = TextEditingController(text: template);
+
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        builder: (dialogCtx) {
+          return StatefulBuilder(
+            builder: (ctx, setDialogState) {
+              return Dialog(
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16)),
+                insetPadding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // ── Blue header ──────────────────────────────────────
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.fromLTRB(20, 20, 16, 20),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF2563EB),
+                        borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(16),
+                          topRight: Radius.circular(16),
+                        ),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.mail_rounded,
+                              color: Colors.white, size: 22),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Email to Ticket',
+                                    style:
+                                        _ts(16, FontWeight.w800, Colors.white)),
+                                const SizedBox(height: 2),
+                                Text(
+                                    'Send an email to create a ticket automatically',
+                                    style: _ts(12, FontWeight.w400,
+                                        Colors.white.withOpacity(0.8))),
+                              ],
+                            ),
+                          ),
+                          GestureDetector(
+                            onTap: () => Navigator.of(ctx).pop(),
+                            child: const Icon(Icons.close,
+                                color: Colors.white, size: 22),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // ── Scrollable body ──────────────────────────────────
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // To: row
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFEFF6FF),
+                                borderRadius: BorderRadius.circular(10),
+                                border:
+                                    Border.all(color: const Color(0xFFBFDBFE)),
+                              ),
+                              child: Row(
+                                children: [
+                                  Text('To: ',
+                                      style:
+                                          _ts(13, FontWeight.w600, _C.text3)),
+                                  Expanded(
+                                    child: Text(_supportMailbox,
+                                        style: _ts(
+                                            13, FontWeight.w700, _C.blueMid),
+                                        overflow: TextOverflow.ellipsis),
+                                  ),
+                                  // Copy Address
+                                  GestureDetector(
+                                    onTap: () async {
+                                      await Clipboard.setData(
+                                          ClipboardData(text: _supportMailbox));
+                                      if (!mounted) return;
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        SnackBar(
+                                          content: const Text(
+                                              'Email address copied'),
+                                          backgroundColor: _C.success,
+                                          duration: const Duration(seconds: 2),
+                                        ),
+                                      );
+                                    },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 5),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(color: _C.border),
+                                      ),
+                                      child: Text('Copy Address',
+                                          style: _ts(
+                                              11, FontWeight.w600, _C.text2)),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  // Open Email App (inline)
+                                  GestureDetector(
+                                    onTap: () async {
+                                      Navigator.of(ctx).pop();
+                                      await _launchMailto(
+                                        subject: subjectCtrl.text.trim().isEmpty
+                                            ? 'Support Request'
+                                            : subjectCtrl.text.trim(),
+                                        body: bodyCtrl.text.trim(),
+                                      );
+                                    },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 5),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF2563EB),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text('Open Email App',
+                                          style: _ts(11, FontWeight.w600,
+                                              Colors.white)),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            // Subject
+                            Text('SUBJECT',
+                                style: _ts(11, FontWeight.w700, _C.text3,
+                                    ls: 0.5)),
+                            const SizedBox(height: 6),
+                            TextField(
+                              controller: subjectCtrl,
+                              style: _ts(14, FontWeight.w400, _C.text1),
+                              textInputAction: TextInputAction.next,
+                              decoration: InputDecoration(
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: const BorderSide(
+                                        color: Color(0xFFE2E8F0))),
+                                enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: const BorderSide(
+                                        color: Color(0xFFE2E8F0))),
+                                focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: const BorderSide(
+                                        color: Color(0xFF2563EB))),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 12),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            // Message
+                            Text('MESSAGE',
+                                style: _ts(11, FontWeight.w700, _C.text3,
+                                    ls: 0.5)),
+                            const SizedBox(height: 6),
+                            TextField(
+                              controller: bodyCtrl,
+                              maxLines: 8,
+                              minLines: 6,
+                              style: _ts(13, FontWeight.w400, _C.text1),
+                              decoration: InputDecoration(
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: const BorderSide(
+                                        color: Color(0xFFE2E8F0))),
+                                enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: const BorderSide(
+                                        color: Color(0xFFE2E8F0))),
+                                focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: const BorderSide(
+                                        color: Color(0xFF2563EB))),
+                                contentPadding: const EdgeInsets.all(14),
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            // Tip text
+                            Text(
+                              'Tip: Attach screenshots/documents in your email. Your email will be converted into a ticket and visible in your Tickets list.',
+                              style: _ts(11.5, FontWeight.w400, _C.text3,
+                                  height: 1.4),
+                            ),
+                            const SizedBox(height: 18),
+                            // Bottom action buttons
+                            Row(children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: () async {
+                                    final content =
+                                        'To: $_supportMailbox\nSubject: ${subjectCtrl.text.trim()}\n\n${bodyCtrl.text.trim()}';
+                                    await Clipboard.setData(
+                                        ClipboardData(text: content));
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                            'Template copied to clipboard'),
+                                        backgroundColor: _C.success,
+                                        duration: Duration(seconds: 2),
+                                      ),
+                                    );
+                                  },
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: _C.text2,
+                                    side: const BorderSide(
+                                        color: Color(0xFFE2E8F0)),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 12),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(10)),
+                                  ),
+                                  child: Text('Copy Template',
+                                      style:
+                                          _ts(13, FontWeight.w600, _C.text2)),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: () async {
+                                    Navigator.of(ctx).pop();
+                                    await _launchMailto(
+                                      subject: subjectCtrl.text.trim().isEmpty
+                                          ? 'Support Request'
+                                          : subjectCtrl.text.trim(),
+                                      body: bodyCtrl.text.trim(),
+                                    );
+                                  },
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF2563EB),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 12),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(10)),
+                                    elevation: 0,
+                                  ),
+                                  child: Text('Send Email',
+                                      style: _ts(
+                                          13, FontWeight.w700, Colors.white)),
+                                ),
+                              ),
+                            ]),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      subjectCtrl.dispose();
+      bodyCtrl.dispose();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isGuest = _isGuest(widget.user);
-    final totalOpen = _countByStatus('NEW') + _countByStatus('OPEN');
+    final totalOpen = _countByStatus('NEW') +
+        _countByStatus('OPEN') +
+        _countByStatus('IN_PROGRESS') +
+        _countByStatus('PENDING');
     final totalEscalated = _countByStatus('ESCALATED');
     final totalResolved = _countByStatus('RESOLVED');
     final totalClosed = _countByStatus('CLOSED');
@@ -4209,7 +4583,7 @@ class _TicketsTabState extends State<_TicketsTab> {
                 ),
                 const SizedBox(width: 8),
                 _ticketActionBtn(
-                  label: 'Ticket',
+                  label: 'New Ticket',
                   icon: Icons.add_rounded,
                   onTap: () => _runAction(
                     'ticket',
@@ -4335,7 +4709,7 @@ class _TicketsTabState extends State<_TicketsTab> {
                                                 height: 1.4)),
                                         const SizedBox(height: 6),
                                         Text(
-                                            'support@meetthemasters.in • Use keywords like "urgent" or "billing" for faster routing.',
+                                            '$_supportMailbox • Use keywords like "urgent" or "billing" for faster routing.',
                                             style: _ts(
                                                 12, FontWeight.w600, _C.blue,
                                                 height: 1.35)),
@@ -4668,15 +5042,19 @@ class _CreateTicketSheetState extends State<_CreateTicketSheet> {
   String _priority = 'MEDIUM';
   final _descCtrl = TextEditingController();
   bool _saving = false;
+  bool _pickingAttachment = false;
+  PlatformFile? _attachment;
   String _err = '';
   bool _sheetClosed = false;
+  Timer? _slowHintTimer;
 
-  final _priorities = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];
+  final _priorities = ['LOW', 'MEDIUM', 'HIGH', 'URGENT', 'CRITICAL'];
   final _prioLabels = {
     'LOW': 'Low',
     'MEDIUM': 'Medium',
     'HIGH': 'High',
-    'URGENT': 'Urgent'
+    'URGENT': 'Urgent',
+    'CRITICAL': 'Critical',
   };
 
   @override
@@ -4687,8 +5065,18 @@ class _CreateTicketSheetState extends State<_CreateTicketSheet> {
 
   @override
   void dispose() {
+    _slowHintTimer?.cancel();
     _descCtrl.dispose();
     super.dispose();
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes <= 0) return '0 B';
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    }
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
   Future<void> _loadCats() async {
@@ -4698,6 +5086,38 @@ class _CreateTicketSheetState extends State<_CreateTicketSheet> {
         _categories = cats;
         _loadingCats = false;
       });
+  }
+
+  Future<void> _pickAttachment() async {
+    if (_pickingAttachment || _saving) return;
+    setState(() => _pickingAttachment = true);
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: false,
+        withData: true,
+        type: FileType.custom,
+        allowedExtensions: const [
+          'jpg',
+          'jpeg',
+          'png',
+          'pdf',
+          'csv',
+          'doc',
+          'docx',
+          'txt',
+        ],
+      );
+      if (!mounted) return;
+      final picked = result?.files.first;
+      if (picked == null) return;
+      setState(() => _attachment = picked);
+    } finally {
+      if (mounted) {
+        setState(() => _pickingAttachment = false);
+      } else {
+        _pickingAttachment = false;
+      }
+    }
   }
 
   Future<void> _submit() async {
@@ -4714,12 +5134,48 @@ class _CreateTicketSheetState extends State<_CreateTicketSheet> {
       _saving = true;
       _err = '';
     });
+    _slowHintTimer?.cancel();
+    _slowHintTimer = Timer(const Duration(seconds: 15), () {
+      if (!mounted || !_saving) return;
+      setState(() {
+        _err =
+            'Still submitting - the server is taking a moment, please wait...';
+      });
+    });
+
+    MultipartFile? attachmentFile;
+    if (_attachment != null) {
+      try {
+        if (_attachment!.bytes != null) {
+          attachmentFile = MultipartFile.fromBytes(
+            _attachment!.bytes!,
+            filename: _attachment!.name,
+          );
+        } else if ((_attachment!.path ?? '').isNotEmpty) {
+          attachmentFile = await MultipartFile.fromFile(
+            _attachment!.path!,
+            filename: _attachment!.name,
+          );
+        }
+      } catch (_) {
+        if (!mounted) return;
+        setState(() {
+          _saving = false;
+          _err = 'Attachment could not be read. Please choose another file.';
+        });
+        _slowHintTimer?.cancel();
+        return;
+      }
+    }
+
     final result = await _ticketService.createTicket(
       userId: widget.userId,
       category: _category!,
       description: _descCtrl.text.trim(),
       priority: _priority,
+      attachment: attachmentFile,
     );
+    _slowHintTimer?.cancel();
     if (!mounted) return;
     setState(() => _saving = false);
     if (result == null) {
@@ -4853,6 +5309,7 @@ class _CreateTicketSheetState extends State<_CreateTicketSheet> {
                                 'MEDIUM': _C.warning,
                                 'HIGH': const Color(0xFFEA580C),
                                 'URGENT': _C.danger,
+                                'CRITICAL': _C.purple,
                               };
                               final clr = colors[p] ?? _C.text3;
                               return Expanded(
@@ -4881,6 +5338,94 @@ class _CreateTicketSheetState extends State<_CreateTicketSheet> {
                                 ),
                               );
                             }).toList()),
+
+                            const SizedBox(height: 20),
+
+                            // Attachment
+                            Text('ATTACHMENT (OPTIONAL)',
+                                style: _ts(10, FontWeight.w800, _C.text4,
+                                    ls: 0.7)),
+                            const SizedBox(height: 10),
+                            OutlinedButton.icon(
+                              onPressed:
+                                  _pickingAttachment ? null : _pickAttachment,
+                              icon: _pickingAttachment
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.attach_file_rounded,
+                                      size: 16),
+                              label: Text(
+                                _attachment == null
+                                    ? 'Choose File'
+                                    : 'Change File',
+                                style: _ts(12.5, FontWeight.w700, _C.text2),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _C.text2,
+                                side: const BorderSide(color: _C.border),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 10),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                            ),
+                            if (_attachment != null) ...[
+                              const SizedBox(height: 8),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 10),
+                                decoration: BoxDecoration(
+                                  color: _C.bg,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(color: _C.border),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.description_outlined,
+                                        size: 16, color: _C.text3),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            _attachment!.name,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: _ts(
+                                                12, FontWeight.w600, _C.text2),
+                                          ),
+                                          Text(
+                                            _formatFileSize(_attachment!.size),
+                                            style: _ts(
+                                                11, FontWeight.w500, _C.text4),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    IconButton(
+                                      onPressed: _saving
+                                          ? null
+                                          : () => setState(
+                                              () => _attachment = null),
+                                      visualDensity: VisualDensity.compact,
+                                      icon: const Icon(Icons.close_rounded,
+                                          size: 16),
+                                      color: _C.text4,
+                                      tooltip: 'Remove file',
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
 
                             const SizedBox(height: 20),
 

@@ -243,16 +243,95 @@ class TicketService {
     int? consultantId,
     MultipartFile? attachment,
   }) async {
-    try {
-      final resolvedCategory = category.trim();
-      final categoryId = await _resolveCategoryId(resolvedCategory);
+    final resolvedCategory = category.trim();
+    String normalizeText(String value) =>
+        value.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+    final normalizedDescription = normalizeText(description);
+    final normalizedPriority = priority.trim().toUpperCase();
+    final requestStartedAt = DateTime.now();
+    final categoryId = await _resolveCategoryId(resolvedCategory);
 
+    bool isRecoverableCreationError(Object error) {
+      if (error is DioException) {
+        if (error.type == DioExceptionType.connectionTimeout ||
+            error.type == DioExceptionType.sendTimeout ||
+            error.type == DioExceptionType.receiveTimeout) {
+          return true;
+        }
+        final code = error.response?.statusCode;
+        if (code == 502 || code == 503 || code == 504) {
+          return true;
+        }
+        final msg = (error.message ?? '').toLowerCase();
+        if (msg.contains('timed out') || msg.contains('timeout')) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    Ticket? findRecoveredTicket(List<Ticket> tickets) {
+      final candidates = tickets.where((ticket) {
+        if (ticket.userId != null && ticket.userId != userId) return false;
+        if (normalizeText(ticket.description ?? '') != normalizedDescription) {
+          return false;
+        }
+
+        final ticketCategory = ticket.category.trim().toLowerCase();
+        if (resolvedCategory.isNotEmpty &&
+            ticketCategory.isNotEmpty &&
+            ticketCategory != resolvedCategory.toLowerCase()) {
+          return false;
+        }
+
+        if (ticket.priority.trim().toUpperCase() != normalizedPriority) {
+          return false;
+        }
+
+        final createdAt = DateTime.tryParse(ticket.createdAt ?? '');
+        if (createdAt == null) return true;
+        return createdAt.toLocal().isAfter(
+            requestStartedAt.toLocal().subtract(const Duration(minutes: 1)));
+      }).toList();
+
+      if (candidates.isEmpty) return null;
+      candidates.sort((a, b) {
+        final bTime = DateTime.tryParse(b.createdAt ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        final aTime = DateTime.tryParse(a.createdAt ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        return bTime.compareTo(aTime);
+      });
+      return candidates.first;
+    }
+
+    Future<Ticket?> recoverCreatedTicket() async {
+      final deadline = DateTime.now().add(const Duration(seconds: 25));
+      while (DateTime.now().isBefore(deadline)) {
+        try {
+          final latest = await getTicketsByUser(
+            userId,
+            page: 0,
+            size: 100,
+            sortBy: 'createdAt',
+          );
+          final recovered = findRecoveredTicket(latest);
+          if (recovered != null) return recovered;
+        } catch (_) {
+          // Ignore transient read failures while polling recovery.
+        }
+        await Future<void>.delayed(const Duration(seconds: 3));
+      }
+      return null;
+    }
+
+    try {
       final ticketData = <String, dynamic>{
         'userId': userId,
         'category': resolvedCategory,
         if (categoryId != null) 'categoryId': categoryId,
-        'description': description,
-        'priority': priority.toUpperCase(),
+        'description': description.trim(),
+        'priority': normalizedPriority,
         'status': 'NEW',
         if (consultantId != null) 'consultantId': consultantId,
       };
@@ -267,22 +346,49 @@ class TicketService {
       final response = await _apiClient.dio.post(
         '/api/tickets',
         data: formData,
+        options: Options(
+          sendTimeout: const Duration(seconds: 45),
+          receiveTimeout: const Duration(seconds: 45),
+        ),
       );
-      return Ticket.fromJson(response.data);
-    } catch (_) {
+      final raw = response.data;
+      if (raw is Map) {
+        return Ticket.fromJson(Map<String, dynamic>.from(raw));
+      }
+      return null;
+    } catch (error) {
+      if (isRecoverableCreationError(error)) {
+        final recovered = await recoverCreatedTicket();
+        if (recovered != null) return recovered;
+      }
       try {
         final fallbackBody = <String, dynamic>{
           'userId': userId,
-          'category': category.trim(),
-          'description': description,
-          'priority': priority.toUpperCase(),
+          'category': resolvedCategory,
+          if (categoryId != null) 'categoryId': categoryId,
+          'description': description.trim(),
+          'priority': normalizedPriority,
           'status': 'NEW',
           if (consultantId != null) 'consultantId': consultantId,
         };
-        final response =
-            await _apiClient.dio.post('/api/tickets', data: fallbackBody);
-        return Ticket.fromJson(response.data);
-      } catch (_) {
+        final response = await _apiClient.dio.post(
+          '/api/tickets',
+          data: fallbackBody,
+          options: Options(
+            sendTimeout: const Duration(seconds: 45),
+            receiveTimeout: const Duration(seconds: 45),
+          ),
+        );
+        final raw = response.data;
+        if (raw is Map) {
+          return Ticket.fromJson(Map<String, dynamic>.from(raw));
+        }
+        return null;
+      } catch (fallbackError) {
+        if (isRecoverableCreationError(fallbackError)) {
+          final recovered = await recoverCreatedTicket();
+          if (recovered != null) return recovered;
+        }
         return null;
       }
     }

@@ -1138,7 +1138,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
         border: Border.all(color: accent.withValues(alpha: 0.35)),
       ),
       child: Text(
-        isChecking ? 'CHECKING' : (isDown ? 'DOWN' : 'ACTIVE'),
+        isChecking ? 'CHECKING' : (isDown ? 'DOWN' : 'HEALTHY'),
         style:
             TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: accent),
       ),
@@ -1217,7 +1217,8 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
                   ConstrainedBox(
                     constraints: const BoxConstraints(minWidth: 104),
                     child: OutlinedButton(
-                      onPressed: () => _checkEmail(notify: true),
+                      onPressed:
+                          isChecking ? null : () => _checkEmail(notify: true),
                       style: OutlinedButton.styleFrom(
                         side: BorderSide(color: accent.withValues(alpha: 0.45)),
                         foregroundColor: accent,

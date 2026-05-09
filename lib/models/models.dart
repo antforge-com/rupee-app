@@ -83,6 +83,27 @@ double? _asDouble(dynamic value) {
   return double.tryParse(value.toString());
 }
 
+bool _toBool(dynamic value, {bool fallback = false}) {
+  if (value is bool) return value;
+  if (value is num) return value != 0;
+  if (value is String) {
+    final normalized = value.trim().toLowerCase();
+    if (normalized == 'true' ||
+        normalized == '1' ||
+        normalized == 'yes' ||
+        normalized == 'y') {
+      return true;
+    }
+    if (normalized == 'false' ||
+        normalized == '0' ||
+        normalized == 'no' ||
+        normalized == 'n') {
+      return false;
+    }
+  }
+  return fallback;
+}
+
 Map<String, dynamic>? _timeToMap(dynamic value) {
   if (value is Map) return Map<String, dynamic>.from(value);
   if (value is String && value.trim().isNotEmpty) {
@@ -613,6 +634,41 @@ class Ticket {
         'comments': comments.map((c) => c.toJson()).toList(),
       };
 
+  static String _normalizeStatus(dynamic value) {
+    final raw = _cleanText(value, fallback: 'NEW')
+        .toUpperCase()
+        .replaceAll('-', '_')
+        .replaceAll(RegExp(r'\s+'), '_');
+    const aliases = <String, String>{
+      'NEW': 'NEW',
+      'OPEN': 'OPEN',
+      'IN_PROGRESS': 'IN_PROGRESS',
+      'INPROGRESS': 'IN_PROGRESS',
+      'PENDING': 'PENDING',
+      'RESOLVED': 'RESOLVED',
+      'CLOSED': 'CLOSED',
+      'ESCALATED': 'ESCALATED',
+      'ESCALATE': 'ESCALATED',
+    };
+    return aliases[raw] ?? raw;
+  }
+
+  static String _normalizePriority(dynamic value) {
+    final raw = _cleanText(value, fallback: 'MEDIUM')
+        .toUpperCase()
+        .replaceAll('-', '_')
+        .replaceAll(RegExp(r'\s+'), '_');
+    const aliases = <String, String>{
+      'LOW': 'LOW',
+      'MEDIUM': 'MEDIUM',
+      'NORMAL': 'MEDIUM',
+      'HIGH': 'HIGH',
+      'URGENT': 'URGENT',
+      'CRITICAL': 'CRITICAL',
+    };
+    return aliases[raw] ?? raw;
+  }
+
   factory Ticket.fromJson(Map<String, dynamic> json) => Ticket(
         id: json['id'] ?? 0,
         ticketNumber: _cleanNullableText(
@@ -633,8 +689,8 @@ class Ticket {
         attachmentUrl: _cleanNullableText(
           json['attachmentUrl'] ?? json['attachment'] ?? json['fileUrl'],
         ),
-        status: _cleanText(json['status'], fallback: 'NEW'),
-        priority: _cleanText(json['priority'], fallback: 'MEDIUM'),
+        status: _normalizeStatus(json['status']),
+        priority: _normalizePriority(json['priority']),
         userId: json['userId'] ?? json['user']?['id'],
         userName: _cleanNullableText(
           json['userName'] ??
@@ -664,8 +720,14 @@ class Ticket {
         updatedAt: json['updatedAt']?.toString(),
         slaRespondBy: json['slaRespondBy']?.toString(),
         slaResolveBy: json['slaResolveBy']?.toString(),
-        slaBreached: json['slaBreached'] ?? json['isSlaBreached'] ?? false,
-        escalated: json['escalated'] ?? json['isEscalated'] ?? false,
+        slaBreached: _toBool(
+          json['slaBreached'] ?? json['isSlaBreached'],
+          fallback: false,
+        ),
+        escalated: _toBool(
+          json['escalated'] ?? json['isEscalated'],
+          fallback: false,
+        ),
         slaHours: json['slaHours'],
         comments: (json['comments'] as List<dynamic>? ?? [])
             .map((c) => TicketComment.fromJson(c))
@@ -683,10 +745,10 @@ class Ticket {
           return SlaInfo(status: 'breached', hoursRemaining: remaining);
         final slaMap = {
           'LOW': 72,
-          'MEDIUM': 48,
-          'HIGH': 24,
-          'URGENT': 8,
-          'CRITICAL': 4
+          'MEDIUM': 24,
+          'HIGH': 8,
+          'URGENT': 4,
+          'CRITICAL': 2
         };
         final maxHours = slaHours ?? slaMap[priority.toUpperCase()] ?? 48;
         if (remaining <= maxHours * 0.25)
@@ -700,10 +762,10 @@ class Ticket {
     try {
       final slaMap = {
         'LOW': 72,
-        'MEDIUM': 48,
-        'HIGH': 24,
-        'URGENT': 8,
-        'CRITICAL': 4
+        'MEDIUM': 24,
+        'HIGH': 8,
+        'URGENT': 4,
+        'CRITICAL': 2
       };
       final maxHours = slaHours ?? slaMap[priority.toUpperCase()] ?? 48;
       final created = DateTime.parse(createdAt!);

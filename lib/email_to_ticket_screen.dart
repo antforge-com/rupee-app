@@ -3,6 +3,7 @@ import 'package:finadvise/shared_widgets.dart';
 import 'package:finadvise/services/services.dart';
 import 'package:finadvise/shared/ticket_number_formatter.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -278,22 +279,28 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
         : null;
     if (!mounted) return;
     final subjectCtrl = TextEditingController(text: 'Support Request');
-    final bodyCtrl = TextEditingController();
+    final bodyCtrl = TextEditingController(
+      text: allowDirectCreation
+          ? ''
+          : 'Hi Support Team,\n\n'
+              'I need help with:\n\n'
+              '- Issue:\n'
+              '- Steps to reproduce:\n'
+              '- Expected result:\n'
+              '- Actual result:\n\n'
+              'Thanks,',
+    );
     String selectedCategory = categories.first;
     String selectedPriority = 'MEDIUM';
     bool creatingTicket = false;
     bool composingSheetClosed = false;
 
     try {
-      final composeResult = await showModalBottomSheet<_ComposeSupportResult>(
+      final composeResult = await showDialog<_ComposeSupportResult>(
         context: context,
+        barrierDismissible: true,
         useRootNavigator: true,
-        isScrollControlled: true,
-        backgroundColor: Colors.white,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        builder: (sheetContext) {
+        builder: (dialogCtx) {
           return StatefulBuilder(
             builder: (sheetContext, setSheetState) {
               Future<void> closeComposerSheetIfOpen([
@@ -319,9 +326,9 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
                 if (!mounted) return;
                 if (!launched) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
+                    const SnackBar(
                       content: Text(
-                        'Unable to open email app right now. You can still create the ticket below.',
+                        'Unable to open email app right now.',
                       ),
                       backgroundColor: AppColors.warning,
                     ),
@@ -394,190 +401,395 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
                 );
               }
 
-              return Padding(
-                padding: EdgeInsets.only(
-                  left: 20,
-                  right: 20,
-                  top: 20,
-                  bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 20,
-                ),
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+              return Dialog(
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16)),
+                insetPadding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // ── Blue header ──────────────────────────────────────
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.fromLTRB(20, 20, 16, 20),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF2563EB),
+                        borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(16),
+                          topRight: Radius.circular(16),
+                        ),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          const Icon(Icons.mail_rounded,
+                              color: Colors.white, size: 22),
+                          const SizedBox(width: 10),
                           Expanded(
-                            child: Text(
-                              'Compose Support Email',
-                              style: GoogleFonts.inter(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w800,
-                                color: AppColors.textPrimary,
-                              ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Email to Ticket',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Send an email to create a ticket automatically',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w400,
+                                    color: Colors.white.withOpacity(0.85),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          IconButton(
-                            icon: const Icon(Icons.close_rounded),
-                            onPressed: closeComposerSheetIfOpen,
+                          GestureDetector(
+                            onTap: closeComposerSheetIfOpen,
+                            child: const Icon(Icons.close,
+                                color: Colors.white, size: 22),
                           ),
                         ],
                       ),
-                      Text(
-                        'Support mailbox: $_mailbox',
-                        style: GoogleFonts.inter(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textMuted,
+                    ),
+                    // ── Body ────────────────────────────────────────────
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.only(
+                          left: 20,
+                          right: 20,
+                          top: 20,
+                          bottom:
+                              MediaQuery.of(sheetContext).viewInsets.bottom +
+                                  20,
                         ),
-                      ),
-                      const SizedBox(height: 14),
-                      TextField(
-                        controller: subjectCtrl,
-                        textInputAction: TextInputAction.next,
-                        decoration: InputDecoration(
-                          labelText: 'Subject',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          filled: true,
-                          fillColor: const Color(0xFFF8FAFC),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      if (allowDirectCreation) ...[
-                        DropdownButtonFormField<String>(
-                          initialValue: selectedCategory,
-                          decoration: InputDecoration(
-                            labelText: 'Category',
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            filled: true,
-                            fillColor: const Color(0xFFF8FAFC),
-                          ),
-                          items: categories
-                              .map(
-                                (item) => DropdownMenuItem<String>(
-                                  value: item,
-                                  child: Text(item),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            if (value == null) return;
-                            setSheetState(() => selectedCategory = value);
-                          },
-                        ),
-                        const SizedBox(height: 10),
-                        DropdownButtonFormField<String>(
-                          initialValue: selectedPriority,
-                          decoration: InputDecoration(
-                            labelText: 'Priority',
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            filled: true,
-                            fillColor: const Color(0xFFF8FAFC),
-                          ),
-                          items: _composePriorities
-                              .map(
-                                (item) => DropdownMenuItem<String>(
-                                  value: item,
-                                  child: Text(item),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            if (value == null) return;
-                            setSheetState(() => selectedPriority = value);
-                          },
-                        ),
-                        const SizedBox(height: 10),
-                      ],
-                      TextField(
-                        controller: bodyCtrl,
-                        maxLines: 6,
-                        minLines: 4,
-                        decoration: InputDecoration(
-                          labelText: 'Issue Details',
-                          hintText:
-                              'Describe your issue. This text is used in email body and ticket description.',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          filled: true,
-                          fillColor: const Color(0xFFF8FAFC),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton(
-                          onPressed: creatingTicket ? null : openEmailApp,
-                          style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: AppColors.primary),
-                            foregroundColor: AppColors.primary,
-                            padding: const EdgeInsets.symmetric(vertical: 13),
-                          ),
-                          child: Text(
-                            'Open Email App',
-                            style:
-                                GoogleFonts.inter(fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                      ),
-                      if (allowDirectCreation) ...[
-                        const SizedBox(height: 8),
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            onPressed: creatingTicket ? null : createTicketNow,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primary,
-                              padding: const EdgeInsets.symmetric(vertical: 13),
-                            ),
-                            child: creatingTicket
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : Text(
-                                    'Create Ticket Now',
-                                    style: GoogleFonts.inter(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w700,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // To: row with Copy Address + Open Email App
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFEFF6FF),
+                                borderRadius: BorderRadius.circular(10),
+                                border:
+                                    Border.all(color: const Color(0xFFBFDBFE)),
+                              ),
+                              child: Row(
+                                children: [
+                                  Text('To: ',
+                                      style: GoogleFonts.inter(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.textSecondary,
+                                      )),
+                                  Expanded(
+                                    child: Text(
+                                      _mailbox,
+                                      style: GoogleFonts.inter(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                        color: const Color(0xFF2563EB),
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
                                     ),
                                   ),
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 8),
-                      Text(
-                        allowDirectCreation
-                            ? 'Create Ticket Now sends directly to backend, so it appears in Admin Support Tickets immediately.'
-                            : 'Send this email from your registered account. Admin must click Poll Inbox to convert it into a ticket.',
-                        style: GoogleFonts.inter(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textMuted,
+                                  // Copy Address button
+                                  GestureDetector(
+                                    onTap: () async {
+                                      await Clipboard.setData(
+                                          ClipboardData(text: _mailbox));
+                                      if (!mounted) return;
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        const SnackBar(
+                                          content: Text('Email address copied'),
+                                          backgroundColor: AppColors.success,
+                                          duration: Duration(seconds: 2),
+                                        ),
+                                      );
+                                    },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 5),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(6),
+                                        border:
+                                            Border.all(color: AppColors.border),
+                                      ),
+                                      child: Text('Copy Address',
+                                          style: GoogleFonts.inter(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: AppColors.textPrimary,
+                                          )),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  // Open Email App (inline)
+                                  GestureDetector(
+                                    onTap: creatingTicket ? null : openEmailApp,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 5),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF2563EB),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text('Open Email App',
+                                          style: GoogleFonts.inter(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.white,
+                                          )),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                            // Subject
+                            Text(
+                              'SUBJECT',
+                              style: GoogleFonts.inter(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textSecondary,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            TextField(
+                              controller: subjectCtrl,
+                              textInputAction: TextInputAction.next,
+                              style: GoogleFonts.inter(fontSize: 14),
+                              decoration: InputDecoration(
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: const BorderSide(
+                                      color: Color(0xFFE2E8F0)),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: const BorderSide(
+                                      color: Color(0xFFE2E8F0)),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: const BorderSide(
+                                      color: Color(0xFF2563EB)),
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 12),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            if (allowDirectCreation) ...[
+                              DropdownButtonFormField<String>(
+                                initialValue: selectedCategory,
+                                decoration: InputDecoration(
+                                  labelText: 'Category',
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  filled: true,
+                                  fillColor: const Color(0xFFF8FAFC),
+                                ),
+                                items: categories
+                                    .map(
+                                      (item) => DropdownMenuItem<String>(
+                                        value: item,
+                                        child: Text(item),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (value) {
+                                  if (value == null) return;
+                                  setSheetState(() => selectedCategory = value);
+                                },
+                              ),
+                              const SizedBox(height: 10),
+                              DropdownButtonFormField<String>(
+                                initialValue: selectedPriority,
+                                decoration: InputDecoration(
+                                  labelText: 'Priority',
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  filled: true,
+                                  fillColor: const Color(0xFFF8FAFC),
+                                ),
+                                items: _composePriorities
+                                    .map(
+                                      (item) => DropdownMenuItem<String>(
+                                        value: item,
+                                        child: Text(item),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (value) {
+                                  if (value == null) return;
+                                  setSheetState(() => selectedPriority = value);
+                                },
+                              ),
+                              const SizedBox(height: 12),
+                            ],
+                            // Message
+                            Text(
+                              'MESSAGE',
+                              style: GoogleFonts.inter(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textSecondary,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            TextField(
+                              controller: bodyCtrl,
+                              maxLines: 6,
+                              minLines: 4,
+                              style: GoogleFonts.inter(fontSize: 13),
+                              decoration: InputDecoration(
+                                hintText: allowDirectCreation
+                                    ? 'Describe your issue. This text is used in email body and ticket description.'
+                                    : 'Hi Support Team,\n\nI need help with:\n\n- Issue:\n...',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: const BorderSide(
+                                      color: Color(0xFFE2E8F0)),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: const BorderSide(
+                                      color: Color(0xFFE2E8F0)),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: const BorderSide(
+                                      color: Color(0xFF2563EB)),
+                                ),
+                                contentPadding: const EdgeInsets.all(14),
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Text(
+                              'Tip: Attach screenshots/documents in your email. Your email will be converted into a ticket and visible in your Tickets list.',
+                              style: GoogleFonts.inter(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w400,
+                                color: AppColors.textMuted,
+                                height: 1.4,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            // Bottom buttons: Copy Template + Send Email
+                            Row(children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: () async {
+                                    final content =
+                                        'To: $_mailbox\nSubject: ${subjectCtrl.text.trim()}\n\n${bodyCtrl.text.trim()}';
+                                    await Clipboard.setData(
+                                        ClipboardData(text: content));
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                            'Template copied to clipboard'),
+                                        backgroundColor: AppColors.success,
+                                        duration: Duration(seconds: 2),
+                                      ),
+                                    );
+                                  },
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: AppColors.textPrimary,
+                                    side: const BorderSide(
+                                        color: Color(0xFFE2E8F0)),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 12),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(10)),
+                                  ),
+                                  child: Text(
+                                    'Copy Template',
+                                    style: GoogleFonts.inter(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: creatingTicket
+                                      ? null
+                                      : allowDirectCreation
+                                          ? createTicketNow
+                                          : openEmailApp,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF2563EB),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 12),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(10)),
+                                    elevation: 0,
+                                  ),
+                                  child: creatingTicket
+                                      ? const SizedBox(
+                                          width: 18,
+                                          height: 18,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
+                                        )
+                                      : Text(
+                                          allowDirectCreation
+                                              ? 'Create Ticket'
+                                              : 'Send Email',
+                                          style: GoogleFonts.inter(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                ),
+                              ),
+                            ]),
+                            const SizedBox(height: 8),
+                            Text(
+                              allowDirectCreation
+                                  ? 'Create Ticket sends directly to backend, so it appears in Admin Support Tickets immediately.'
+                                  : 'Send this email from your registered account. Admin must click Poll Inbox to convert it into a ticket.',
+                              style: GoogleFonts.inter(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w500,
+                                color: AppColors.textMuted,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               );
             },
           );
         },
-      ).whenComplete(() {
-        composingSheetClosed = true;
-      });
+      );
       if (!mounted || composeResult == null) return;
       if (composeResult.emailOpened) {
         ScaffoldMessenger.of(context).showSnackBar(
