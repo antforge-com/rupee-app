@@ -1056,7 +1056,15 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
         _shouldShowInjectedAutoResponder(comments);
     final visibleCount = _conversationCount(comments);
 
+    // Show the user's original issue description as the first chat bubble
+    // so admins can see the full context without scrolling to the Description section.
+    final desc = _t.description?.trim() ?? '';
+    final descBubble = (desc.isNotEmpty && desc != 'No description provided.')
+        ? _descriptionBubble(desc)
+        : null;
+
     final bubbles = <Widget>[
+      if (descBubble != null) descBubble,
       if (showInjectedAutoResponder) _autoRespBubble(),
       ...comments.map(_bubble),
     ];
@@ -1271,6 +1279,106 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
                 const LinearGradient(
                     colors: [Color(0xFF0F766E), Color(0xFF134E4A)])),
           ],
+        ],
+      ),
+    );
+  }
+
+  // ── Description bubble — shows the user's original issue in the chat thread ─
+
+  // ── Strip HTML tags and decode common HTML entities ──────────────────────
+  // Pure Dart — no external package required.
+  String _stripHtml(String html) {
+    // Replace block-level tags with newlines so paragraphs are preserved
+    var text = html
+        .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+        .replaceAll(RegExp(r'<p[^>]*>', caseSensitive: false), '\n')
+        .replaceAll(RegExp(r'</p>', caseSensitive: false), '\n')
+        .replaceAll(RegExp(r'<div[^>]*>', caseSensitive: false), '\n')
+        .replaceAll(RegExp(r'</div>', caseSensitive: false), '\n')
+        .replaceAll(RegExp(r'<li[^>]*>', caseSensitive: false), '\n• ')
+        .replaceAll(RegExp(r'<[^>]+>', caseSensitive: false), '') // strip remaining tags
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&nbsp;', ' ');
+
+    // Collapse 3+ consecutive newlines into 2 and trim
+    text = text.replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
+    return text.isEmpty ? html : text; // fallback to original if stripping yields empty
+  }
+
+  Widget _descriptionBubble(String description) {
+    final name = _userDisplayName.isNotEmpty ? _userDisplayName : 'Customer';
+    // Strip HTML so raw tags like <br>, <div> are not shown to admin
+    final cleanDesc = _stripHtml(description);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _avatar(
+            name,
+            const LinearGradient(
+                colors: [Color(0xFFF59E0B), Color(0xFFD97706)]),
+          ),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text(name,
+                      style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF475569))),
+                  const SizedBox(width: 5),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF7ED),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                    child: const Text('CUSTOMER',
+                        style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFFD97706))),
+                  ),
+                  const Text(' · Original Issue',
+                      style: TextStyle(
+                          fontSize: 9, color: Color(0xFF94A3B8))),
+                ]),
+                const SizedBox(height: 3),
+                Container(
+                  constraints: BoxConstraints(
+                      maxWidth: MediaQuery.of(context).size.width * 0.76),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 13, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF7ED),
+                    border: Border.all(color: const Color(0xFFFED7AA)),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(12),
+                      topRight: Radius.circular(12),
+                      bottomLeft: Radius.circular(4),
+                      bottomRight: Radius.circular(12),
+                    ),
+                  ),
+                  child: Text(cleanDesc,
+                      style: const TextStyle(
+                          fontSize: 13,
+                          height: 1.6,
+                          color: Color(0xFF92400E))),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1891,7 +1999,7 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
             child: Text(
               (_t.description?.isEmpty ?? true)
                   ? 'No description provided.'
-                  : _t.description!,
+                  : _stripHtml(_t.description!),
               style: const TextStyle(
                   fontSize: 13, color: Color(0xFF374151), height: 1.7),
             ),

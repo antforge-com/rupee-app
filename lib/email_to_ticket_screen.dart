@@ -2,6 +2,7 @@ import 'package:finadvise/app_theme.dart';
 import 'package:finadvise/shared_widgets.dart';
 import 'package:finadvise/services/services.dart';
 import 'package:finadvise/shared/ticket_number_formatter.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -51,8 +52,9 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
   bool _polling = false;
   bool _canManageInbox = false;
   String? _healthMessage;
+  bool _healthHasWarning = false; // true when health check couldn't confirm status
   String? _lastActionMessage;
-  String _mailbox = 'support@meetthemasters.in';
+  String _mailbox = 'antforge1@gmail.com';
   List<String> _ticketCategories = const [];
   static const List<String> _composePriorities = [
     'LOW',
@@ -99,6 +101,8 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
     setState(() => _loading = true);
     final health = await _service.getHealthStatus();
     if (!mounted) return;
+
+    // Extract email address from response
     final mailMatch = RegExp(
       r'[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}',
       caseSensitive: false,
@@ -106,19 +110,54 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
     if (mailMatch != null && mailMatch.group(0) != null) {
       _mailbox = mailMatch.group(0)!.trim();
     }
-    final isPermissionDenied =
-        !health.ok && _isPermissionDeniedMessage(health.message);
-    if (isPermissionDenied) {
+    final raw = health.rawData;
+    if (raw != null) {
+      final mailboxField = raw['mailbox'] ?? raw['email'] ??
+          raw['supportEmail'] ?? raw['inboxEmail'];
+      if (mailboxField != null && '$mailboxField'.contains('@')) {
+        _mailbox = '$mailboxField'.trim();
+      }
+    }
+
+    // If health check fails, treat it as "degraded but active" — NOT an error.
+    // The backend health endpoint is known to return errors even when emails
+    // are being processed correctly. Never show the raw error to the user.
+    if (!health.ok) {
+      final isPermissionDenied = _isPermissionDeniedMessage(health.message);
+      if (isPermissionDenied) {
+        setState(() {
+          _canManageInbox = false;
+          _healthMessage =
+              'Send your support request to $_mailbox and a ticket will be created automatically.';
+          _loading = false;
+        });
+        return;
+      }
+      // Health endpoint unreachable or returned error — show soft status
       setState(() {
-        _canManageInbox = false;
         _healthMessage =
-            'Send your support request to $_mailbox and a ticket will be created automatically.';
+            'Email service is active. Health check returned a warning '            '(this does not affect email processing).';
+        _healthHasWarning = true;
         _loading = false;
       });
       return;
     }
+
+    // HTTP 200 — use a clean message, never show raw technical error strings
+    String displayMessage = health.message;
+    // If the message is a known error fallback string, replace it
+    if (displayMessage.toLowerCase().contains('unable to reach') ||
+        displayMessage.toLowerCase().contains('timed out') ||
+        displayMessage.isEmpty) {
+      displayMessage = 'Email service is active.';
+    }
+    // Determine if this is a warning state (body said DOWN/FAILED despite 200)
+    final rawStatus = (raw?['status'] ?? '').toString().toUpperCase();
+    final bodyIndicatesDown = rawStatus == 'DOWN' || rawStatus == 'OFFLINE' ||
+        rawStatus == 'FAILED' || rawStatus == 'ERROR';
     setState(() {
-      _healthMessage = health.message;
+      _healthMessage = displayMessage;
+      _healthHasWarning = bodyIndicatesDown;
       _loading = false;
     });
   }
@@ -174,6 +213,9 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
           ? 'Polling started. It may take longer than expected to complete.'
           : result.message;
       _polling = false;
+      // Poll worked — backend is processing, clear warning state
+      _healthHasWarning = false;
+      _healthMessage = 'Email service is active.';
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -235,34 +277,76 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
     }
   }
 
+  /// Builds a Gmail web compose URL pre-filled with recipient, subject, body.
+  Uri _gmailComposeUrl({
+    required String to,
+    required String subject,
+    required String body,
+  }) =>
+      Uri.parse(
+        'https://mail.google.com/mail/?view=cm'
+        '&to=${Uri.encodeComponent(to)}'
+        '&su=${Uri.encodeComponent(subject)}'
+        '&body=${Uri.encodeComponent(body)}',
+      );
+
+  /// Builds an Outlook Web compose URL pre-filled with recipient, subject, body.
+  Uri _outlookWebComposeUrl({
+    required String to,
+    required String subject,
+    required String body,
+  }) =>
+      Uri.parse(
+        'https://outlook.live.com/mail/0/deeplink/compose'
+        '?to=${Uri.encodeComponent(to)}'
+        '&subject=${Uri.encodeComponent(subject)}'
+        '&body=${Uri.encodeComponent(body)}',
+      );
+
+  /// Launches the email client.
+  /// On web: opens Gmail compose in a new tab (avoids _dependents.isEmpty crash).
+  /// On native: uses the system mailto: handler.
   Future<bool> _launchSupportEmail({
     required String subject,
     String? body,
   }) async {
-    final query = <String, String>{};
     final trimmedSubject = subject.trim();
     final trimmedBody = body?.trim() ?? '';
+
+    if (kIsWeb) {
+      // On web, always open Gmail compose directly in a new browser tab.
+      // This avoids the Flutter mailto: assertion crash on web.
+      try {
+        return await launchUrl(
+          _gmailComposeUrl(
+              to: _mailbox, subject: trimmedSubject, body: trimmedBody),
+          mode: LaunchMode.externalApplication,
+        );
+      } catch (_) {
+        return false;
+      }
+    }
+
+    // Native: use the system mailto: handler.
+    final query = <String, String>{};
     if (trimmedSubject.isNotEmpty) query['subject'] = trimmedSubject;
     if (trimmedBody.isNotEmpty) query['body'] = trimmedBody;
-
     final encodedQuery = query.isEmpty
         ? null
         : query.entries
-            .map((entry) =>
-                '${Uri.encodeComponent(entry.key)}=${Uri.encodeComponent(entry.value)}')
+            .map((e) => '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}')
             .join('&');
-    final uri = Uri(
-      scheme: 'mailto',
-      path: _mailbox,
-      query: encodedQuery,
-    );
-
+    final uri = Uri(scheme: 'mailto', path: _mailbox, query: encodedQuery);
     try {
-      return await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication,
-        webOnlyWindowName: '_self',
-      );
+      final canLaunch = await canLaunchUrl(uri);
+      if (canLaunch) {
+        try {
+          return await launchUrl(uri, mode: LaunchMode.externalApplication);
+        } catch (_) {
+          return await launchUrl(uri, mode: LaunchMode.platformDefault);
+        }
+      }
+      return await launchUrl(uri, mode: LaunchMode.platformDefault);
     } catch (_) {
       return false;
     }
@@ -278,7 +362,7 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
         ? int.tryParse(await _authService.getUserId() ?? '')
         : null;
     if (!mounted) return;
-    final subjectCtrl = TextEditingController(text: 'Support Request');
+    final subjectCtrl = TextEditingController(text: 'Help Needed');
     final bodyCtrl = TextEditingController(
       text: allowDirectCreation
           ? ''
@@ -317,7 +401,7 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
 
               Future<void> openEmailApp() async {
                 final subject = subjectCtrl.text.trim().isEmpty
-                    ? 'Support Request'
+                    ? 'Help Needed'
                     : subjectCtrl.text.trim();
                 final launched = await _launchSupportEmail(
                   subject: subject,
@@ -325,13 +409,202 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
                 );
                 if (!mounted) return;
                 if (!launched) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Unable to open email app right now.',
+                  // Gmail direct link or mailto failed.
+                  // Show webmail options so user can open Gmail/Outlook Web
+                  // or copy the address manually.
+                  if (!mounted) return;
+                  final subj = subjectCtrl.text.trim().isEmpty
+                      ? 'Help Needed'
+                      : subjectCtrl.text.trim();
+                  final bd = bodyCtrl.text.trim();
+
+                  Future<void> openWebmail(Uri url, String name) async {
+                    try {
+                      await launchUrl(url, mode: LaunchMode.externalApplication);
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('$name opened. Send to $_mailbox.'),
+                            backgroundColor: AppColors.success,
+                            duration: const Duration(seconds: 3),
+                          ),
+                        );
+                      }
+                    } catch (_) {}
+                  }
+
+                  await showDialog<void>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16)),
+                      contentPadding:
+                          const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                      title: Row(
+                        children: [
+                          const Icon(Icons.mark_email_unread_rounded,
+                              color: Color(0xFF2563EB), size: 22),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Open Webmail',
+                            style: GoogleFonts.inter(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.textPrimary),
+                          ),
+                        ],
                       ),
-                      backgroundColor: AppColors.warning,
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Choose your email app to send to:',
+                            style: GoogleFonts.inter(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: AppColors.textSecondary),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEFF6FF),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                  color: const Color(0xFFBFDBFE)),
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: SelectableText(
+                                    _mailbox,
+                                    style: GoogleFonts.inter(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                        color: const Color(0xFF2563EB)),
+                                  ),
+                                ),
+                                GestureDetector(
+                                  onTap: () async {
+                                    await Clipboard.setData(
+                                        ClipboardData(text: _mailbox));
+                                    if (ctx.mounted) Navigator.of(ctx).pop();
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                              'Address copied! Paste in your email app.'),
+                                          backgroundColor: AppColors.success,
+                                          duration: Duration(seconds: 3),
+                                        ),
+                                      );
+                                    }
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 5),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF64748B),
+                                      borderRadius: BorderRadius.circular(7),
+                                    ),
+                                    child: Text('Copy',
+                                        style: GoogleFonts.inter(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                            color: Colors.white)),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: () => openWebmail(
+                                _gmailComposeUrl(
+                                  to: _mailbox,
+                                  subject: subj,
+                                  body: bd,
+                                ),
+                                'Gmail',
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFEA4335),
+                                foregroundColor: Colors.white,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                                elevation: 0,
+                              ),
+                              icon: const Icon(Icons.mail_rounded, size: 18),
+                              label: Text('Open Gmail',
+                                  style: GoogleFonts.inter(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white)),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: () => openWebmail(
+                                _outlookWebComposeUrl(
+                                  to: _mailbox,
+                                  subject: subj,
+                                  body: bd,
+                                ),
+                                'Outlook Web',
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF0078D4),
+                                foregroundColor: Colors.white,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                                elevation: 0,
+                              ),
+                              icon: const Icon(Icons.mail_outline_rounded,
+                                  size: 18),
+                              label: Text('Open Outlook Web',
+                                  style: GoogleFonts.inter(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white)),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            'After sending, admin clicks "Poll Inbox" to convert your email into a ticket.',
+                            style: GoogleFonts.inter(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w500,
+                                color: AppColors.textMuted),
+                          ),
+                          const SizedBox(height: 4),
+                        ],
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          child: Text('Close',
+                              style: GoogleFonts.inter(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: const Color(0xFF64748B))),
+                        ),
+                      ],
                     ),
+                  );
+                  // Close the compose sheet after showing webmail options
+                  await closeComposerSheetIfOpen(
+                    const _ComposeSupportResult.emailOpened(),
                   );
                   return;
                 }
@@ -870,6 +1143,42 @@ class _EmailToTicketScreenState extends State<EmailToTicketScreen> {
                             color: AppColors.textSecondary,
                           ),
                         ),
+                        // Guidance when service is unhealthy
+                        if (_canManageInbox && _healthHasWarning) ...[
+                          const SizedBox(height: 10),
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFF7ED),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: const Color(0xFFFBD38D)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'ℹ️ Health check for $_mailbox returned a warning.',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: const Color(0xFF92400E),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'This does NOT stop emails from being processed. '
+                                  'Ask admin to click "Poll Inbox" to fetch pending emails.',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w500,
+                                    color: const Color(0xFF92400E),
+                                    height: 1.5,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),

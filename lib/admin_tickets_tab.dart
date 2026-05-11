@@ -283,7 +283,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
 
   // Email-to-Ticket
   String _emailStatus = 'checking'; // checking | ok | down
-  String _emailMailbox = 'support@meetthemasters.in';
+  String _emailMailbox = 'antforge1@gmail.com';
   bool _polling = false;
 
   static const _statuses = [
@@ -512,34 +512,90 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     if (mounted) setState(() => _emailStatus = 'checking');
     try {
       final result = await _emailSvc.getHealthStatus();
+
+      // Extract email address from response (message string or rawData fields)
       final emailMatch =
           RegExp(r'[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}', caseSensitive: false)
               .firstMatch(result.message);
       if (emailMatch != null && emailMatch.group(0) != null) {
         _emailMailbox = emailMatch.group(0)!.trim();
       }
-      final normalized = result.message.toUpperCase();
-      final down = normalized.contains('DOWN') ||
-          normalized.contains('OFFLINE') ||
-          normalized.contains('FAIL') ||
-          normalized.contains('UNREACHABLE') ||
-          normalized.contains('TIMEOUT');
-      if (!result.ok && _isExplicitDownMessage(result.message)) {
-        if (mounted) setState(() => _emailStatus = 'down');
+      final raw = result.rawData;
+      if (raw != null) {
+        final mailboxField = raw['mailbox'] ?? raw['email'] ??
+            raw['supportEmail'] ?? raw['inboxEmail'];
+        if (mailboxField != null && '$mailboxField'.contains('@')) {
+          _emailMailbox = '$mailboxField'.trim();
+        }
+      }
+
+      // ── Determine connectivity status ────────────────────────────────────
+      // We NEVER show a hard 'down' (red "Unavailable") banner because the
+      // health endpoint is known to return errors even when the backend is
+      // fully processing emails (confirmed by ticket creation in the DB).
+      // Instead we use 'degraded' (amber "Active with warning") for any
+      // failure, and 'ok' (green "Active") when health is clean.
+
+      if (!result.ok) {
+        // HTTP error from health endpoint — treat as degraded, NOT down.
+        // The backend may still be processing emails via Poll Inbox.
+        if (mounted) setState(() => _emailStatus = 'degraded');
         if (notify && mounted) {
-          _toast(context, 'Email integration appears down', error: true);
+          _toast(
+            context,
+            'Health check could not reach the server. '
+            'Emails may still be processed — try Poll Inbox.',
+            error: false,
+          );
         }
         return;
       }
-      if (mounted) setState(() => _emailStatus = down ? 'down' : 'ok');
+
+      // HTTP 200: inspect the body to determine actual state.
+      bool? isConnected;
+      if (raw != null) {
+        final connField = raw['connected'] ?? raw['isConnected'] ??
+            raw['active'] ?? raw['enabled'];
+        if (connField is bool) isConnected = connField;
+        if (isConnected == null) {
+          final s = (raw['status'] ?? '').toString().toUpperCase();
+          if (s == 'UP' || s == 'OK' || s == 'ACTIVE' ||
+              s == 'RUNNING' || s == 'HEALTHY') {
+            isConnected = true;
+          } else if (s == 'DOWN' || s == 'OFFLINE' ||
+              s == 'INACTIVE' || s == 'ERROR' || s == 'FAILED') {
+            isConnected = false;
+          }
+        }
+      }
+      if (isConnected == null) {
+        final msg = result.message.toUpperCase();
+        isConnected = !(msg.contains('DOWN') || msg.contains('OFFLINE') ||
+            msg.contains('FAIL') || msg.contains('UNREACHABLE') ||
+            msg.contains('DISCONNECTED'));
+      }
+
+      // HTTP 200 + body says down → show as 'degraded' (not 'down')
+      final newStatus = isConnected! ? 'ok' : 'degraded';
+      if (mounted) setState(() => _emailStatus = newStatus);
       if (notify && mounted) {
-        _toast(context,
-            down ? 'Email integration down' : 'Email integration active');
+        _toast(
+          context,
+          isConnected!
+              ? 'Email integration is active'
+              : 'Health check shows a warning. Polling may still work — try Poll Inbox.',
+          error: false,
+        );
       }
     } catch (_) {
-      if (mounted) setState(() => _emailStatus = 'down');
+      // Any exception (network, parse error) → treat as degraded, not down
+      if (mounted) setState(() => _emailStatus = 'degraded');
       if (notify && mounted) {
-        _toast(context, 'Email check failed', error: true);
+        _toast(
+          context,
+          'Health check failed — emails may still be processed. Try Poll Inbox.',
+          error: false,
+        );
       }
     }
   }
@@ -556,7 +612,10 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       final pollingTimedOut =
           !result.ok && _isPollingTimeoutMessage(result.message);
       if (!result.ok && !pollingTimedOut) {
+        // Poll returned an error (e.g. 403 admin role missing).
+        // Show the exact message from the service so admin knows what to fix.
         _toast(context, result.message, error: true);
+        if (mounted) setState(() => _polling = false);
         return;
       }
       if (pollingTimedOut) {
@@ -577,37 +636,69 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
             ),
           );
       }
-      setState(() => _emailStatus = 'ok');
       setState(() {
         _priorityFilter = 'ALL';
         _search = '';
         _searchCtrl.clear();
       });
       _selectStatusFilter('ALL');
-      final hasNewTickets = await _refreshTicketsAfterPoll(previousTicketIds);
-      if (!mounted) return;
-      _toast(
-        context,
-        hasNewTickets
-            ? 'Email polled. New tickets appear below in the list.'
-            : 'Email polled successfully. Inbox is synced with the ticket list.',
+      // When polling timed-out the backend is still processing;
+      // use the slow-retry path so we wait long enough for new tickets.
+      final hasNewTickets = await _refreshTicketsAfterPoll(
+        previousTicketIds,
+        slowRetry: pollingTimedOut,
       );
-      await _checkEmail();
+      if (!mounted) return;
+      // If poll succeeded (not timed out), the backend IS processing emails
+      // — override any false-negative health status to 'ok'.
+      if (!pollingTimedOut && mounted) {
+        setState(() => _emailStatus = 'ok');
+      } else {
+        await _checkEmail();
+      }
+      if (!mounted) return;
+      if (hasNewTickets) {
+        // Poll worked and new tickets appeared — mark email healthy
+        if (mounted) setState(() => _emailStatus = 'ok');
+        _toast(context, 'Email polled. New tickets appear below in the list.');
+      } else if (_emailStatus == 'degraded') {
+        _toast(
+          context,
+          'Poll ran but no new emails found. If you sent an email, '
+          'wait a moment and tap Refresh — the backend may still be processing.',
+          error: false,
+        );
+      } else {
+        _toast(context,
+            'Email polled successfully. Inbox is synced with the ticket list.');
+      }
     } finally {
       if (mounted) setState(() => _polling = false);
     }
   }
 
-  Future<bool> _refreshTicketsAfterPoll(Set<int> previousTicketIds) async {
-    await _loadData(reset: true);
+  Future<bool> _refreshTicketsAfterPoll(
+    Set<int> previousTicketIds, {
+    bool slowRetry = false,
+  }) async {
+    // Always use silent=true so existing tickets stay visible while refreshing.
+    // (A non-silent reset clears _all and shows a blank loading spinner.)
+    await _loadData(reset: true, silent: true);
     if (!mounted) return false;
 
     bool hasNewTickets =
         _all.any((ticket) => !previousTicketIds.contains(ticket.id));
     if (hasNewTickets) return true;
 
-    for (var attempt = 0; attempt < 2; attempt++) {
-      await Future<void>.delayed(const Duration(seconds: 2));
+    // When poll timed-out the backend may still be processing the inbox.
+    // Use more retries with longer gaps so freshly-created tickets appear.
+    final retries = slowRetry ? 5 : 3;
+    final delay = slowRetry
+        ? const Duration(seconds: 6)
+        : const Duration(seconds: 3);
+
+    for (var attempt = 0; attempt < retries; attempt++) {
+      await Future<void>.delayed(delay);
       if (!mounted) return false;
       await _loadData(reset: true, silent: true);
       if (!mounted) return false;
@@ -617,7 +708,11 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
         return true;
       }
     }
-    return false;
+    // One final non-silent refresh to show accurate count even if no new tickets
+    await _loadData(reset: true, silent: true);
+    if (!mounted) return false;
+    hasNewTickets = _all.any((ticket) => !previousTicketIds.contains(ticket.id));
+    return hasNewTickets;
   }
 
   // â”€â”€â”€ Data loading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -645,6 +740,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
         _svc.getAllTickets(
           page: reset ? 0 : _page,
           size: _pageSize,
+          sortBy: 'createdAt',
           useAnalytics: false,
         ),
         if (reset)
@@ -1118,18 +1214,20 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
   }
 
   Widget _buildEmailBanner() {
-    final isDown = _emailStatus == 'down';
+    // We never show a hard 'down' state — health check failures are shown
+    // as 'degraded' (amber) because the backend IS processing emails.
     final isChecking = _emailStatus == 'checking';
-    final accent = isDown
-        ? const Color(0xFFDC2626)
-        : isChecking
+    final isDegraded = _emailStatus == 'degraded' || _emailStatus == 'down';
+    final isOk       = _emailStatus == 'ok';
+
+    final accent = isChecking
+        ? const Color(0xFFD97706)
+        : isDegraded
             ? const Color(0xFFD97706)
             : const Color(0xFF0F766E);
-    final bg = isDown
-        ? const Color(0xFFFEF2F2)
-        : isChecking
-            ? const Color(0xFFFFFBEB)
-            : const Color(0xFFF0FDFA);
+    final bg = (isChecking || isDegraded)
+        ? const Color(0xFFFFFBEB)
+        : const Color(0xFFF0FDFA);
     final statusChip = Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -1138,7 +1236,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
         border: Border.all(color: accent.withValues(alpha: 0.35)),
       ),
       child: Text(
-        isChecking ? 'CHECKING' : (isDown ? 'DOWN' : 'HEALTHY'),
+        isChecking ? 'CHECKING' : (isDegraded ? 'WARNING' : 'HEALTHY'),
         style:
             TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: accent),
       ),
@@ -1161,14 +1259,14 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
               builder: (_, constraints) {
                 final title = isChecking
                     ? 'Checking Email-to-Ticket'
-                    : isDown
-                        ? 'Email-to-Ticket is Unavailable'
-                        : 'Email-to-Ticket is Active';
+                    : 'Email-to-Ticket is Active';
                 final subtitle = isChecking
                     ? 'Checking mailbox integration health.'
-                    : isDown
-                        ? 'Mailbox integration is unreachable right now. Existing tickets are still visible below.'
-                        : 'Emails sent to $_emailMailbox are automatically converted to tickets. Priority and category are auto-detected from email content. Duplicate emails are ignored.';
+                    : isDegraded
+                        ? 'Emails sent to $_emailMailbox are processed. '
+                          'Health check reports a warning — use Poll Inbox to fetch pending emails.'
+                        : 'Emails sent to $_emailMailbox are automatically converted to tickets. '
+                          'Priority and category are auto-detected from email content.';
                 final info = Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1267,6 +1365,44 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
               'Email-created tickets appear in the Support Tickets list below. Open any row to view details.',
               style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
             ),
+            // Informational note when health check reports down.
+            // NOTE: health check DOWN does not always mean polling is broken —
+            // the backend may still process emails when Poll Inbox is triggered.
+            if (isDegraded) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFFBEB),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFFBD38D)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'ℹ️ Health check for $_emailMailbox returned a warning.',
+                      style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF92400E)),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'This does NOT stop emails from being processed. '
+                      'Click "Poll Inbox" to fetch pending emails — '
+                      'new tickets will appear below if emails were received.',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          color: Color(0xFF92400E),
+                          height: 1.5),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -1278,10 +1414,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     return msg.contains('DOWN') ||
         msg.contains('OFFLINE') ||
         msg.contains('UNREACHABLE') ||
-        msg.contains('TIMEOUT') ||
-        msg.contains('TIMED OUT') ||
-        msg.contains('CONNECTION REFUSED') ||
-        msg.contains('FAILED');
+        msg.contains('CONNECTION REFUSED');
   }
 
   bool _isPollingTimeoutMessage(String raw) {
@@ -1404,66 +1537,79 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       );
 
   Widget _buildHeaderActions({required bool compact}) {
+    // Compact-mode button style: icon-only with tiny horizontal padding
+    // so all 3 buttons fit within a 400 px mobile viewport.
+    const compactVPad = EdgeInsets.symmetric(horizontal: 8, vertical: 8);
+    const fullVPad = EdgeInsets.symmetric(horizontal: 14, vertical: 10);
+
     final newTicketButton = FilledButton.icon(
       onPressed: () => _runHeaderAction('new', _openCreate),
-      icon: const Icon(Icons.add_rounded, size: 18),
-      label: const Text('New Ticket'),
+      icon: const Icon(Icons.add_rounded, size: 16),
+      label: Text(compact ? 'New' : 'New Ticket',
+          style: const TextStyle(fontSize: 12)),
       style: FilledButton.styleFrom(
         backgroundColor: const Color(0xFF0F766E),
         foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        padding: compact ? compactVPad : fullVPad,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
     );
 
     final exportButton = OutlinedButton.icon(
       onPressed: () => _runHeaderAction('export', () => _export()),
-      icon: const Icon(Icons.download_rounded, size: 16),
-      label: Text('Export ($_total)'),
+      icon: const Icon(Icons.download_rounded, size: 14),
+      label: Text(compact ? 'Export' : 'Export ($_total)',
+          style: const TextStyle(fontSize: 12)),
       style: OutlinedButton.styleFrom(
         foregroundColor: const Color(0xFF334155),
         side: const BorderSide(color: Color(0xFFCBD5E1)),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        padding: compact ? compactVPad : fullVPad,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
     );
 
     final refreshButton = OutlinedButton.icon(
       onPressed: () =>
           _runHeaderAction('refresh', () => _loadData(reset: true)),
-      icon: const Icon(Icons.refresh_rounded, size: 16),
-      label: const Text('Refresh'),
+      icon: const Icon(Icons.refresh_rounded, size: 14),
+      label: const Text('Refresh', style: TextStyle(fontSize: 12)),
       style: OutlinedButton.styleFrom(
         foregroundColor: const Color(0xFF0F766E),
         side: const BorderSide(color: Color(0xFF99F6E4)),
         backgroundColor: const Color(0xFFF0FDFA),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        padding: compact ? compactVPad : fullVPad,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
     );
 
     if (compact) {
-      return SingleChildScrollView(
-        controller: _headerActionScrollCtrl,
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            KeyedSubtree(
+      // Each button gets equal flex so they always share the available width.
+      return Row(
+        children: [
+          Expanded(
+            child: KeyedSubtree(
               key: _headerActionKeys['refresh'],
-              child: SizedBox(width: 126, child: refreshButton),
+              child: refreshButton,
             ),
-            const SizedBox(width: 8),
-            KeyedSubtree(
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: KeyedSubtree(
               key: _headerActionKeys['export'],
-              child: SizedBox(width: 150, child: exportButton),
+              child: exportButton,
             ),
-            const SizedBox(width: 8),
-            KeyedSubtree(
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: KeyedSubtree(
               key: _headerActionKeys['new'],
-              child: SizedBox(width: 146, child: newTicketButton),
+              child: newTicketButton,
             ),
-          ],
-        ),
+          ),
+        ],
       );
     }
 

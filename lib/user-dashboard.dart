@@ -11,6 +11,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart' show MultipartFile;
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -3968,12 +3969,14 @@ class _TicketsTabState extends State<_TicketsTab> {
   ];
   String _filter =
       'ALL'; // ALL | NEW | OPEN | IN_PROGRESS | PENDING | RESOLVED | CLOSED | ESCALATED
-  static const String _supportMailbox = 'support@meetthemasters.in';
+  String _supportMailbox = 'antforge1@gmail.com';
+  final _emailToTicketSvc = EmailToTicketService();
 
   @override
   void initState() {
     super.initState();
     _load();
+    _fetchSupportMailbox();
   }
 
   @override
@@ -3981,6 +3984,43 @@ class _TicketsTabState extends State<_TicketsTab> {
     _filterChipScrollCtrl.dispose();
     _ticketActionScrollCtrl.dispose();
     super.dispose();
+  }
+
+  /// Dynamically resolve support mailbox from health endpoint so that we
+  /// always display the correct address regardless of environment.
+  Future<void> _fetchSupportMailbox() async {
+    try {
+      final health = await _emailToTicketSvc.getHealthStatus();
+      String? resolved;
+
+      // 1. Check rawData fields first (most reliable)
+      final raw = health.rawData;
+      if (raw != null) {
+        final candidate = raw['mailbox'] ?? raw['inbox'] ?? raw['email'] ??
+            raw['supportEmail'] ?? raw['inboxEmail'] ??
+            raw['configuredMailbox'] ?? raw['recipientEmail'];
+        if (candidate != null && '$candidate'.contains('@')) {
+          resolved = '$candidate'.trim();
+        }
+      }
+
+      // 2. Fall back to parsing the message string
+      if (resolved == null) {
+        final match = RegExp(
+          r'[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}',
+          caseSensitive: false,
+        ).firstMatch(health.message);
+        if (match != null) {
+          resolved = match.group(0)!.trim();
+        }
+      }
+
+      if (resolved != null && mounted) {
+        setState(() => _supportMailbox = resolved!);
+      }
+    } catch (_) {
+      // keep default
+    }
   }
 
   int get _uid => (widget.user['id'] as num?)?.toInt() ?? 0;
@@ -4169,11 +4209,80 @@ class _TicketsTabState extends State<_TicketsTab> {
   }
 
   // ── Actual mailto: launcher (called from within the compose dialog) ────────
-  Future<void> _launchMailto({
+  /// Builds a Gmail web compose URL pre-filled with [to], [subject], [body].
+  Uri _gmailComposeUrl({
+    required String to,
+    required String subject,
+    required String body,
+  }) =>
+      Uri.parse(
+        'https://mail.google.com/mail/?view=cm'
+        '&to=${Uri.encodeComponent(to)}'
+        '&su=${Uri.encodeComponent(subject)}'
+        '&body=${Uri.encodeComponent(body)}',
+      );
+
+  /// Builds an Outlook-Web compose URL pre-filled with [to], [subject], [body].
+  Uri _outlookWebComposeUrl({
+    required String to,
+    required String subject,
+    required String body,
+  }) =>
+      Uri.parse(
+        'https://outlook.live.com/mail/0/deeplink/compose'
+        '?to=${Uri.encodeComponent(to)}'
+        '&subject=${Uri.encodeComponent(subject)}'
+        '&body=${Uri.encodeComponent(body)}',
+      );
+
+  /// Launches the email client.
+  /// On web: opens Gmail compose in a new tab (avoids the Flutter
+  /// _dependents.isEmpty assertion caused by mailto: + launchUrl on web).
+  /// On native: uses the system mailto: handler.
+  /// Returns true if the client was opened successfully.
+  Future<bool> _launchMailto({
     required String subject,
     String body = '',
   }) async {
-    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (kIsWeb) {
+      // On web we NEVER use launchUrl with mailto: — it causes a Flutter
+      // assertion crash.  Instead open Gmail compose directly in a new tab.
+      try {
+        final gmailUrl = _gmailComposeUrl(
+          to: _supportMailbox,
+          subject: subject,
+          body: body,
+        );
+        final opened = await launchUrl(
+          gmailUrl,
+          mode: LaunchMode.externalApplication,
+        );
+        if (opened && mounted) {
+          ScaffoldMessenger.maybeOf(context)
+            ?..hideCurrentSnackBar()
+            ..showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Gmail opened. Send your email to $_supportMailbox.',
+                  style: _ts(12.5, FontWeight.w600, Colors.white),
+                ),
+                backgroundColor: _C.success,
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                margin: const EdgeInsets.all(16),
+                duration: const Duration(seconds: 3),
+              ),
+            );
+        }
+        return opened;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    // Native (mobile / desktop): use the system mailto: handler.
     final uri = Uri(
       scheme: 'mailto',
       path: _supportMailbox,
@@ -4182,21 +4291,25 @@ class _TicketsTabState extends State<_TicketsTab> {
         if (body.isNotEmpty) 'body': body,
       }),
     );
-
     bool opened = false;
     try {
-      opened = await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication,
-        webOnlyWindowName: '_self',
-      );
+      final canLaunch = await canLaunchUrl(uri);
+      if (canLaunch) {
+        try {
+          opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+        } catch (_) {
+          opened = await launchUrl(uri, mode: LaunchMode.platformDefault);
+        }
+      }
+      if (!opened) {
+        opened = await launchUrl(uri, mode: LaunchMode.platformDefault);
+      }
     } catch (_) {
       opened = false;
     }
-    if (!mounted) return;
-
+    if (!mounted) return false;
     if (opened) {
-      messenger
+      ScaffoldMessenger.maybeOf(context)
         ?..hideCurrentSnackBar()
         ..showSnackBar(
           SnackBar(
@@ -4213,35 +4326,198 @@ class _TicketsTabState extends State<_TicketsTab> {
             duration: const Duration(seconds: 3),
           ),
         );
-      return;
+    }
+    return opened;
+  }
+
+  /// Shows a dialog with the support email address and a one-tap Copy button.
+  /// Shows a webmail options dialog when mailto: or Gmail direct link fails.
+  /// Provides one-tap buttons to open Gmail Web, Outlook Web, or copy address.
+  Future<void> _showCopyAddressDialog({
+    String subject = 'Help Needed',
+    String body = '',
+  }) async {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+
+    Future<void> openWebmail(Uri url, String name, BuildContext ctx) async {
+      try {
+        await launchUrl(url, mode: LaunchMode.externalApplication);
+        if (ctx.mounted) Navigator.of(ctx).pop();
+        if (mounted) {
+          messenger
+            ?..hideCurrentSnackBar()
+            ..showSnackBar(
+              SnackBar(
+                content: Text(
+                  '$name opened. Send your email to $_supportMailbox.',
+                  style: _ts(12.5, FontWeight.w600, Colors.white),
+                ),
+                backgroundColor: _C.success,
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                margin: const EdgeInsets.all(16),
+                duration: const Duration(seconds: 3),
+              ),
+            );
+        }
+      } catch (_) {}
     }
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const EmailToTicketScreen(readOnly: true),
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+        title: Row(
+          children: [
+            const Icon(Icons.mark_email_unread_rounded,
+                color: Color(0xFF2563EB), size: 22),
+            const SizedBox(width: 8),
+            Text('Open Webmail', style: _ts(16, FontWeight.w800, _C.text1)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Choose your email app to send to:',
+              style: _ts(13, FontWeight.w500, _C.text2),
+            ),
+            const SizedBox(height: 6),
+            // Email address display + copy
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEFF6FF),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFBFDBFE)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: SelectableText(
+                      _supportMailbox,
+                      style: _ts(13, FontWeight.w700, const Color(0xFF2563EB)),
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () async {
+                      await Clipboard.setData(
+                          ClipboardData(text: _supportMailbox));
+                      if (ctx.mounted) Navigator.of(ctx).pop();
+                      if (mounted) {
+                        messenger
+                          ?..hideCurrentSnackBar()
+                          ..showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Address copied! Paste in your email app.',
+                                style: _ts(12.5, FontWeight.w600, Colors.white),
+                              ),
+                              backgroundColor: _C.success,
+                              behavior: SnackBarBehavior.floating,
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12)),
+                              margin: const EdgeInsets.all(16),
+                              duration: const Duration(seconds: 3),
+                            ),
+                          );
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF64748B),
+                        borderRadius: BorderRadius.circular(7),
+                      ),
+                      child: Text('Copy',
+                          style: _ts(11, FontWeight.w700, Colors.white)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            // Gmail button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => openWebmail(
+                  _gmailComposeUrl(
+                    to: _supportMailbox,
+                    subject: subject,
+                    body: body,
+                  ),
+                  'Gmail',
+                  ctx,
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFEA4335),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                  elevation: 0,
+                ),
+                icon: const Icon(Icons.mail_rounded, size: 18),
+                label: Text('Open Gmail',
+                    style: _ts(13, FontWeight.w700, Colors.white)),
+              ),
+            ),
+            const SizedBox(height: 8),
+            // Outlook Web button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => openWebmail(
+                  _outlookWebComposeUrl(
+                    to: _supportMailbox,
+                    subject: subject,
+                    body: body,
+                  ),
+                  'Outlook Web',
+                  ctx,
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0078D4),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                  elevation: 0,
+                ),
+                icon: const Icon(Icons.mail_outline_rounded, size: 18),
+                label: Text('Open Outlook Web',
+                    style: _ts(13, FontWeight.w700, Colors.white)),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'After sending, admin clicks "Poll Inbox" to convert your email into a support ticket.',
+              style: _ts(11.5, FontWeight.w500, _C.text3),
+            ),
+            const SizedBox(height: 4),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('Close',
+                style: _ts(13, FontWeight.w700, const Color(0xFF64748B))),
+          ),
+        ],
       ),
     );
-    messenger
-      ?..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            'Could not open a default email app. Use the Email-to-Ticket page to copy/send details.',
-            style: _ts(12.5, FontWeight.w600, Colors.white),
-          ),
-          backgroundColor: _C.warning,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          margin: const EdgeInsets.all(16),
-          duration: const Duration(seconds: 4),
-        ),
-      );
   }
 
   // ── Shows the web-style compose dialog BEFORE launching the email app ──────
+  // Matches the web UI exactly (Images 2 & 3): blue header, To: row with
+  // Copy Address + Open Email App, Subject, Message, tip text, Copy Template
+  // + Send Email buttons. Mailbox is always dynamic (_supportMailbox).
   Future<void> _openSupportEmailApp() async {
     const template = 'Hi Support Team,\n\n'
         'I need help with:\n\n'
@@ -4251,16 +4527,50 @@ class _TicketsTabState extends State<_TicketsTab> {
         '- Actual result:\n\n'
         'Thanks,';
 
-    final subjectCtrl = TextEditingController(text: 'Support Request');
+    final subjectCtrl = TextEditingController(text: 'Help Needed');
     final bodyCtrl = TextEditingController(text: template);
+    // Track whether the dialog has been dismissed to avoid double-pop.
+    bool dialogClosed = false;
+
+    Future<void> safePop(BuildContext ctx, [bool? result]) async {
+      if (dialogClosed) return;
+      dialogClosed = true;
+      if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).maybePop(result);
+    }
 
     try {
       await showDialog<void>(
         context: context,
         barrierDismissible: true,
+        useRootNavigator: true,
         builder: (dialogCtx) {
           return StatefulBuilder(
             builder: (ctx, setDialogState) {
+              // ── Open Email App action ─────────────────────────────────
+              Future<void> openEmailApp() async {
+                final subject = subjectCtrl.text.trim().isEmpty
+                    ? 'Help Needed'
+                    : subjectCtrl.text.trim();
+                final body = bodyCtrl.text.trim();
+                // On web: _launchMailto opens Gmail directly in a new tab.
+                // On native: opens the system mail client.
+                final launched = await _launchMailto(
+                  subject: subject,
+                  body: body,
+                );
+                // Close the compose dialog after launch attempt.
+                if (ctx.mounted) await safePop(ctx);
+                if (!mounted) return;
+                if (!launched) {
+                  // Gmail direct link also failed — show webmail options dialog
+                  // so user can pick Gmail, Outlook Web, or copy the address.
+                  await _showCopyAddressDialog(
+                    subject: subject,
+                    body: body,
+                  );
+                }
+              }
+
               return Dialog(
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16)),
@@ -4269,7 +4579,7 @@ class _TicketsTabState extends State<_TicketsTab> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // ── Blue header ──────────────────────────────────────
+                    // ── Blue header (matches web) ─────────────────────
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.fromLTRB(20, 20, 16, 20),
@@ -4302,21 +4612,27 @@ class _TicketsTabState extends State<_TicketsTab> {
                             ),
                           ),
                           GestureDetector(
-                            onTap: () => Navigator.of(ctx).pop(),
+                            onTap: () => safePop(ctx),
                             child: const Icon(Icons.close,
                                 color: Colors.white, size: 22),
                           ),
                         ],
                       ),
                     ),
-                    // ── Scrollable body ──────────────────────────────────
+                    // ── Scrollable body ───────────────────────────────
                     Flexible(
                       child: SingleChildScrollView(
-                        padding: const EdgeInsets.all(20),
+                        padding: EdgeInsets.only(
+                          left: 20,
+                          right: 20,
+                          top: 20,
+                          bottom:
+                              MediaQuery.of(ctx).viewInsets.bottom + 20,
+                        ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // To: row
+                            // ── To: row with Copy Address + Open Email App ──
                             Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 14, vertical: 10),
@@ -4332,12 +4648,13 @@ class _TicketsTabState extends State<_TicketsTab> {
                                       style:
                                           _ts(13, FontWeight.w600, _C.text3)),
                                   Expanded(
-                                    child: Text(_supportMailbox,
-                                        style: _ts(
-                                            13, FontWeight.w700, _C.blueMid),
-                                        overflow: TextOverflow.ellipsis),
+                                    child: Text(
+                                      _supportMailbox,
+                                      style: _ts(13, FontWeight.w700, _C.blueMid),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
                                   ),
-                                  // Copy Address
+                                  // Copy Address button
                                   GestureDetector(
                                     onTap: () async {
                                       await Clipboard.setData(
@@ -4367,22 +4684,14 @@ class _TicketsTabState extends State<_TicketsTab> {
                                     ),
                                   ),
                                   const SizedBox(width: 6),
-                                  // Open Email App (inline)
+                                  // Open Email App (inline, matches web green btn)
                                   GestureDetector(
-                                    onTap: () async {
-                                      Navigator.of(ctx).pop();
-                                      await _launchMailto(
-                                        subject: subjectCtrl.text.trim().isEmpty
-                                            ? 'Support Request'
-                                            : subjectCtrl.text.trim(),
-                                        body: bodyCtrl.text.trim(),
-                                      );
-                                    },
+                                    onTap: openEmailApp,
                                     child: Container(
                                       padding: const EdgeInsets.symmetric(
                                           horizontal: 8, vertical: 5),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFF2563EB),
+                                        color: const Color(0xFF16A34A),
                                         borderRadius: BorderRadius.circular(6),
                                       ),
                                       child: Text('Open Email App',
@@ -4393,8 +4702,8 @@ class _TicketsTabState extends State<_TicketsTab> {
                                 ],
                               ),
                             ),
-                            const SizedBox(height: 16),
-                            // Subject
+                            const SizedBox(height: 14),
+                            // ── Subject ──────────────────────────────────
                             Text('SUBJECT',
                                 style: _ts(11, FontWeight.w700, _C.text3,
                                     ls: 0.5)),
@@ -4420,8 +4729,8 @@ class _TicketsTabState extends State<_TicketsTab> {
                                     horizontal: 14, vertical: 12),
                               ),
                             ),
-                            const SizedBox(height: 16),
-                            // Message
+                            const SizedBox(height: 12),
+                            // ── Message ───────────────────────────────────
                             Text('MESSAGE',
                                 style: _ts(11, FontWeight.w700, _C.text3,
                                     ls: 0.5)),
@@ -4448,14 +4757,14 @@ class _TicketsTabState extends State<_TicketsTab> {
                               ),
                             ),
                             const SizedBox(height: 10),
-                            // Tip text
+                            // ── Tip (matches web) ─────────────────────────
                             Text(
                               'Tip: Attach screenshots/documents in your email. Your email will be converted into a ticket and visible in your Tickets list.',
                               style: _ts(11.5, FontWeight.w400, _C.text3,
                                   height: 1.4),
                             ),
-                            const SizedBox(height: 18),
-                            // Bottom action buttons
+                            const SizedBox(height: 16),
+                            // ── Bottom buttons: Copy Template + Send Email ─
                             Row(children: [
                               Expanded(
                                 child: OutlinedButton(
@@ -4492,15 +4801,7 @@ class _TicketsTabState extends State<_TicketsTab> {
                               const SizedBox(width: 10),
                               Expanded(
                                 child: ElevatedButton(
-                                  onPressed: () async {
-                                    Navigator.of(ctx).pop();
-                                    await _launchMailto(
-                                      subject: subjectCtrl.text.trim().isEmpty
-                                          ? 'Support Request'
-                                          : subjectCtrl.text.trim(),
-                                      body: bodyCtrl.text.trim(),
-                                    );
-                                  },
+                                  onPressed: openEmailApp,
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: const Color(0xFF2563EB),
                                     padding: const EdgeInsets.symmetric(
@@ -4516,6 +4817,11 @@ class _TicketsTabState extends State<_TicketsTab> {
                                 ),
                               ),
                             ]),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Send this email from your registered account. Admin must click Poll Inbox to convert it into a ticket.',
+                              style: _ts(11.5, FontWeight.w500, _C.text3),
+                            ),
                           ],
                         ),
                       ),
@@ -7810,7 +8116,7 @@ class _ContactViewState extends State<_ContactView> {
                           Row(children: [
                             Expanded(
                                 child: _infoCard(Icons.email_rounded, 'Email',
-                                    'support@meetthemasters.in', _C.blue)),
+                                    'antforge1@gmail.com', _C.blue)),
                             const SizedBox(width: 12),
                             Expanded(
                                 child: _infoCard(Icons.phone_rounded, 'Phone',

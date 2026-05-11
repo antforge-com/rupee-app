@@ -75,7 +75,7 @@ class TicketService {
         ),
       (
         path: '/api/tickets',
-        query: <String, dynamic>{'page': page, 'size': size, 'sortBy': sortBy},
+        query: <String, dynamic>{'page': page, 'size': size, 'sortBy': sortBy, 'sort': 'createdAt,DESC'},
       ),
     ];
 
