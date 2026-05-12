@@ -1037,6 +1037,16 @@ class DashboardSummary {
 // API: GET /api/notifications
 //      PUT /api/notifications/{id}/read
 
+bool _notificationIsRead(dynamic raw) {
+  if (raw is bool) return raw;
+  if (raw is num) return raw != 0;
+  final value = raw?.toString().trim().toLowerCase() ?? '';
+  return value == 'true' ||
+      value == '1' ||
+      value == 'yes' ||
+      value == 'read';
+}
+
 class AppNotification {
   final int id;
   final String title;
@@ -1089,7 +1099,9 @@ class AppNotification {
                 json['type']?.toString() ?? 'system', json['ticketId']),
         body: (json['body'] ?? json['message'] ?? '').toString(),
         type: json['type']?.toString() ?? 'system',
-        isRead: json['isRead'] ?? json['read'] ?? false,
+        isRead: _notificationIsRead(
+          json['isRead'] ?? json['read'] ?? json['status'],
+        ),
         createdAt: json['createdAt'] != null
             ? DateTime.tryParse(json['createdAt'].toString()) ?? DateTime.now()
             : DateTime.now(),

@@ -69,6 +69,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   void initState() {
     super.initState();
+    _normalizeMobilePrefill();
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _normalizeMobilePrefill());
     _fetchPlans();
   }
 
@@ -99,6 +102,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
   String _formatPlanAmount(dynamic value) {
     final amount = double.tryParse(value?.toString() ?? '0') ?? 0;
     return amount.toStringAsFixed(2);
+  }
+
+  void _normalizeMobilePrefill() {
+    final raw = _mobileCtrl.text.trim();
+    if (raw.isEmpty) return;
+    final digits = raw.replaceAll(RegExp(r'\D'), '');
+    if (digits == '0') {
+      _mobileCtrl.clear();
+      return;
+    }
+    if (digits != raw) {
+      _mobileCtrl
+        ..text = digits
+        ..selection = TextSelection.collapsed(offset: digits.length);
+    }
   }
 
   Future<void> _fetchPlans() async {
@@ -477,8 +495,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     FilteringTextInputFormatter.digitsOnly,
                     LengthLimitingTextInputFormatter(10),
                   ],
-                  onChanged: (_) =>
-                      setState(() => _errors = {..._errors, 'mobile': ''}),
+                  onChanged: (value) {
+                    if (value == '0') {
+                      _mobileCtrl.clear();
+                      return;
+                    }
+                    setState(() => _errors = {..._errors, 'mobile': ''});
+                  },
                   decoration: _inputDeco(
                     hint: '10-digit mobile number',
                     hasError: (_errors['mobile'] ?? '').isNotEmpty,

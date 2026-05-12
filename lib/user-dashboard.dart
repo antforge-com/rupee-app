@@ -26,6 +26,7 @@ import 'login_screen.dart';
 import 'models/models.dart';
 import 'shared/ticket_number_formatter.dart';
 import 'services/services.dart';
+import 'services/razorpay_service.dart';
 
 // ════════════════════════════════════════════════════════════════════════════
 // DESIGN SYSTEM — Colors, Text Styles, Common Widgets
@@ -721,8 +722,10 @@ class _UserDashboardState extends State<UserDashboard> {
       if (uid > 0) {
         final role = (merged['role'] ?? 'USER').toString();
         _notificationService.initialize(role, uid);
+        _startNotifPoll();
+      } else {
+        setState(() => _unread = 0);
       }
-      _startNotifPoll();
     }
   }
 
@@ -733,6 +736,11 @@ class _UserDashboardState extends State<UserDashboard> {
   }
 
   Future<void> _fetchUnread() async {
+    final uid = _toInt(_user['id']) ?? 0;
+    if (uid <= 0) {
+      if (mounted) setState(() => _unread = 0);
+      return;
+    }
     try {
       final list = await _notificationService
           .refresh()
@@ -740,7 +748,9 @@ class _UserDashboardState extends State<UserDashboard> {
       if (mounted) {
         setState(() => _unread = list.where((n) => !n.isRead).length);
       }
-    } catch (_) {}
+    } catch (_) {
+      if (mounted) setState(() => _unread = 0);
+    }
   }
 
   @override
@@ -780,7 +790,9 @@ class _UserDashboardState extends State<UserDashboard> {
             ),
             _NotifsTab(
               user: _user,
-              onRead: () => setState(() => _unread = 0),
+              onRead: () {
+                _fetchUnread();
+              },
               onOpenAccount: () => setState(() => _tab = 4),
             ),
             _SettingsTab(
@@ -1968,12 +1980,15 @@ class _BookingSheetState extends State<_BookingSheet> {
     final consultantName =
         (widget.c['name'] ?? widget.c['fullName'] ?? 'Expert').toString();
 
+    // Virtual slots have negative IDs — resolve to real backend slot ID
     if (slotId <= 0) {
       final masterId = (_selSlot!['masterTimeSlotId'] as num?)?.toInt() ?? 0;
       final slotDate = (_selSlot!['slotDate'] ?? '').toString();
       final durationMinutes =
           (_selSlot!['durationMinutes'] as num?)?.toInt() ?? 60;
+
       if (masterId > 0 && slotDate.isNotEmpty) {
+        // Step 1: Try to create the slot
         final created = await _consultantService.addCustomSlot(
           consultantId: cId,
           slotDate: slotDate,
@@ -1981,13 +1996,31 @@ class _BookingSheetState extends State<_BookingSheet> {
           durationMinutes: durationMinutes,
         );
         slotId = created?.id ?? 0;
+
+        // Step 2: 409 = slot already exists on backend — fetch it
+        if (slotId <= 0) {
+          final existingSlots =
+              await _consultantService.getSlotsByConsultant(cId);
+          final match = existingSlots.where((s) {
+            final sDate = s.slotDate?.toString().split('T').first ?? '';
+            final sMaster = s.masterTimeSlotId ?? 0;
+            return sDate == slotDate && sMaster == masterId;
+          }).toList();
+          if (match.isNotEmpty) {
+            final available = match
+                .where((s) =>
+                    (s.status ?? '').toString().toUpperCase() == 'AVAILABLE')
+                .toList();
+            slotId = (available.isNotEmpty ? available.first : match.first).id ?? 0;
+          }
+        }
       }
     }
 
     if (slotId <= 0) {
       if (mounted) setState(() => _booking = false);
       _toast(context,
-          'Could not resolve a time slot. Please refresh and try again.',
+          'This slot is unavailable. Please select a different time slot.',
           error: true);
       return;
     }
@@ -2001,41 +2034,96 @@ class _BookingSheetState extends State<_BookingSheet> {
       userNotes: _notes.isEmpty ? null : _notes,
     );
 
-    if (mounted) {
-      setState(() => _booking = false);
-      if (result != null) {
-        // Send booking confirmation notification
-        await _notificationService.sendBookingConfirmation(result.id!);
-        await _notificationService.addLocalNotification(
-          AppNotification(
-            id: DateTime.now().millisecondsSinceEpoch,
-            title: 'Booking Confirmed',
-            body:
-                'Your session with $consultantName is booked for ${_fmtBookingDate((_selSlot?['slotDate'] ?? '').toString())} ${(_selSlot?['displayTimeRange'] ?? _selSlot?['timeRange'] ?? '').toString()}',
-            type: 'BOOKING_CONFIRMED',
-            createdAt: DateTime.now(),
-            data: {'bookingId': result.id},
-          ),
+    if (mounted) setState(() => _booking = false);
+
+    if (result == null) {
+      if (mounted) _toast(context, 'Failed to book. Please try again.', error: true);
+      return;
+    }
+
+    if (RazorpayService.isAlreadyPaid(result)) {
+      await _finishNormalBooking(result, consultantName, cId);
+      return;
+    }
+
+    if (RazorpayService.needsPayment(result)) {
+      final razorpay = RazorpayService();
+      try {
+        final bookingId   = (result['id'] as num).toInt();
+        final orderId     = result['razorpayOrderId']?.toString() ?? '';
+        final totalAmt    = double.tryParse('${result['totalAmount'] ?? 0}') ?? 0;
+        final discountAmt = double.tryParse('${result['discountAmount'] ?? 0}') ?? 0;
+
+        if (discountAmt > 0 && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Promo applied! You save ₹${discountAmt.toStringAsFixed(0)}'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ));
+        }
+
+        final confirmed = await razorpay.payAndVerifyBooking(
+          bookingId:       bookingId,
+          razorpayOrderId: orderId,
+          totalAmount:     totalAmt,
+          description:     'Consultation with $consultantName',
+          prefillEmail:    _currentUserEmail,
         );
 
-        Navigator.pop(context);
-        _toast(context, 'Session booked successfully! 🎉');
-
-        // Show assessment sheet
         if (mounted) {
-          Future.delayed(const Duration(milliseconds: 500), () {
-            AssessmentSheet.show(
-              context,
-              bookingId: result.id!,
-              bookingType: 'NORMAL',
-              consultantId: cId,
-            );
-          });
+          await _finishNormalBooking(
+            confirmed.isNotEmpty ? confirmed : result,
+            consultantName, cId,
+          );
         }
-      } else {
-        _toast(context, 'Failed to book. Please try again.', error: true);
+      } catch (e) {
+        if (mounted) _toast(context, e.toString(), error: true);
+      } finally {
+        razorpay.dispose();
       }
+      return;
     }
+
+    if (mounted) await _finishNormalBooking(result, consultantName, cId);
+  }
+
+  Future<void> _finishNormalBooking(
+    Map<String, dynamic> booking,
+    String consultantName,
+    int cId,
+  ) async {
+    if (!mounted) return;
+    final bookingId = (booking['id'] as num).toInt();
+    _notificationService.sendBookingConfirmation(bookingId).catchError((_) {});
+    _notificationService.addLocalNotification(AppNotification(
+      id: DateTime.now().millisecondsSinceEpoch,
+      title: 'Booking Confirmed',
+      body: 'Your session with $consultantName is booked for '
+          '${_fmtBookingDate((_selSlot?['slotDate'] ?? '').toString())} '
+          '${(_selSlot?['displayTimeRange'] ?? _selSlot?['timeRange'] ?? '').toString()}',
+      type: 'BOOKING_CONFIRMED',
+      createdAt: DateTime.now(),
+      data: {'bookingId': bookingId},
+    )).catchError((_) {});
+    Navigator.pop(context);
+    _toast(context, 'Session booked successfully! 🎉');
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        AssessmentSheet.show(
+          context,
+          bookingId: bookingId,
+          bookingType: 'NORMAL',
+          consultantId: cId,
+        );
+      }
+    });
+  }
+
+  String get _currentUserEmail {
+    try {
+      return widget.c['userEmail']?.toString() ??
+             widget.c['identifier']?.toString() ?? '';
+    } catch (_) { return ''; }
   }
 
   Future<void> _confirmSpecialBooking() async {
@@ -2091,32 +2179,79 @@ class _BookingSheetState extends State<_BookingSheet> {
       if (offerId != null) 'offerId': offerId,
     });
 
-    if (mounted) {
-      setState(() => _booking = false);
-      if (created != null) {
-        Navigator.pop(context);
-        _toast(
-          context,
-          'Special booking request sent to $consultantName for ${_fmtBookingDate(_selDate!)}.',
+    if (mounted) setState(() => _booking = false);
+
+    if (created == null) {
+      if (mounted) _toast(context, 'Failed to request the special booking. Please try again.', error: true);
+      return;
+    }
+
+    if (RazorpayService.isAlreadyPaid(created)) {
+      await _finishSpecialBooking(created, consultantName, cId);
+      return;
+    }
+
+    if (RazorpayService.needsPayment(created)) {
+      final razorpay = RazorpayService();
+      try {
+        final specialBookingId = (created['id'] as num).toInt();
+        final orderId          = created['razorpayOrderId']?.toString() ?? '';
+        final totalAmt         = double.tryParse('${created['totalAmount'] ?? 0}') ?? 0;
+        final discountAmt      = double.tryParse('${created['discountAmount'] ?? 0}') ?? 0;
+
+        if (discountAmt > 0 && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Promo applied! You save ₹${discountAmt.toStringAsFixed(0)}'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ));
+        }
+
+        final confirmed = await razorpay.payAndVerifySpecialBooking(
+          specialBookingId: specialBookingId,
+          razorpayOrderId:  orderId,
+          totalAmount:      totalAmt,
+          description:      'Special booking with $consultantName',
+          prefillEmail:     _currentUserEmail,
         );
 
-        // Show assessment sheet
         if (mounted) {
-          Future.delayed(const Duration(milliseconds: 500), () {
-            AssessmentSheet.show(
-              context,
-              bookingId: created['id'] ?? 0,
-              bookingType: 'SPECIAL',
-              consultantId: cId,
-            );
-          });
+          await _finishSpecialBooking(
+            confirmed.isNotEmpty ? confirmed : created,
+            consultantName, cId,
+          );
         }
-      } else {
-        _toast(
-            context, 'Failed to request the special booking. Please try again.',
-            error: true);
+      } catch (e) {
+        if (mounted) _toast(context, e.toString(), error: true);
+      } finally {
+        razorpay.dispose();
       }
+      return;
     }
+
+    if (mounted) await _finishSpecialBooking(created, consultantName, cId);
+  }
+
+  Future<void> _finishSpecialBooking(
+    Map<String, dynamic> booking,
+    String consultantName,
+    int cId,
+  ) async {
+    if (!mounted) return;
+    final bookingId = (booking['id'] as num?)?.toInt() ?? 0;
+    Navigator.pop(context);
+    _toast(context,
+        'Special booking request sent to $consultantName for ${_fmtBookingDate(_selDate!)}.');
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        AssessmentSheet.show(
+          context,
+          bookingId: bookingId,
+          bookingType: 'SPECIAL',
+          consultantId: cId,
+        );
+      }
+    });
   }
 
   @override

@@ -2795,6 +2795,7 @@ class _AdminSkillsQuestionsTabFixedState
     // ✅ FIX: use 'skillName' field from existing skill
     final nc = TextEditingController(text: s?['skillName'] ?? '');
     final dc = TextEditingController(text: s?['description'] ?? '');
+    bool saving = false;
 
     showModalBottomSheet(
       context: context,
@@ -2803,7 +2804,6 @@ class _AdminSkillsQuestionsTabFixedState
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => StatefulBuilder(builder: (_, ss) {
-        bool saving = false;
         return Padding(
           padding: EdgeInsets.only(
               left: 20,
@@ -2833,6 +2833,8 @@ class _AdminSkillsQuestionsTabFixedState
               const SizedBox(height: 16),
               TextField(
                   controller: nc,
+                  style: const TextStyle(color: AppColors.textPrimary),
+                  cursorColor: AppColors.primaryLight,
                   decoration:
                       _inp('Skill name *', icon: Icons.category_outlined)),
               const SizedBox(height: 12),
@@ -2911,6 +2913,7 @@ class _AdminSkillsQuestionsTabFixedState
   void _showQForm([Map<String, dynamic>? q]) {
     final tc = TextEditingController(text: q?['text'] ?? '');
     int? selSkill = q != null ? q['skillId'] as int? : null;
+    bool saving = false;
 
     showModalBottomSheet(
       context: context,
@@ -2919,7 +2922,6 @@ class _AdminSkillsQuestionsTabFixedState
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => StatefulBuilder(builder: (_, ss) {
-        bool saving = false;
         return Padding(
           padding: EdgeInsets.only(
               left: 20,

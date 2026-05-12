@@ -625,9 +625,20 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
           ]),
         ),
         actions: [
+          IconButton(
+            tooltip: 'Profile',
+            onPressed: () => setState(() => _selectedIndex = 6),
+            icon: CircleAvatar(
+              radius: 16,
+              backgroundColor: AppColors.accent.withValues(alpha: 0.2),
+              child: const Icon(Icons.person_outline,
+                  color: AppColors.accent, size: 18),
+            ),
+          ),
           Consumer<NotificationService>(
             builder: (_, svc, __) => Stack(children: [
               IconButton(
+                tooltip: 'Notifications',
                 icon: const Icon(Icons.notifications_outlined,
                     color: AppColors.textPrimary),
                 onPressed: _openNotifications,
@@ -649,16 +660,6 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
                       ),
                     )),
             ]),
-          ),
-          IconButton(
-            tooltip: 'Profile',
-            onPressed: () => setState(() => _selectedIndex = 6),
-            icon: CircleAvatar(
-              radius: 16,
-              backgroundColor: AppColors.accent.withValues(alpha: 0.2),
-              child: const Icon(Icons.person_outline,
-                  color: AppColors.accent, size: 18),
-            ),
           ),
           PopupMenuButton<String>(
             offset: const Offset(0, 48),
@@ -1787,6 +1788,11 @@ class _GiveSlotSheetState extends State<_GiveSlotSheet> {
     final ok = await _svc.giveSlotSpecialBooking(widget.bookingId, {
       'date': dateStr,
       'startTime': timeStr,
+      'scheduledDate': dateStr,
+      'scheduledTime': timeStr,
+      'newDate': dateStr,
+      'newTime': timeStr,
+      'time': timeStr,
     });
 
     if (mounted) {
@@ -2704,8 +2710,13 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
   DateTime? _parseToLocalDateTime(dynamic raw) {
     final value = raw?.toString().trim() ?? '';
     if (value.isEmpty) return null;
-    final parsed = DateTime.tryParse(value);
-    return parsed?.toLocal();
+    final hasTimezone = value.endsWith('Z') ||
+        RegExp(r'[+-]\d{2}:\d{2}$').hasMatch(value);
+    final normalized = hasTimezone ? value : '${value}Z';
+    final parsed = DateTime.tryParse(normalized);
+    if (parsed != null) return parsed.toLocal();
+    final fallback = DateTime.tryParse(value);
+    return fallback?.toLocal();
   }
 
   String _formatChatTime(dynamic raw) {
@@ -2726,9 +2737,15 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
     );
     if (mounted) {
       if (saved != null) {
+        final nowIso = DateTime.now().toUtc().toIso8601String();
+        final normalized = {
+          ...saved,
+          'createdAt': (saved['createdAt'] ?? saved['timestamp'] ?? nowIso)
+              .toString(),
+        };
         _replyCtrl.clear();
         setState(() {
-          _comments.add(saved);
+          _comments.add(normalized);
         });
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_scrollToBottom.hasClients) {
@@ -3566,10 +3583,6 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
     if (slot.existing != null) {
       ok = await _svc.updateTimeSlot(slot.existing!.id, {
         'status': targetStatus,
-        'consultantId': widget.consultantId,
-        'slotDate': slot.existing!.slotDate,
-        'masterTimeSlotId': slot.existing!.masterTimeSlotId,
-        'durationMinutes': slot.existing!.durationMinutes,
       });
     } else {
       ok = targetStatus == 'UNAVAILABLE' &&
@@ -3611,10 +3624,6 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
       if (slot.existing != null) {
         ok = await _svc.updateTimeSlot(slot.existing!.id, {
           'status': targetStatus,
-          'consultantId': widget.consultantId,
-          'slotDate': slot.existing!.slotDate,
-          'masterTimeSlotId': slot.existing!.masterTimeSlotId,
-          'durationMinutes': slot.existing!.durationMinutes,
         });
       } else {
         ok = targetStatus == 'UNAVAILABLE' &&

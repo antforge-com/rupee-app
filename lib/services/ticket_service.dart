@@ -468,6 +468,8 @@ class TicketService {
     bool isConsultantReply = false,
   }) async {
     try {
+      final now = DateTime.now();
+      final nowUtcIso = now.toUtc().toIso8601String();
       final response = await _apiClient.dio.post(
         '/api/tickets/comments',
         data: {
@@ -475,6 +477,9 @@ class TicketService {
           'senderId': senderId,
           'message': message,
           'isConsultantReply': isConsultantReply,
+          'createdAt': nowUtcIso,
+          'timestamp': nowUtcIso,
+          'clientTimestamp': now.toIso8601String(),
         },
       );
       return TicketComment.fromJson(response.data);

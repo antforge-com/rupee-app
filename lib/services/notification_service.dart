@@ -41,6 +41,8 @@ class NotificationService extends ChangeNotifier {
   void initialize(String role, int userId) {  // FIX: userId int
     _role = role;
     _userId = userId;
+    _notifications.clear();
+    notifyListeners();
     _fetchFromApi();
     _startPolling();
   }
@@ -61,13 +63,13 @@ class NotificationService extends ChangeNotifier {
     try {
       List<dynamic> list = const [];
       final attempts = <Future<dynamic> Function()>[
-        () => _apiClient.dio.get('/api/notifications').then((r) => r.data),
         () => _apiClient.dio
             .get('/api/notifications/user/$_userId/unread')
             .then((r) => r.data),
         () => _apiClient.dio
             .get('/api/notifications/user/$_userId')
             .then((r) => r.data),
+        () => _apiClient.dio.get('/api/notifications').then((r) => r.data),
       ];
 
       for (final attempt in attempts) {

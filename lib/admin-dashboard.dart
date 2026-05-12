@@ -4897,56 +4897,106 @@ class _SkillsQuestionsTabState extends State<_SkillsQuestionsTab>
     if (mounted) setState(() => _loadingQuestions = false);
   }
 
+  String _normalizedKey(String value) =>
+      value.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+
+  bool _questionExists(String text, String type) {
+    final normalizedText = _normalizedKey(text);
+    final normalizedType = _normalizedKey(type);
+    return _questions.any((item) {
+      final existingText = _normalizedKey((item['text'] ?? '').toString());
+      final existingType = _normalizedKey((item['type'] ?? 'TEXT').toString());
+      return existingText == normalizedText && existingType == normalizedType;
+    });
+  }
+
   void _addSkill() {
     final ctrl = TextEditingController();
+    var saving = false;
     showModalBottomSheet(
         context: context,
         isScrollControlled: true,
         backgroundColor: AppColors.surface,
         shape: const RoundedRectangleBorder(
             borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-        builder: (_) => Padding(
-              padding: EdgeInsets.only(
-                  left: 20,
-                  right: 20,
-                  top: 20,
-                  bottom: MediaQuery.of(context).viewInsets.bottom + 20),
-              child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Add Skill', style: AppTextStyles.h3),
-                    const SizedBox(height: 16),
-                    TextField(
+        builder: (_) => StatefulBuilder(
+              builder: (ctx, ss) => Padding(
+                padding: EdgeInsets.only(
+                    left: 20,
+                    right: 20,
+                    top: 20,
+                    bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
+                child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Add Skill', style: AppTextStyles.h3),
+                      const SizedBox(height: 16),
+                      TextField(
                         controller: ctrl,
+                        style: const TextStyle(color: AppColors.textPrimary),
+                        cursorColor: AppColors.primaryLight,
                         decoration: _inp('Skill name *',
-                            icon: Icons.psychology_rounded)),
-                    const SizedBox(height: 16),
-                    SizedBox(
-                        width: double.infinity,
-                        height: 48,
-                        child: FilledButton(
-                          onPressed: () async {
-                            if (ctrl.text.trim().isEmpty) return;
-                            try {
-                              final success = await QuestionService()
-                                  .createSkill(ctrl.text.trim());
-                              if (success && mounted) {
-                                Navigator.pop(context);
-                                _loadSkills();
-                              } else if (mounted) {
-                                _snack(context, 'Save failed', error: true);
-                              }
-                            } catch (error) {
-                              if (mounted)
-                                _snack(context,
-                                    _apiError(error, fallback: 'Save failed'),
-                                    error: true);
-                            }
-                          },
-                          child: const Text('Add Skill'),
-                        )),
-                  ]),
+                            icon: Icons.psychology_rounded),
+                      ),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                          width: double.infinity,
+                          height: 48,
+                          child: FilledButton(
+                            onPressed: saving
+                                ? null
+                                : () async {
+                                    final name = ctrl.text.trim();
+                                    if (name.isEmpty) return;
+                                    final exists = _skills.any((skill) =>
+                                        _normalizedKey((skill['skillName'] ??
+                                                    skill['name'] ??
+                                                    '')
+                                                .toString()) ==
+                                        _normalizedKey(name));
+                                    if (exists) {
+                                      _snack(ctx, 'Skill already exists',
+                                          error: true);
+                                      return;
+                                    }
+                                    ss(() => saving = true);
+                                    try {
+                                      final success = await QuestionService()
+                                          .createSkill(name);
+                                      if (success && mounted) {
+                                        Navigator.pop(ctx);
+                                        _loadSkills();
+                                      } else if (mounted) {
+                                        _snack(context, 'Save failed',
+                                            error: true);
+                                      }
+                                    } catch (error) {
+                                      if (mounted) {
+                                        _snack(
+                                          context,
+                                          _apiError(error,
+                                              fallback: 'Save failed'),
+                                          error: true,
+                                        );
+                                      }
+                                    } finally {
+                                      if (ctx.mounted) {
+                                        ss(() => saving = false);
+                                      }
+                                    }
+                                  },
+                            child: saving
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2, color: Colors.white),
+                                  )
+                                : const Text('Add Skill'),
+                          )),
+                    ]),
+              ),
             ));
   }
 
@@ -5246,6 +5296,7 @@ class _SkillsQuestionsTabState extends State<_SkillsQuestionsTab>
     final placeholderCtrl = TextEditingController();
     final optionsCtrl = TextEditingController();
     String type = 'TEXT';
+    var saving = false;
     showModalBottomSheet(
         context: context,
         isScrollControlled: true,
@@ -5308,46 +5359,71 @@ class _SkillsQuestionsTabState extends State<_SkillsQuestionsTab>
                             width: double.infinity,
                             height: 48,
                             child: FilledButton(
-                              onPressed: () async {
-                                final options = optionsCtrl.text
-                                    .split(RegExp(r'[\n,]'))
-                                    .map((item) => item.trim())
-                                    .where((item) => item.isNotEmpty)
-                                    .toList();
-                                if (ctrl.text.trim().isEmpty) return;
-                                if (type == 'MULTIPLE_CHOICE' &&
-                                    options.isEmpty) {
-                                  _snack(ctx, 'Add at least one option',
-                                      error: true);
-                                  return;
-                                }
-                                try {
-                                  final success =
-                                      await QuestionService().createQuestion({
-                                    'text': ctrl.text.trim(),
-                                    'type': type,
-                                    if (placeholderCtrl.text.trim().isNotEmpty)
-                                      'placeholder':
-                                          placeholderCtrl.text.trim(),
-                                    if (options.isNotEmpty)
-                                      'options': options.join(', ')
-                                  });
-                                  if (success && mounted) {
-                                    Navigator.pop(ctx);
-                                    _loadQuestions();
-                                  } else if (mounted) {
-                                    _snack(ctx, 'Save failed', error: true);
-                                  }
-                                } catch (error) {
-                                  if (mounted)
-                                    _snack(
-                                        ctx,
-                                        _apiError(error,
-                                            fallback: 'Save failed'),
-                                        error: true);
-                                }
-                              },
-                              child: const Text('Add Question'),
+                              onPressed: saving
+                                  ? null
+                                  : () async {
+                                      final questionText = ctrl.text.trim();
+                                      final options = optionsCtrl.text
+                                          .split(RegExp(r'[\n,]'))
+                                          .map((item) => item.trim())
+                                          .where((item) => item.isNotEmpty)
+                                          .toList();
+                                      if (questionText.isEmpty) return;
+                                      if (_questionExists(questionText, type)) {
+                                        _snack(ctx,
+                                            'This question already exists',
+                                            error: true);
+                                        return;
+                                      }
+                                      if (type == 'MULTIPLE_CHOICE' &&
+                                          options.isEmpty) {
+                                        _snack(ctx, 'Add at least one option',
+                                            error: true);
+                                        return;
+                                      }
+                                      ss(() => saving = true);
+                                      try {
+                                        final success = await QuestionService()
+                                            .createQuestion({
+                                          'text': questionText,
+                                          'type': type,
+                                          if (placeholderCtrl.text
+                                              .trim()
+                                              .isNotEmpty)
+                                            'placeholder':
+                                                placeholderCtrl.text.trim(),
+                                          if (options.isNotEmpty)
+                                            'options': options.join(', ')
+                                        });
+                                        if (success && mounted) {
+                                          Navigator.pop(ctx);
+                                          _loadQuestions();
+                                        } else if (mounted) {
+                                          _snack(ctx, 'Save failed',
+                                              error: true);
+                                        }
+                                      } catch (error) {
+                                        if (mounted) {
+                                          _snack(
+                                              ctx,
+                                              _apiError(error,
+                                                  fallback: 'Save failed'),
+                                              error: true);
+                                        }
+                                      } finally {
+                                        if (ctx.mounted) {
+                                          ss(() => saving = false);
+                                        }
+                                      }
+                                    },
+                              child: saving
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2, color: Colors.white),
+                                    )
+                                  : const Text('Add Question'),
                             )),
                       ])),
                 )));

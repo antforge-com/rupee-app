@@ -1,33 +1,52 @@
 // lib/core/services/booking_service.dart
 // ════════════════════════════════════════════════════════════════════════════
-// Swagger spec ke exact endpoints (web BookingsPage.tsx se matched):
-//   GET   /api/bookings                    (paginated) — Admin
-//   GET   /api/bookings/me                 (current user)
-//   GET   /api/bookings/{id}
-//   GET   /api/bookings/status/{status}    ← path param
-//   GET   /api/bookings/consultant/{id}
-//   POST  /api/bookings                    body: BookingRequest
-//   POST  /api/bookings/bulk               body: BulkBookingRequest
-//   PUT   /api/bookings/{id}               body: BookingUpdateRequest
-//   PATCH /api/bookings/{id}/cancel        ← Web uses this (NOT DELETE)
-//   PATCH /api/bookings/bulk/cancel?ids=   ← bulk cancel
-//   POST  /api/notifications/booking-confirmation
+// Booking Service — with full Razorpay payment integration
 //
-// FIX: DELETE /api/bookings/{id} EXIST NAHI KARTA — PATCH /cancel use karo
-// Web BookingsPage.tsx line: fetch(`${API_BASE}/api/bookings/${id}/cancel`, { method: "PATCH" })
+// Endpoints:
+//   GET   /api/bookings                     (paginated) — Admin
+//   GET   /api/bookings/me                  (current user)
+//   GET   /api/bookings/{id}
+//   GET   /api/bookings/status/{status}     ← path param
+//   GET   /api/bookings/consultant/{id}
+//   POST  /api/bookings                     body: BookingRequest
+//   POST  /api/bookings/bulk                body: BulkBookingRequest
+//   POST  /api/bookings/{id}/verify-payment ← Razorpay signature verification
+//   PUT   /api/bookings/{id}
+//   PUT   /api/bookings/bulk/{id}
+//   PUT   /api/bookings/{id}/reschedule
+//   PUT   /api/bookings/bulk/{id}/reschedule
+//   PATCH /api/bookings/{id}/cancel
+//   GET   /api/bookings/summary
+//   POST  /api/special-bookings
+//   POST  /api/special-bookings/{id}/verify-payment  ← Razorpay
+//   GET   /api/special-bookings/me
+//   GET   /api/special-bookings/consultant/{id}
+//   GET   /api/special-bookings
+//   PATCH /api/special-bookings/{id}/give-slot
+//   PUT   /api/special-bookings/{id}/reschedule
+//   PATCH /api/special-bookings/{id}/cancel
+//
+// Payment flow:
+//   1. createBooking() / createBulkBooking() / createSpecialBooking()
+//      → backend returns razorpayOrderId + totalAmount
+//   2. If RazorpayService.needsPayment(response) → open Razorpay checkout
+//   3. On checkout success → verifyBookingPayment() / verifySpecialBookingPayment()
+//   4. Booking moves to CONFIRMED automatically
+//   5. If totalAmount == 0 (MEMBER / 100% promo) → already CONFIRMED, skip step 2-3
 // ════════════════════════════════════════════════════════════════════════════
 
 import 'package:dio/dio.dart';
 import 'package:finadvise/api_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
+import 'razorpay_service.dart';
 
 class BookingService {
   final ApiClient _apiClient = ApiClient();
 
-  // ── READ ─────────────────────────────────────────────────────────────────
+  // ── READ ──────────────────────────────────────────────────────────────────
 
-  /// GET /api/bookings — Admin: sab bookings (paginated)
+  /// GET /api/bookings — Admin: all bookings (paginated)
   Future<List<Booking>> getAllBookings({int page = 0, int size = 20}) async {
     try {
       final response = await _apiClient.dio.get(
@@ -38,9 +57,10 @@ class BookingService {
       final list = data is Map
           ? (data['content'] ?? data['data'] ?? [])
           : (data is List ? data : []);
-      return (list as List).map((e) => Booking.fromJson(e as Map<String, dynamic>)).toList();
+      return (list as List)
+          .map((e) => Booking.fromJson(e as Map<String, dynamic>))
+          .toList();
     } on DioException catch (e) {
-      // Agar 403/404 aaye to empty list return karo
       if (e.response?.statusCode == 403 || e.response?.statusCode == 404) {
         return [];
       }
@@ -50,7 +70,7 @@ class BookingService {
     }
   }
 
-  /// GET /api/bookings — paginated with totalElements support (Admin dashboard ke liye)
+  /// GET /api/bookings — paginated with totalElements (Admin dashboard)
   Future<Map<String, dynamic>> getAllBookingsPaginated({
     int page = 0,
     int size = 10,
@@ -58,23 +78,29 @@ class BookingService {
   }) async {
     try {
       final normalizedStatus = (status ?? '').trim().toUpperCase();
-      final isFiltered = normalizedStatus.isNotEmpty && normalizedStatus != 'ALL';
+      final isFiltered =
+          normalizedStatus.isNotEmpty && normalizedStatus != 'ALL';
       final response = await _apiClient.dio.get(
-        isFiltered ? '/api/bookings/status/$normalizedStatus' : '/api/bookings',
+        isFiltered
+            ? '/api/bookings/status/$normalizedStatus'
+            : '/api/bookings',
         queryParameters: {'page': page, 'size': size},
       );
       final data = response.data;
-
       if (data is Map) {
         final list = (data['content'] ?? []) as List;
         return {
-          'bookings': list.map((e) => Booking.fromJson(e as Map<String, dynamic>)).toList(),
+          'bookings': list
+              .map((e) => Booking.fromJson(e as Map<String, dynamic>))
+              .toList(),
           'totalElements': data['totalElements'] ?? list.length,
           'totalPages': data['totalPages'] ?? 1,
           'currentPage': data['number'] ?? page,
         };
       } else if (data is List) {
-        final bookings = data.map((e) => Booking.fromJson(e as Map<String, dynamic>)).toList();
+        final bookings = data
+            .map((e) => Booking.fromJson(e as Map<String, dynamic>))
+            .toList();
         return {
           'bookings': bookings,
           'totalElements': bookings.length,
@@ -82,13 +108,23 @@ class BookingService {
           'currentPage': 0,
         };
       }
-      return {'bookings': [], 'totalElements': 0, 'totalPages': 0, 'currentPage': 0};
+      return {
+        'bookings': [],
+        'totalElements': 0,
+        'totalPages': 0,
+        'currentPage': 0
+      };
     } catch (_) {
-      return {'bookings': [], 'totalElements': 0, 'totalPages': 0, 'currentPage': 0};
+      return {
+        'bookings': [],
+        'totalElements': 0,
+        'totalPages': 0,
+        'currentPage': 0
+      };
     }
   }
 
-  /// GET /api/bookings/me — Apni bookings (logged-in user)
+  /// GET /api/bookings/me — logged-in user's bookings
   Future<List<Booking>> getMyBookings({int page = 0, int size = 20}) async {
     try {
       final response = await _apiClient.dio.get(
@@ -99,18 +135,21 @@ class BookingService {
       final list = data is Map
           ? (data['content'] ?? data['data'] ?? [])
           : (data is List ? data : []);
-      return (list as List).map((e) => Booking.fromJson(e as Map<String, dynamic>)).toList();
+      return (list as List)
+          .map((e) => Booking.fromJson(e as Map<String, dynamic>))
+          .toList();
     } catch (_) {
       return [];
     }
   }
 
-  /// Paginated version for dashboard check
-  Future<({List<dynamic> content, int totalElements})> getBookingsByConsultantPaginated(
-      int consultantId, {
-        int page = 0,
-        int size = 5,
-      }) async {
+  /// Paginated version for consultant dashboard
+  Future<({List<dynamic> content, int totalElements})>
+      getBookingsByConsultantPaginated(
+    int consultantId, {
+    int page = 0,
+    int size = 5,
+  }) async {
     try {
       final response = await _apiClient.dio.get(
         '/api/bookings/consultant/$consultantId',
@@ -120,12 +159,17 @@ class BookingService {
       if (data is Map) {
         final list = (data['content'] ?? []) as List;
         return (
-        content: list.map((e) => Booking.fromJson(e as Map<String, dynamic>)).toList(),
-        totalElements: (data['totalElements'] as num?)?.toInt() ?? list.length,
+          content: list
+              .map((e) => Booking.fromJson(e as Map<String, dynamic>))
+              .toList(),
+          totalElements:
+              (data['totalElements'] as num?)?.toInt() ?? list.length,
         );
       }
       final list = data is List ? data : [];
-      final content = list.map((e) => Booking.fromJson(e as Map<String, dynamic>)).toList();
+      final content = list
+          .map((e) => Booking.fromJson(e as Map<String, dynamic>))
+          .toList();
       return (content: content, totalElements: content.length);
     } catch (_) {
       return (content: [], totalElements: 0);
@@ -143,12 +187,11 @@ class BookingService {
   }
 
   /// GET /api/bookings/status/{status}
-  /// status: PENDING | CONFIRMED | COMPLETED | CANCELLED
   Future<List<Booking>> getBookingsByStatus(
-      String status, {
-        int page = 0,
-        int size = 20,
-      }) async {
+    String status, {
+    int page = 0,
+    int size = 20,
+  }) async {
     try {
       final response = await _apiClient.dio.get(
         '/api/bookings/status/$status',
@@ -158,7 +201,9 @@ class BookingService {
       final list = data is Map
           ? (data['content'] ?? data['data'] ?? [])
           : (data is List ? data : []);
-      return (list as List).map((e) => Booking.fromJson(e as Map<String, dynamic>)).toList();
+      return (list as List)
+          .map((e) => Booking.fromJson(e as Map<String, dynamic>))
+          .toList();
     } catch (_) {
       return [];
     }
@@ -166,10 +211,10 @@ class BookingService {
 
   /// GET /api/bookings/consultant/{consultantId}
   Future<List<Booking>> getBookingsByConsultant(
-      int consultantId, {
-        int page = 0,
-        int size = 30,
-      }) async {
+    int consultantId, {
+    int page = 0,
+    int size = 30,
+  }) async {
     try {
       final response = await _apiClient.dio.get(
         '/api/bookings/consultant/$consultantId',
@@ -179,21 +224,30 @@ class BookingService {
       final list = data is Map
           ? (data['content'] ?? data['data'] ?? [])
           : (data is List ? data : []);
-      return (list as List).map((e) => Booking.fromJson(e as Map<String, dynamic>)).toList();
+      return (list as List)
+          .map((e) => Booking.fromJson(e as Map<String, dynamic>))
+          .toList();
     } catch (_) {
       return [];
     }
   }
 
-  // ── CREATE ────────────────────────────────────────────────────────────────
+  // ── CREATE (returns raw JSON so caller can inspect Razorpay fields) ────────
 
-  /// POST /api/bookings — Single booking banao
-  /// BookingRequest required: consultantId, timeSlotId, baseAmount, meetingMode
-  /// meetingMode: PHYSICAL | ONLINE | PHONE
-  Future<Booking?> createBooking({
+  /// POST /api/bookings — Create a single booking.
+  ///
+  /// Returns the raw booking JSON which includes:
+  ///   - `razorpayOrderId` — use with RazorpayService.openCheckout()
+  ///   - `totalAmount`     — if 0 or paymentStatus==SUCCESS, skip checkout
+  ///   - `paymentStatus`   — SUCCESS means it's already paid (MEMBER/promo)
+  ///   - `bookingStatus`   — CONFIRMED if free, PENDING if payment required
+  ///
+  /// Pass [offerId] to apply a discount/promo code. The backend validates it,
+  /// calculates the discounted total, and returns the updated amount.
+  Future<Map<String, dynamic>?> createBooking({
     required int consultantId,
     required int timeSlotId,
-    required double baseAmount, // FIX: 'baseAmount' (nahi 'amount')
+    required double baseAmount,
     required String meetingMode,
     int? offerId,
     String? userNotes,
@@ -210,16 +264,21 @@ class BookingService {
           if (userNotes != null && userNotes.isNotEmpty) 'userNotes': userNotes,
         },
       );
-      return Booking.fromJson(response.data as Map<String, dynamic>);
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data as Map)
+          : null;
     } catch (_) {
       return null;
     }
   }
 
-  /// POST /api/bookings/bulk — Exactly 2 slots ki bulk booking
+  /// POST /api/bookings/bulk — Create a bulk booking (2–4 slots).
+  ///
+  /// Returns raw JSON with same Razorpay fields as [createBooking].
+  /// Pass [offerId] to apply a promo code to the combined total.
   Future<Map<String, dynamic>?> createBulkBooking({
     required int consultantId,
-    required List<int> timeSlotIds, // exactly 2 items
+    required List<int> timeSlotIds,
     required double baseAmountPerSlot,
     required String meetingMode,
     int? offerId,
@@ -237,7 +296,62 @@ class BookingService {
           if (userNotes != null && userNotes.isNotEmpty) 'userNotes': userNotes,
         },
       );
-      return response.data as Map<String, dynamic>;
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data as Map)
+          : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ── PAYMENT VERIFICATION ──────────────────────────────────────────────────
+
+  /// POST /api/bookings/{id}/verify-payment
+  ///
+  /// Called automatically by [RazorpayService.payAndVerifyBooking].
+  /// Exposed here for manual use if you manage checkout yourself.
+  Future<Map<String, dynamic>?> verifyBookingPayment({
+    required int bookingId,
+    required String razorpayPaymentId,
+    required String razorpayOrderId,
+    required String razorpaySignature,
+  }) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/bookings/$bookingId/verify-payment',
+        queryParameters: {
+          'razorpayPaymentId': razorpayPaymentId,
+          'razorpayOrderId': razorpayOrderId,
+          'razorpaySignature': razorpaySignature,
+        },
+      );
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data as Map)
+          : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// POST /api/special-bookings/{id}/verify-payment
+  Future<Map<String, dynamic>?> verifySpecialBookingPayment({
+    required int specialBookingId,
+    required String razorpayPaymentId,
+    required String razorpayOrderId,
+    required String razorpaySignature,
+  }) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/special-bookings/$specialBookingId/verify-payment',
+        queryParameters: {
+          'razorpayPaymentId': razorpayPaymentId,
+          'razorpayOrderId': razorpayOrderId,
+          'razorpaySignature': razorpaySignature,
+        },
+      );
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data as Map)
+          : null;
     } catch (_) {
       return null;
     }
@@ -245,18 +359,18 @@ class BookingService {
 
   // ── UPDATE ────────────────────────────────────────────────────────────────
 
-  /// PUT /api/bookings/{id} — Booking update karo (Admin use)
+  /// PUT /api/bookings/{id}
   Future<bool> updateBooking(
-      int bookingId, {
-        String? bookingStatus, // PENDING | CONFIRMED | COMPLETED | CANCELLED
-        String? paymentStatus, // PENDING | SUCCESS | FAILED | REFUNDED
-        int? consultantId,
-        int? timeSlotId,
-        String? meetingMode,
-        String? meetingLink,
-        String? meetingId,
-        String? meetingNotes,
-      }) async {
+    int bookingId, {
+    String? bookingStatus,
+    String? paymentStatus,
+    int? consultantId,
+    int? timeSlotId,
+    String? meetingMode,
+    String? meetingLink,
+    String? meetingId,
+    String? meetingNotes,
+  }) async {
     try {
       final body = <String, dynamic>{};
       if (bookingStatus != null) body['bookingStatus'] = bookingStatus;
@@ -268,26 +382,13 @@ class BookingService {
       if (meetingId != null) body['meetingId'] = meetingId;
       if (meetingNotes != null) body['meetingNotes'] = meetingNotes;
       if (body.isEmpty) return true;
-      final altBody = <String, dynamic>{
-        ...body,
-        if (bookingStatus != null) 'status': bookingStatus,
-      };
-      final endpoints = <String>[
+
+      for (final path in [
         '/api/bookings/$bookingId',
         '/api/bookings/bulk/$bookingId',
-      ];
-
-      for (final path in endpoints) {
+      ]) {
         try {
           await _apiClient.dio.put(path, data: body);
-          return true;
-        } catch (_) {}
-        try {
-          await _apiClient.dio.patch(path, data: body);
-          return true;
-        } catch (_) {}
-        try {
-          await _apiClient.dio.put(path, data: altBody);
           return true;
         } catch (_) {}
       }
@@ -295,37 +396,6 @@ class BookingService {
     } catch (_) {
       return false;
     }
-  }
-
-  /// Shortcut: meeting link add karo
-  Future<bool> addMeetingLink(
-      int bookingId, {
-        required String meetingLink,
-        String? meetingId,
-      }) =>
-      updateBooking(bookingId, meetingLink: meetingLink, meetingId: meetingId);
-
-  // ── CANCEL (Web BookingsPage.tsx se matched) ──────────────────────────────
-
-  /// PATCH /api/bookings/{id}/cancel — Single booking cancel
-  /// Web code: fetch(`${API_BASE}/api/bookings/${id}/cancel`, { method: "PATCH" })
-  /// FIX: DELETE /api/bookings/{id} exist NAHI karta!
-  Future<bool> cancelBooking(int bookingId) async {
-    try {
-      await _apiClient.dio.patch('/api/bookings/$bookingId/cancel');
-      return true;
-    } catch (e) {
-      if (e is DioException) {
-        // 404 means already cancelled ya exist nahi karta — treat as success
-        if (e.response?.statusCode == 404) return true;
-      }
-      return false;
-    }
-  }
-
-  /// PATCH /api/bookings/bulk/cancel?ids=1,2,3 — Multiple bookings cancel
-  Future<bool> cancelBulkBookings(List<int> bookingIds) async {
-    return false;
   }
 
   /// PUT /api/bookings/bulk/{id}
@@ -353,13 +423,22 @@ class BookingService {
       if (meetingId != null) body['meetingId'] = meetingId;
       if (meetingNotes != null) body['meetingNotes'] = meetingNotes;
       if (body.isEmpty) return true;
-
       await _apiClient.dio.put('/api/bookings/bulk/$bookingId', data: body);
       return true;
     } catch (_) {
       return false;
     }
   }
+
+  /// Shortcut: add meeting link to a booking
+  Future<bool> addMeetingLink(
+    int bookingId, {
+    required String meetingLink,
+    String? meetingId,
+  }) =>
+      updateBooking(bookingId, meetingLink: meetingLink, meetingId: meetingId);
+
+  // ── RESCHEDULE ────────────────────────────────────────────────────────────
 
   /// PUT /api/bookings/{id}/reschedule
   Future<bool> rescheduleBooking(
@@ -397,60 +476,38 @@ class BookingService {
     }
   }
 
-  /// GET /api/bookings/summary
+  // ── CANCEL ────────────────────────────────────────────────────────────────
+
+  /// PATCH /api/bookings/{id}/cancel
+  /// Backend handles Razorpay refund automatically on cancellation.
+  Future<bool> cancelBooking(int bookingId) async {
+    try {
+      await _apiClient.dio.patch('/api/bookings/$bookingId/cancel');
+      return true;
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return true; // Already cancelled
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // ── SUMMARY ───────────────────────────────────────────────────────────────
+
+  /// GET /api/bookings/summary (Admin only)
   Future<Map<String, dynamic>?> getBookingSummary() async {
     try {
       final response = await _apiClient.dio.get('/api/bookings/summary');
       return response.data is Map
-          ? Map<String, dynamic>.from(response.data)
+          ? Map<String, dynamic>.from(response.data as Map)
           : null;
     } catch (_) {
       return null;
     }
   }
 
-  // ── NOTIFICATION ──────────────────────────────────────────────────────────
+  // ── ACTIVE BOOKING CHECK ──────────────────────────────────────────────────
 
-  /// POST /api/notifications/booking-confirmation
-  Future<bool> sendBookingConfirmationNotification(
-      int bookingId, {
-        String? slotDate,
-        String? timeRange,
-        String? meetingMode,
-        String? meetingLink,
-        String? userName,
-        String? userEmail,
-        String? consultantName,
-        String? consultantEmail,
-        String? amount,
-        String? userNotes,
-      }) async {
-    try {
-      await _apiClient.dio.post(
-        '/api/notifications/booking-confirmation',
-        data: {
-          'bookingId': bookingId,
-          if (slotDate != null) 'slotDate': slotDate,
-          if (timeRange != null) 'timeRange': timeRange,
-          if (meetingMode != null) 'meetingMode': meetingMode,
-          if (meetingLink != null) 'meetingLink': meetingLink,
-          if (userName != null) 'userName': userName,
-          if (userEmail != null) 'userEmail': userEmail,
-          if (consultantName != null) 'consultantName': consultantName,
-          if (consultantEmail != null) 'consultantEmail': consultantEmail,
-          if (amount != null) 'amount': amount,
-          if (userNotes != null) 'userNotes': userNotes,
-        },
-      );
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  // ── ACTIVE BOOKING CHECK (admin_dashboard ke liye) ────────────────────────
-
-  /// Check karo ki consultant ke koi active bookings hain
   Future<bool> hasActiveBookings(int consultantId) async {
     try {
       final response = await _apiClient.dio.get(
@@ -463,12 +520,9 @@ class BookingService {
           : (raw is List ? raw : []);
       for (final item in list) {
         if (item is! Map) continue;
-        final status = (item['bookingStatus'] ?? item['status'] ?? '')
-            .toString()
-            .toUpperCase();
-        if (status == 'CONFIRMED' || status == 'PENDING' || status == 'RESCHEDULED') {
-          return true;
-        }
+        final status =
+            (item['bookingStatus'] ?? item['status'] ?? '').toString().toUpperCase();
+        if (status == 'CONFIRMED' || status == 'PENDING') return true;
       }
       return false;
     } catch (_) {
@@ -478,7 +532,6 @@ class BookingService {
 
   // ── SPECIAL BOOKINGS ──────────────────────────────────────────────────────
 
-  /// POST /api/special-bookings — Create a special booking request
   Future<int?> _readCurrentUserId() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -512,22 +565,28 @@ class BookingService {
       'durationInHours': hours.clamp(1, 8),
       'sessionAmount': amount,
       'meetingMode': (payload['meetingMode'] ?? 'ONLINE').toString(),
-      'userNotes': (payload['userNotes'] ?? 'Special booking request').toString(),
+      'userNotes':
+          (payload['userNotes'] ?? 'Special booking request').toString(),
       if (payload['offerId'] != null) 'offerId': payload['offerId'],
     };
   }
 
-  Future<Map<String, dynamic>?> createSpecialBooking(Map<String, dynamic> payload) async {
+  /// POST /api/special-bookings
+  ///
+  /// Returns the raw special-booking JSON which includes:
+  ///   - `razorpayOrderId` — pass to RazorpayService.payAndVerifySpecialBooking
+  ///   - `totalAmount`     — 0 means already paid (MEMBER / 100% promo)
+  ///   - `paymentStatus`   — SUCCESS = already confirmed, PENDING = needs payment
+  ///   - `id`              — special booking ID for verification endpoint
+  ///
+  /// Pass [offerId] (via the payload map key `offerId`) to apply a promo code.
+  Future<Map<String, dynamic>?> createSpecialBooking(
+      Map<String, dynamic> payload) async {
     final body = _normalizeSpecialPayload(payload);
-    final attempts = <Map<String, dynamic>>[
+    for (final requestBody in [
       body,
-      {
-        ...body,
-        if (!body.containsKey('status')) 'status': 'REQUESTED',
-      },
-    ];
-
-    for (final requestBody in attempts) {
+      {...body, if (!body.containsKey('status')) 'status': 'REQUESTED'},
+    ]) {
       try {
         final response = await _apiClient.dio.post(
           '/api/special-bookings',
@@ -538,14 +597,12 @@ class BookingService {
         if (data is List && data.isNotEmpty && data.first is Map) {
           return Map<String, dynamic>.from(data.first as Map);
         }
-      } catch (_) {
-        // Try next request-body variant.
-      }
+      } catch (_) {}
     }
     return null;
   }
 
-  /// GET /api/special-bookings/me — My special bookings (logged-in user)
+  /// GET /api/special-bookings/me
   Future<List<Map<String, dynamic>>> getMySpecialBookings() async {
     final userId = await _readCurrentUserId();
     final paths = <String>[
@@ -561,15 +618,14 @@ class BookingService {
         final res = await _apiClient.dio.get(path);
         final list = _extractRows(res.data);
         if (list.isNotEmpty) return list;
-      } catch (_) {
-        // Try next endpoint variant.
-      }
+      } catch (_) {}
     }
     return [];
   }
 
-  /// GET /api/special-bookings/consultant/{id} — By consultant
-  Future<List<Map<String, dynamic>>> getSpecialBookingsByConsultant(int consultantId) async {
+  /// GET /api/special-bookings/consultant/{id}
+  Future<List<Map<String, dynamic>>> getSpecialBookingsByConsultant(
+      int consultantId) async {
     final paths = <String>[
       '/api/special-bookings/consultant/$consultantId',
       '/api/consultants/$consultantId/special-bookings',
@@ -580,14 +636,12 @@ class BookingService {
         final res = await _apiClient.dio.get(path);
         final rows = _extractRows(res.data);
         if (rows.isNotEmpty) return rows;
-      } catch (_) {
-        // Try next endpoint variant.
-      }
+      } catch (_) {}
     }
     return [];
   }
 
-  /// GET /api/special-bookings — All special bookings (Admin)
+  /// GET /api/special-bookings (Admin)
   Future<List<Map<String, dynamic>>> getAllSpecialBookings() async {
     final paths = <String>[
       '/api/special-bookings',
@@ -604,44 +658,85 @@ class BookingService {
         );
         final rows = _extractRows(res.data);
         if (rows.isNotEmpty) return rows;
-      } catch (_) {
-        // Try next endpoint variant.
-      }
+      } catch (_) {}
     }
     return [];
   }
 
-  /// PATCH /api/special-bookings/{id}/give-slot — Assign a slot to special booking
-  Future<bool> giveSlotSpecialBooking(int id, Map<String, dynamic> payload) async {
-    try {
-      await _apiClient.dio.patch('/api/special-bookings/$id/give-slot', data: payload);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
+  /// PATCH /api/special-bookings/{id}/give-slot (Consultant only)
+  Future<bool> giveSlotSpecialBooking(
+      int id, Map<String, dynamic> payload) async {
+    final date = (payload['date'] ??
+            payload['scheduledDate'] ??
+            payload['newDate'] ??
+            '')
+        .toString()
+        .trim();
+    final time = (payload['startTime'] ??
+            payload['scheduledTime'] ??
+            payload['newTime'] ??
+            payload['time'] ??
+            '')
+        .toString()
+        .trim();
 
-  /// PUT /api/special-bookings/{id} — Generic update special booking
-  Future<bool> updateSpecialBooking(int id, Map<String, dynamic> payload) async {
-    final attempts = <Future<Response<dynamic>> Function()>[
-      () => _apiClient.dio.put('/api/special-bookings/$id', data: payload),
-      () => _apiClient.dio.patch('/api/special-bookings/$id', data: payload),
-      () => _apiClient.dio.put('/api/special-bookings/$id/schedule', data: payload),
+    final payloadCandidates = <Map<String, dynamic>>[
+      payload,
+      {
+        ...payload,
+        if (date.isNotEmpty) 'scheduledDate': date,
+        if (time.isNotEmpty) 'scheduledTime': time,
+      },
+      {
+        ...payload,
+        if (date.isNotEmpty) 'newDate': date,
+        if (time.isNotEmpty) 'newTime': time,
+      },
     ];
-    for (final attempt in attempts) {
-      try {
-        await attempt();
-        return true;
-      } catch (_) {
-        // Try next endpoint variant.
+
+    final attempts = <Future<Response<dynamic>> Function(Map<String, dynamic>)>[
+      (data) =>
+          _apiClient.dio.patch('/api/special-bookings/$id/give-slot', data: data),
+      (data) =>
+          _apiClient.dio.put('/api/special-bookings/$id/give-slot', data: data),
+      (data) =>
+          _apiClient.dio.post('/api/special-bookings/$id/give-slot', data: data),
+      (data) =>
+          _apiClient.dio.put('/api/special-bookings/$id/schedule', data: data),
+      (data) => _apiClient.dio.patch('/api/special-bookings/$id', data: data),
+    ];
+
+    for (final candidate in payloadCandidates) {
+      for (final attempt in attempts) {
+        try {
+          await attempt(candidate);
+          return true;
+        } catch (_) {}
       }
     }
     return false;
   }
 
-  /// PUT /api/special-bookings/{id}/reschedule — Reschedule confirmed special booking
-  /// Body: { newDate: "YYYY-MM-DD", newTime: "HH:MM:SS" }
-  Future<bool> rescheduleSpecialBooking(int id, {
+  /// PUT /api/special-bookings/{id}
+  Future<bool> updateSpecialBooking(
+      int id, Map<String, dynamic> payload) async {
+    for (final attempt in <Future<Response<dynamic>> Function()>[
+      () => _apiClient.dio.put('/api/special-bookings/$id', data: payload),
+      () => _apiClient.dio.patch('/api/special-bookings/$id', data: payload),
+      () => _apiClient.dio
+          .put('/api/special-bookings/$id/schedule', data: payload),
+    ]) {
+      try {
+        await attempt();
+        return true;
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  /// PUT /api/special-bookings/{id}/reschedule
+  Future<bool> rescheduleSpecialBooking(
+    int id, {
     required String newDate,
     required String newTime,
   }) async {
@@ -651,21 +746,74 @@ class BookingService {
       'scheduledDate': newDate,
       'scheduledTime': newTime,
     };
-    final attempts = <Future<Response<dynamic>> Function()>[
-      () => _apiClient.dio.put('/api/special-bookings/$id/reschedule', data: payload),
-      () => _apiClient.dio.put('/api/special-bookings/$id/schedule', data: payload),
+    for (final attempt in <Future<Response<dynamic>> Function()>[
+      () => _apiClient.dio
+          .put('/api/special-bookings/$id/reschedule', data: payload),
+      () => _apiClient.dio
+          .put('/api/special-bookings/$id/schedule', data: payload),
       () => _apiClient.dio.patch('/api/special-bookings/$id', data: payload),
-    ];
-    for (final attempt in attempts) {
+    ]) {
       try {
         await attempt();
         return true;
-      } catch (_) {
-        // Try next endpoint variant.
-      }
+      } catch (_) {}
     }
     return false;
   }
+
+  /// PATCH /api/special-bookings/{id}/cancel
+  /// Backend handles Razorpay refund automatically.
+  Future<bool> cancelSpecialBooking(int id) async {
+    try {
+      await _apiClient.dio.patch('/api/special-bookings/$id/cancel');
+      return true;
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return true;
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // ── NOTIFICATION ──────────────────────────────────────────────────────────
+
+  Future<bool> sendBookingConfirmationNotification(
+    int bookingId, {
+    String? slotDate,
+    String? timeRange,
+    String? meetingMode,
+    String? meetingLink,
+    String? userName,
+    String? userEmail,
+    String? consultantName,
+    String? consultantEmail,
+    String? amount,
+    String? userNotes,
+  }) async {
+    try {
+      await _apiClient.dio.post(
+        '/api/notifications/booking-confirmation',
+        data: {
+          'bookingId': bookingId,
+          if (slotDate != null) 'slotDate': slotDate,
+          if (timeRange != null) 'timeRange': timeRange,
+          if (meetingMode != null) 'meetingMode': meetingMode,
+          if (meetingLink != null) 'meetingLink': meetingLink,
+          if (userName != null) 'userName': userName,
+          if (userEmail != null) 'userEmail': userEmail,
+          if (consultantName != null) 'consultantName': consultantName,
+          if (consultantEmail != null) 'consultantEmail': consultantEmail,
+          if (amount != null) 'amount': amount,
+          if (userNotes != null) 'userNotes': userNotes,
+        },
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // ── INTERNAL HELPERS ──────────────────────────────────────────────────────
 
   List<Map<String, dynamic>> _extractRows(dynamic data) {
     if (data is List) {
@@ -675,7 +823,14 @@ class BookingService {
           .toList();
     }
     if (data is Map) {
-      const keys = ['content', 'data', 'items', 'bookings', 'results', 'records'];
+      const keys = [
+        'content',
+        'data',
+        'items',
+        'bookings',
+        'results',
+        'records'
+      ];
       for (final key in keys) {
         final value = data[key];
         if (value is List) {

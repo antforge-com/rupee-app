@@ -1925,6 +1925,7 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
   List<Map<String, dynamic>> _questions = [];
   bool _loadingSkills = true;
   bool _loadingQuestions = true;
+  String _skillsSearch = '';
 
   @override
   void initState() {
@@ -1954,6 +1955,19 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
 
   String _skillLabel(Map<String, dynamic> skill) =>
       (skill['skillName'] ?? skill['name'] ?? '').toString();
+
+  String _normalizedKey(String value) =>
+      value.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+
+  bool _questionExists(String text, String type) {
+    final normalizedText = _normalizedKey(text);
+    final normalizedType = _normalizedKey(type);
+    return _questions.any((item) {
+      final existingText = _normalizedKey((item['text'] ?? '').toString());
+      final existingType = _normalizedKey((item['type'] ?? 'TEXT').toString());
+      return existingText == normalizedText && existingType == normalizedType;
+    });
+  }
 
   List<String> _questionOptions(Map<String, dynamic> question) =>
       (question['options'] ?? '')
@@ -1999,51 +2013,80 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
 
   void _showAddSkillSheet() {
     final nameCtrl = TextEditingController();
+    var saving = false;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => Padding(
-        padding: EdgeInsets.only(
-            left: 20,
-            right: 20,
-            top: 20,
-            bottom: MediaQuery.of(context).viewInsets.bottom + 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SheetHandle(title: 'New Skill'),
-            TextField(
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, ss) => Padding(
+          padding: EdgeInsets.only(
+              left: 20,
+              right: 20,
+              top: 20,
+              bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SheetHandle(title: 'New Skill'),
+              TextField(
                 controller: nameCtrl,
+                style: const TextStyle(color: AppColors.textPrimary),
+                cursorColor: AppColors.primaryLight,
                 decoration: const InputDecoration(
                     labelText: 'Skill name *',
-                    prefixIcon: Icon(Icons.star_outline))),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: ElevatedButton(
-                onPressed: () async {
-                  final name = nameCtrl.text.trim();
-                  if (name.isEmpty) return;
-                  final result = await _questionService.createSkillResult(name);
-                  if (context.mounted && result.ok) {
-                    Navigator.pop(context);
-                    _showMessage(result.message);
-                    _loadSkills();
-                  } else if (context.mounted) {
-                    _showMessage(result.message, error: true);
-                  }
-                },
-                child: const Text('Create Skill',
-                    style: TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w700)),
+                    prefixIcon: Icon(Icons.star_outline)),
               ),
-            ),
-          ],
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton(
+                  onPressed: saving
+                      ? null
+                      : () async {
+                          final name = nameCtrl.text.trim();
+                          if (name.isEmpty) return;
+                          final exists = _skills.any((skill) =>
+                              _normalizedKey(_skillLabel(skill)) ==
+                              _normalizedKey(name));
+                          if (exists) {
+                            _showMessage('Skill already exists.', error: true);
+                            return;
+                          }
+                          ss(() => saving = true);
+                          final result =
+                              await _questionService.createSkillResult(name);
+                          if (!ctx.mounted) return;
+                          ss(() => saving = false);
+                          if (result.ok) {
+                            Navigator.pop(ctx);
+                            _showMessage(result.message);
+                            _loadSkills();
+                          } else {
+                            _showMessage(result.message, error: true);
+                          }
+                        },
+                  child: saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('Create Skill',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2054,6 +2097,7 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
     final placeholderCtrl = TextEditingController();
     final optionsCtrl = TextEditingController();
     String type = 'TEXT';
+    var saving = false;
 
     showModalBottomSheet(
       context: context,
@@ -2129,37 +2173,62 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
                   width: double.infinity,
                   height: 48,
                   child: ElevatedButton(
-                    onPressed: () async {
-                      final text = textCtrl.text.trim();
-                      if (text.isEmpty) return;
-                      final options = optionsCtrl.text
-                          .split(RegExp(r'[\n,]'))
-                          .map((s) => s.trim())
-                          .where((s) => s.isNotEmpty)
-                          .toList();
-                      if (type == 'MULTIPLE_CHOICE' && options.isEmpty) {
-                        _showMessage('Add at least one option', error: true);
-                        return;
-                      }
-                      final result =
-                          await _questionService.createQuestionResult({
-                        'text': text,
-                        'type': type,
-                        if (placeholderCtrl.text.trim().isNotEmpty)
-                          'placeholder': placeholderCtrl.text.trim(),
-                        if (options.isNotEmpty) 'options': options.join(', '),
-                      });
-                      if (context.mounted && result.ok) {
-                        Navigator.pop(context);
-                        _showMessage(result.message);
-                        _loadQuestions();
-                      } else if (context.mounted) {
-                        _showMessage(result.message, error: true);
-                      }
-                    },
-                    child: const Text('Add Question',
-                        style: TextStyle(
-                            color: Colors.white, fontWeight: FontWeight.w700)),
+                    onPressed: saving
+                        ? null
+                        : () async {
+                            final text = textCtrl.text.trim();
+                            if (text.isEmpty) return;
+                            if (_questionExists(text, type)) {
+                              _showMessage(
+                                'This question already exists.',
+                                error: true,
+                              );
+                              return;
+                            }
+                            final options = optionsCtrl.text
+                                .split(RegExp(r'[\n,]'))
+                                .map((s) => s.trim())
+                                .where((s) => s.isNotEmpty)
+                                .toList();
+                            if (type == 'MULTIPLE_CHOICE' &&
+                                options.isEmpty) {
+                              _showMessage('Add at least one option',
+                                  error: true);
+                              return;
+                            }
+                            ss(() => saving = true);
+                            final result =
+                                await _questionService.createQuestionResult({
+                              'text': text,
+                              'type': type,
+                              if (placeholderCtrl.text.trim().isNotEmpty)
+                                'placeholder': placeholderCtrl.text.trim(),
+                              if (options.isNotEmpty)
+                                'options': options.join(', '),
+                            });
+                            if (!context.mounted) return;
+                            ss(() => saving = false);
+                            if (result.ok) {
+                              Navigator.pop(context);
+                              _showMessage(result.message);
+                              _loadQuestions();
+                            } else {
+                              _showMessage(result.message, error: true);
+                            }
+                          },
+                    child: saving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text('Add Question',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700)),
                   ),
                 ),
               ],
@@ -2172,6 +2241,11 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
 
   @override
   Widget build(BuildContext context) {
+    final filteredSkills = _skills
+        .where((skill) => _normalizedKey(_skillLabel(skill))
+            .contains(_normalizedKey(_skillsSearch)))
+        .toList();
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -2200,78 +2274,106 @@ class _SkillsQuestionsScreenState extends State<SkillsQuestionsScreen>
         controller: _tabs,
         children: [
           // Skills tab
-          _loadingSkills
-              ? const Center(child: CircularProgressIndicator())
-              : _skills.isEmpty
-                  ? const EmptyState(
-                      icon: Icons.star_outline,
-                      title: 'No skills yet',
-                      subtitle:
-                          'Create skill categories for consultant matching')
-                  : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
-                      itemCount: _skills.length,
-                      itemBuilder: (_, i) {
-                        final s = _skills[i];
-                        final skillName = _skillLabel(s);
-                        return Card(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          child: ListTile(
-                            leading: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                  color: const Color(0xFF7C3AED)
-                                      .withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(10)),
-                              child: const Icon(Icons.star_rounded,
-                                  color: Color(0xFF7C3AED), size: 18),
-                            ),
-                            title: Text(skillName, style: AppTextStyles.h4),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.delete_outline,
-                                  color: AppColors.danger),
-                              onPressed: () async {
-                                final ok = await showDialog<bool>(
-                                    context: context,
-                                    builder: (_) => AlertDialog(
-                                            title:
-                                                Text('Delete "$skillName"?'),
-                                            content: const Text(
-                                                'This cannot be undone.'),
-                                            actions: [
-                                              TextButton(
-                                                  onPressed: () =>
-                                                      Navigator.pop(
-                                                          context, false),
-                                                  child: const Text('Cancel')),
-                                              ElevatedButton(
-                                                  onPressed: () =>
-                                                      Navigator.pop(
-                                                          context, true),
-                                                  style:
-                                                      ElevatedButton.styleFrom(
-                                                          backgroundColor:
-                                                              AppColors.danger),
-                                                  child: const Text('Delete',
-                                                      style: TextStyle(
-                                                          color: Colors.white)))
-                                            ]));
-                                if (ok == true) {
-                                  final result = await _questionService
-                                      .deleteSkillResult(s['id']);
-                                  if (result.ok) {
-                                    _showMessage(result.message);
-                                    _loadSkills();
-                                  } else {
-                                    _showMessage(result.message, error: true);
-                                  }
-                                }
-                              },
-                            ),
-                          ),
-                        );
-                      },
+          if (_loadingSkills)
+            const Center(child: CircularProgressIndicator())
+          else
+            Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: TextField(
+                    onChanged: (value) =>
+                        setState(() => _skillsSearch = value),
+                    style: const TextStyle(color: AppColors.textPrimary),
+                    cursorColor: AppColors.primaryLight,
+                    decoration: const InputDecoration(
+                      hintText: 'Search skills',
+                      prefixIcon: Icon(Icons.search_rounded),
                     ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: filteredSkills.isEmpty
+                      ? EmptyState(
+                          icon: Icons.star_outline,
+                          title:
+                              _skills.isEmpty ? 'No skills yet' : 'No matching skills',
+                          subtitle: _skills.isEmpty
+                              ? 'Create skill categories for consultant matching'
+                              : 'Try a different search keyword',
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
+                          itemCount: filteredSkills.length,
+                          itemBuilder: (_, i) {
+                            final s = filteredSkills[i];
+                            final skillName = _skillLabel(s);
+                            return Card(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              child: ListTile(
+                                leading: Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                      color: const Color(0xFF7C3AED)
+                                          .withValues(alpha: 0.1),
+                                      borderRadius: BorderRadius.circular(10)),
+                                  child: const Icon(Icons.star_rounded,
+                                      color: Color(0xFF7C3AED), size: 18),
+                                ),
+                                title: Text(skillName, style: AppTextStyles.h4),
+                                trailing: IconButton(
+                                  icon: const Icon(Icons.delete_outline,
+                                      color: AppColors.danger),
+                                  onPressed: () async {
+                                    final ok = await showDialog<bool>(
+                                        context: context,
+                                        builder: (_) => AlertDialog(
+                                                title:
+                                                    Text('Delete "$skillName"?'),
+                                                content: const Text(
+                                                    'This cannot be undone.'),
+                                                actions: [
+                                                  TextButton(
+                                                      onPressed: () =>
+                                                          Navigator.pop(
+                                                              context, false),
+                                                      child:
+                                                          const Text('Cancel')),
+                                                  ElevatedButton(
+                                                      onPressed: () =>
+                                                          Navigator.pop(
+                                                              context, true),
+                                                      style: ElevatedButton
+                                                          .styleFrom(
+                                                              backgroundColor:
+                                                                  AppColors
+                                                                      .danger),
+                                                      child: const Text('Delete',
+                                                          style: TextStyle(
+                                                              color:
+                                                                  Colors.white)))
+                                                ]));
+                                    if (ok == true) {
+                                      final result = await _questionService
+                                          .deleteSkillResult(s['id']);
+                                      if (result.ok) {
+                                        _showMessage(result.message);
+                                        _loadSkills();
+                                      } else {
+                                        _showMessage(result.message,
+                                            error: true);
+                                      }
+                                    }
+                                  },
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
 
           // Questions tab
           _loadingQuestions
