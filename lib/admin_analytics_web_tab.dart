@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:finadvise/api_client.dart';
 import 'package:finadvise/app_theme.dart';
 import 'package:finadvise/models/models.dart';
 import 'package:finadvise/services/analytics_service.dart';
@@ -10,42 +11,40 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 DateTime? _analyticsDate(dynamic value) {
-  final raw = '${value ?? ''}'.trim();
-  if (raw.isEmpty) return null;
-
-  final isoDateOnly = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(raw);
-  if (isoDateOnly != null) {
-    final y = int.tryParse(isoDateOnly.group(1)!);
-    final m = int.tryParse(isoDateOnly.group(2)!);
-    final d = int.tryParse(isoDateOnly.group(3)!);
-    if (y != null && m != null && d != null) {
-      return DateTime(y, m, d);
-    }
+  if (value == null) return null;
+  if (value is int) {
+    if (value > 1000000000000) return DateTime.fromMillisecondsSinceEpoch(value).toLocal();
+    if (value > 1000000000) return DateTime.fromMillisecondsSinceEpoch(value * 1000).toLocal();
+    return null;
   }
-
-  final ddMmYyyy =
-      RegExp(r'^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$').firstMatch(raw);
-  if (ddMmYyyy != null) {
-    final d = int.tryParse(ddMmYyyy.group(1)!);
-    final m = int.tryParse(ddMmYyyy.group(2)!);
-    final y = int.tryParse(ddMmYyyy.group(3)!);
-    if (y != null && m != null && d != null) {
-      return DateTime(y, m, d);
-    }
+  final raw = value.toString().trim();
+  if (raw.isEmpty || raw == 'null') return null;
+  final epoch = int.tryParse(raw);
+  if (epoch != null && epoch > 1000000000) {
+    final ms = epoch > 1000000000000 ? epoch : epoch * 1000;
+    return DateTime.fromMillisecondsSinceEpoch(ms).toLocal();
   }
-
-  final hasZone =
-      raw.endsWith('Z') || RegExp(r'[+-]\d{2}:\d{2}$').hasMatch(raw);
-  if (hasZone) {
-    return DateTime.tryParse(raw)?.toLocal();
+  final isoDate = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(raw);
+  if (isoDate != null) {
+    final y = int.tryParse(isoDate.group(1)!);
+    final m = int.tryParse(isoDate.group(2)!);
+    final d = int.tryParse(isoDate.group(3)!);
+    if (y != null && m != null && d != null) return DateTime(y, m, d);
   }
-
-  if (raw.contains('T')) {
-    final utc = DateTime.tryParse('${raw}Z');
-    if (utc != null) return utc.toLocal();
+  final ddMm = RegExp(r'^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$').firstMatch(raw);
+  if (ddMm != null) {
+    final d = int.tryParse(ddMm.group(1)!);
+    final m = int.tryParse(ddMm.group(2)!);
+    final y = int.tryParse(ddMm.group(3)!);
+    if (y != null && m != null && d != null) return DateTime(y, m, d);
   }
-
-  return DateTime.tryParse(raw)?.toLocal();
+  final hasZone = raw.endsWith('Z') || RegExp(r'[+-]\d{2}:\d{2}$').hasMatch(raw);
+  if (hasZone) return DateTime.tryParse(raw)?.toLocal();
+  if (raw.contains('T')) return DateTime.tryParse(raw + 'Z')?.toLocal();
+  if (raw.contains(' ') && raw.contains('-')) {
+    return DateTime.tryParse(raw.replaceFirst(' ', 'T') + 'Z')?.toLocal();
+  }
+  return DateTime.tryParse(raw + 'Z')?.toLocal();
 }
 
 bool _isResolvedStatus(String status) =>
@@ -72,12 +71,19 @@ int _daysForRange(String range) {
 }
 
 bool _inSelectedRange(Map<String, dynamic> ticket, String range) {
-  final createdAt = _analyticsDate(ticket['createdAt']);
+  final dateFields = [
+    'createdAt', 'created_at', 'createdDate', 'timestamp', 'updatedAt', 'date',
+  ];
+  DateTime? createdAt;
+  for (final field in dateFields) {
+    createdAt = _analyticsDate(ticket[field]);
+    if (createdAt != null) break;
+  }
   if (createdAt == null) return true;
+  if (createdAt.isAfter(DateTime.now())) return true;
   final now = DateTime.now();
   final startOfToday = DateTime(now.year, now.month, now.day);
-  final cutoff =
-      startOfToday.subtract(Duration(days: _daysForRange(range) - 1));
+  final cutoff = startOfToday.subtract(Duration(days: _daysForRange(range)));
   return !createdAt.isBefore(cutoff);
 }
 
@@ -219,15 +225,12 @@ class _AdminAnalyticsWebTabState extends State<AdminAnalyticsWebTab> {
     if (!silent) setState(() => _loading = true);
     try {
       final results = await Future.wait<dynamic>([
-        _analyticsService
-            .getAnalyticsTicketsAll()
-            .catchError((_) => <Map<String, dynamic>>[]),
+        _fetchAllTicketsForAnalytics().catchError((_) => <Map<String, dynamic>>[]),
         _fetchAllBookings().catchError((_) => <Booking>[]),
       ]);
-      final rows =
-          (results[0] as List).whereType<Map<String, dynamic>>().toList(
-                growable: false,
-              );
+      final rows = (results[0] as List)
+          .whereType<Map<String, dynamic>>()
+          .toList(growable: false);
       final bookings = results[1] as List<Booking>;
       if (!mounted) return;
       setState(() {
@@ -241,28 +244,162 @@ class _AdminAnalyticsWebTabState extends State<AdminAnalyticsWebTab> {
     }
   }
 
-  Future<List<Booking>> _fetchAllBookings() async {
-    final first =
-        await _bookingService.getAllBookingsPaginated(page: 0, size: 200);
-    final all = <Booking>[
-      ...(first['bookings'] as List<Booking>? ?? const <Booking>[]),
+  Future<List<Map<String, dynamic>>> _fetchAllTicketsForAnalytics() async {
+    final client = ApiClient().dio;
+    final endpoints = <Future<dynamic> Function()>[
+      () => client.get('/api/tickets',
+          queryParameters: {'page': 0, 'size': 500, 'sort': 'createdAt,DESC'}),
+      () => client.get('/api/tickets',
+          queryParameters: {'page': 0, 'size': 200}),
+      () => client.get('/api/analytics/tickets/all'),
+      () => client.get('/api/analytics/tickets',
+          queryParameters: {'size': 500}),
     ];
-    final totalPages = (first['totalPages'] as int?) ?? 1;
-    for (var page = 1; page < totalPages; page++) {
-      final next =
-          await _bookingService.getAllBookingsPaginated(page: page, size: 200);
-      all.addAll(next['bookings'] as List<Booking>? ?? const <Booking>[]);
+    for (final ep in endpoints) {
+      try {
+        final response = await ep();
+        final data = response.data;
+        List<dynamic> items = [];
+        if (data is List) {
+          items = data;
+        } else if (data is Map) {
+          items = (data['content'] ?? data['data'] ?? data['items'] ??
+              data['tickets'] ?? data['rows'] ?? []) as List;
+        }
+        if (items.isEmpty) continue;
+        final maps = items
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        if (data is Map) {
+          final totalPages = (data['totalPages'] as num?)?.toInt() ?? 1;
+          if (totalPages > 1) {
+            final size = (data['size'] as num?)?.toInt() ?? 200;
+            for (var page = 1; page < totalPages && page < 10; page++) {
+              try {
+                final next = await client.get('/api/tickets',
+                    queryParameters: {'page': page, 'size': size});
+                if (next.data is Map) {
+                  final nd = next.data as Map;
+                  final ni = (nd['content'] ?? nd['data'] ?? nd['items'] ?? []) as List;
+                  maps.addAll(ni.whereType<Map>()
+                      .map((e) => Map<String, dynamic>.from(e as Map)));
+                }
+              } catch (_) {}
+            }
+          }
+        }
+        if (maps.isNotEmpty) return maps;
+      } catch (_) {}
     }
-    if (all.isEmpty) {
-      all.addAll(await _bookingService.getAllBookings(page: 0, size: 200));
-    }
+    return [];
 
-    final seen = <int>{};
-    return all.where((booking) {
-      if (seen.contains(booking.id)) return false;
-      seen.add(booking.id);
-      return true;
-    }).toList(growable: false);
+  }
+  Future<List<Booking>> _fetchAllBookings() async {
+    final regular = <Booking>[];
+    try {
+      final first =
+          await _bookingService.getAllBookingsPaginated(page: 0, size: 200);
+      regular.addAll(first['bookings'] as List<Booking>? ?? const <Booking>[]);
+
+      final totalPages = (first['totalPages'] as int?) ?? 1;
+      for (var page = 1; page < totalPages; page++) {
+        final next =
+            await _bookingService.getAllBookingsPaginated(page: page, size: 200);
+        regular.addAll(next['bookings'] as List<Booking>? ?? const <Booking>[]);
+      }
+
+      if (regular.isEmpty) {
+        regular.addAll(await _bookingService.getAllBookings(page: 0, size: 200));
+      }
+    } catch (_) {}
+
+    final specialRows = await _bookingService.getAllSpecialBookings();
+    final special = specialRows
+        .map(_specialBookingToBooking)
+        .whereType<Booking>()
+        .toList(growable: false);
+
+    final merged = <String, Booking>{};
+    for (final booking in regular) {
+      merged['REG-${booking.id}'] = booking;
+    }
+    for (final booking in special) {
+      merged['SPL-${booking.id}'] = booking;
+    }
+    return merged.values.toList(growable: false);
+  }
+
+  String _firstBookingText(List<dynamic> values) {
+    for (final value in values) {
+      final text = (value ?? '').toString().trim();
+      if (text.isNotEmpty && text.toLowerCase() != 'null') return text;
+    }
+    return '';
+  }
+
+  String _normalizeSpecialStatus(dynamic raw) {
+    final status = (raw ?? '').toString().trim().toUpperCase();
+    if (status == 'COMPLETED') return 'COMPLETED';
+    if (status == 'CANCELLED' || status == 'CANCELED' || status == 'REJECTED') {
+      return 'CANCELLED';
+    }
+    if (status == 'CONFIRMED' || status == 'SCHEDULED') return 'CONFIRMED';
+    return 'PENDING';
+  }
+
+  Booking? _specialBookingToBooking(Map<String, dynamic> row) {
+    final id = (row['id'] as num?)?.toInt();
+    if (id == null || id <= 0) return null;
+
+    final status = _normalizeSpecialStatus(row['status']);
+    final consultantName = _firstBookingText([
+      row['consultantName'],
+      row['consultant'] is Map ? row['consultant']['name'] : null,
+      row['consultant'] is Map ? row['consultant']['fullName'] : null,
+    ]);
+    final clientName = _firstBookingText([
+      row['clientName'],
+      row['userName'],
+      row['user'] is Map ? row['user']['name'] : null,
+      row['user'] is Map ? row['user']['fullName'] : null,
+      row['userEmail'],
+    ]);
+    final slotDate = _firstBookingText([
+      row['scheduledDate'],
+      row['scheduled_date'],
+      row['slotDate'],
+      row['bookingDate'],
+      row['date'],
+    ]);
+    final timeRange = _firstBookingText([
+      row['scheduledTimeRange'],
+      row['scheduled_time_range'],
+      row['timeRange'],
+      row['scheduledTime'],
+      row['slotTime'],
+      row['time'],
+    ]);
+
+    final data = <String, dynamic>{
+      'id': id,
+      'bookingStatus': status,
+      'status': status,
+      'consultantId': row['consultantId'] ?? row['consultant_id'],
+      'consultantName': consultantName,
+      'userId': row['userId'] ?? row['user_id'],
+      'clientName': clientName,
+      'slotDate': slotDate,
+      'timeRange': timeRange,
+      'meetingMode': row['meetingMode'] ?? row['meeting_mode'],
+      'paymentStatus': row['paymentStatus'] ?? row['payment_status'],
+      'totalAmount': row['totalAmount'] ??
+          row['sessionAmount'] ??
+          row['amount'] ??
+          row['baseAmount'],
+      'createdAt': row['createdAt'] ?? row['created_at'],
+    };
+    return Booking.fromJson(data);
   }
 
   List<Map<String, dynamic>> get _scopedTickets => _tickets

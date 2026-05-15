@@ -12,6 +12,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:finadvise/api_client.dart';
 import 'package:finadvise/app_theme.dart';
 import 'package:finadvise/booking_page.dart';
 import 'package:finadvise/admin_analytics_web_tab.dart';
@@ -75,7 +76,11 @@ void _snack(BuildContext ctx, String msg,
 // â”€â”€ Input decoration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 InputDecoration _inp(String label,
-        {IconData? icon, String? hint, Widget? suffix, String? prefix}) =>
+        {IconData? icon,
+        String? hint,
+        Widget? suffix,
+        String? prefix,
+        String? errorText}) =>
     InputDecoration(
       labelText: label,
       hintText: hint,
@@ -100,6 +105,10 @@ InputDecoration _inp(String label,
       errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: Color(0xFFDC2626))),
+      focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFFDC2626), width: 2)),
+      errorText: (errorText ?? '').trim().isEmpty ? null : errorText,
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
     );
 
@@ -481,16 +490,20 @@ class _AdminDashboardState extends State<AdminDashboard> {
     }
   }
 
-  void _showNotifications() => showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: AppColors.surface,
-        shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-        builder: (ctx) => SizedBox(
-            height: MediaQuery.of(ctx).size.height * 0.65,
-            child: NotificationPanel(onClose: () => Navigator.pop(ctx))),
-      );
+  void _showNotifications() {
+    final svc = context.read<NotificationService>();
+    svc.refresh().catchError((_) {});
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => SizedBox(
+          height: MediaQuery.of(ctx).size.height * 0.65,
+          child: NotificationPanel(onClose: () => Navigator.pop(ctx))),
+    );
+  }
 
   Widget _body() {
     switch (_section) {
@@ -941,6 +954,56 @@ class _OverviewTabState extends State<_OverviewTab> {
   }
 
   Future<List<Ticket>> _fetchAllTickets() async {
+    // Try production API endpoint directly first
+    try {
+      final resp = await ApiClient().dio.get(
+        '/api/tickets',
+        queryParameters: {'page': 0, 'size': 500, 'sort': 'createdAt,DESC'},
+      );
+      final data = resp.data;
+      List<dynamic> items = [];
+      if (data is List) {
+        items = data;
+      } else if (data is Map) {
+        items = (data['content'] ??
+            data['data'] ??
+            data['items'] ??
+            data['tickets'] ??
+            []) as List;
+      }
+      if (items.isNotEmpty) {
+        final tickets = items
+            .whereType<Map>()
+            .map((e) => Ticket.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+
+        // Fetch remaining pages if paginated
+        if (data is Map) {
+          final totalPages = (data['totalPages'] as num?)?.toInt() ?? 1;
+          if (totalPages > 1) {
+            final size = (data['size'] as num?)?.toInt() ?? 500;
+            for (var page = 1; page < totalPages && page < 10; page++) {
+              try {
+                final next = await ApiClient().dio.get('/api/tickets',
+                    queryParameters: {'page': page, 'size': size});
+                final nextData = next.data;
+                if (nextData is Map) {
+                  final nextItems = (nextData['content'] ??
+                      nextData['data'] ??
+                      nextData['items'] ??
+                      []) as List;
+                  tickets.addAll(nextItems.whereType<Map>().map(
+                      (e) => Ticket.fromJson(Map<String, dynamic>.from(e))));
+                }
+              } catch (_) {}
+            }
+          }
+        }
+        if (tickets.isNotEmpty) return tickets;
+      }
+    } catch (_) {}
+
+    // Fallback
     final analytics = await _ts.getAllTickets(useAnalytics: true, size: 500);
     if (analytics.isNotEmpty) return analytics;
     return _ts.getAllTickets(size: 500);
@@ -1428,7 +1491,13 @@ class _OverviewTabState extends State<_OverviewTab> {
               _quickAction(context, Icons.task_alt_rounded, 'Approvals',
                   const Color(0xFFF97316), AdminSection.offerApprovals),
               _quickAction(context, Icons.add_circle_outline_rounded,
-                  'New Ticket', const Color(0xFF7C3AED), AdminSection.tickets),
+                  'New Ticket', const Color(0xFF7C3AED), null, onTap: () {
+                // Switch to tickets tab (index 1) then open create sheet
+                widget.onSwitch(1);
+                Future.delayed(const Duration(milliseconds: 400), () {
+                  if (mounted) _showAdminCreateTicketDialog();
+                });
+              }),
               _quickAction(context, Icons.person_add_rounded, 'Add Member',
                   const Color(0xFF059669), AdminSection.addMember),
               _quickAction(context, Icons.currency_rupee_rounded, 'Commission',
@@ -1498,11 +1567,171 @@ class _OverviewTabState extends State<_OverviewTab> {
         ),
       );
 
+  /// Called from "New Ticket" quick-action — opens the create-ticket sheet.
+  /// Re-uses the same logic as the FAB inside AdminTicketsTab / _AdminTicketsTabState.
+  Future<void> _showAdminCreateTicketDialog() async {
+    // Load users + categories before opening sheet
+    List<dynamic> users = [];
+    final categories = <String>{};
+    try {
+      users = await UserService().getAllUsers();
+    } catch (_) {}
+    try {
+      final rawCats = await AdminService().getCategories();
+      for (final cat in rawCats) {
+        final name = (cat['name'] ?? '').toString().trim();
+        if (name.isNotEmpty) categories.add(name);
+      }
+    } catch (_) {}
+    try {
+      final unique = await _ts.getUniqueCategories();
+      categories.addAll(unique);
+    } catch (_) {}
+    if (!mounted) return;
+
+    final descCtrl = TextEditingController();
+    final customCatCtrl = TextEditingController();
+    int? userId;
+    String? category = categories.isNotEmpty ? categories.first : null;
+    int? consultantId;
+    String priority = 'MEDIUM';
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (modalCtx) => StatefulBuilder(
+        builder: (modalCtx, ss) => Padding(
+          padding: EdgeInsets.only(
+              left: 20,
+              right: 20,
+              top: 20,
+              bottom: MediaQuery.of(modalCtx).viewInsets.bottom + 20),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Create Ticket', style: AppTextStyles.h3),
+                const SizedBox(height: 16),
+                // User picker
+                DropdownButtonFormField<int>(
+                  value: userId,
+                  decoration:
+                      _inp('User *', icon: Icons.person_outline_rounded),
+                  items: users
+                      .map((u) => DropdownMenuItem<int>(
+                          value:
+                              u is Map ? (u['id'] as int?) : (u as dynamic).id,
+                          child: Text(
+                            (u is Map
+                                        ? u['identifier']
+                                        : (u as dynamic).identifier)
+                                    ?.toString() ??
+                                'User',
+                            overflow: TextOverflow.ellipsis,
+                          )))
+                      .toList(),
+                  onChanged: (v) => ss(() => userId = v),
+                ),
+                const SizedBox(height: 10),
+                if (categories.isNotEmpty)
+                  DropdownButtonFormField<String>(
+                    value: category,
+                    decoration:
+                        _inp('Category', icon: Icons.label_outline_rounded),
+                    items: categories
+                        .map((c) =>
+                            DropdownMenuItem<String>(value: c, child: Text(c)))
+                        .toList(),
+                    onChanged: (v) => ss(() => category = v),
+                  ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: customCatCtrl,
+                  decoration: _inp('Custom category (optional)',
+                      icon: Icons.edit_outlined),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  value: priority,
+                  decoration: _inp('Priority', icon: Icons.flag_outlined),
+                  items: ['LOW', 'MEDIUM', 'HIGH', 'URGENT']
+                      .map((p) =>
+                          DropdownMenuItem<String>(value: p, child: Text(p)))
+                      .toList(),
+                  onChanged: (v) => ss(() => priority = v ?? 'MEDIUM'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: descCtrl,
+                  maxLines: 3,
+                  decoration:
+                      _inp('Description *', icon: Icons.description_outlined),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      if (userId == null || descCtrl.text.trim().isEmpty) {
+                        ScaffoldMessenger.of(modalCtx).showSnackBar(
+                          const SnackBar(
+                              content:
+                                  Text('Please fill in User and Description')),
+                        );
+                        return;
+                      }
+                      try {
+                        final cat = customCatCtrl.text.trim().isNotEmpty
+                            ? customCatCtrl.text.trim()
+                            : (category ?? 'General');
+                        await _ts.createTicket(
+                          userId: userId!,
+                          category: cat,
+                          description: descCtrl.text.trim(),
+                          priority: priority,
+                          consultantId: consultantId,
+                        );
+                        if (modalCtx.mounted) Navigator.pop(modalCtx);
+                        _snack(context, 'Ticket created successfully!');
+                      } catch (e) {
+                        _snack(context, 'Failed to create ticket: $e',
+                            error: true);
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryLight,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text('Create Ticket',
+                        style: TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _quickAction(BuildContext ctx, IconData icon, String label,
-          Color color, AdminSection section) =>
+          Color color, AdminSection? section,
+          {VoidCallback? onTap}) =>
       GestureDetector(
-        onTap: () => Navigator.push(ctx,
-            MaterialPageRoute(builder: (_) => _SubScaffold(section: section))),
+        onTap: onTap ??
+            (section != null
+                ? () => Navigator.push(
+                    ctx,
+                    MaterialPageRoute(
+                        builder: (_) => _SubScaffold(section: section)))
+                : null),
         child: Container(
           decoration: BoxDecoration(
               color: color.withValues(alpha: 0.07),
@@ -1725,7 +1954,7 @@ class _TicketsTabState extends State<_TicketsTab> {
   bool _loading = true, _loadingMore = false;
   int _page = 0;
   bool _hasMore = true;
-  static const _pageSize = 20;
+  static const _pageSize = 10;
 
   String _search = '', _statusF = 'ALL', _priorityF = 'ALL';
   final _statuses = [
@@ -2739,7 +2968,7 @@ class _AdvisorDetailState extends State<_AdvisorDetail>
                     _infoRow(Icons.email_outlined, 'Email', a.email),
                     if (a.yearsOfExperience != null)
                       _infoRow(Icons.workspace_premium_outlined, 'Experience',
-                          '${a.yearsOfExperience!.toStringAsFixed(1)} years'),
+                          '${a.yearsOfExperience!.round()} years'),
                     if (a.slotsDuration != null)
                       _infoRow(Icons.timer_outlined, 'Slot Duration',
                           '${a.slotsDuration} mins'),
@@ -2911,7 +3140,9 @@ class _AdvisorFormState extends State<_AdvisorForm> {
       _desigC.text = a.designation ?? '';
       _chargesC.text = _normalizeSessionFee(a.charges).toStringAsFixed(0);
       _descC.text = a.description ?? '';
-      _experienceC.text = a.yearsOfExperience?.toStringAsFixed(1) ?? '';
+      _experienceC.text = a.yearsOfExperience == null
+          ? ''
+          : a.yearsOfExperience!.round().toString();
       _slotDuration = a.slotsDuration ?? 60;
       _selectedSkills.addAll(a.skills);
       if (a.shiftStartTime != null)
@@ -4367,6 +4598,7 @@ class _OfferFormState extends State<_OfferForm> {
       _discC = TextEditingController();
   bool _isActive = true, _saving = false;
   String? _validFrom, _validTo;
+  String? _titleErr, _descErr, _discountErr, _dateErr;
   List<ConsultantModel> _consultants = [];
   int? _selectedConsultantId;
   bool _loadingConsultants = true;
@@ -4450,27 +4682,187 @@ class _OfferFormState extends State<_OfferForm> {
           _validFrom = DateFormat('yyyy-MM-dd').format(p);
         else
           _validTo = DateFormat('yyyy-MM-dd').format(p);
+        _dateErr = null;
       });
   }
 
+  String? _firstValidationMessage(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is List) {
+      for (final item in raw) {
+        final msg = _firstValidationMessage(item);
+        if (msg != null) return msg;
+      }
+      return null;
+    }
+    if (raw is Map) {
+      for (final key in const [
+        'message',
+        'defaultMessage',
+        'error',
+        'description',
+        'detail',
+      ]) {
+        final candidate = raw[key];
+        if (candidate != null && candidate.toString().trim().isNotEmpty) {
+          return candidate.toString().trim();
+        }
+      }
+      return null;
+    }
+    final text = raw.toString().trim();
+    return text.isEmpty ? null : text;
+  }
+
+  bool _setFieldErrorFromKey(String key, String message) {
+    if (message.trim().isEmpty) return false;
+    final normalized = key.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    if (normalized.contains('title') || normalized.contains('name')) {
+      _titleErr = message;
+      return true;
+    }
+    if (normalized.contains('description') || normalized.contains('desc')) {
+      _descErr = message;
+      return true;
+    }
+    if (normalized.contains('discount') ||
+        normalized.contains('offer') ||
+        normalized.contains('coupon') ||
+        normalized.contains('promo')) {
+      _discountErr = message;
+      return true;
+    }
+    if (normalized.contains('date') ||
+        normalized.contains('valid') ||
+        normalized.contains('from') ||
+        normalized.contains('to') ||
+        normalized.contains('start') ||
+        normalized.contains('end') ||
+        normalized.contains('expiry')) {
+      _dateErr = message;
+      return true;
+    }
+    return false;
+  }
+
+  bool _applyServerValidationErrors(Object error) {
+    if (error is! DioException) return false;
+    final data = error.response?.data;
+    var handled = false;
+    String? fallbackMessage;
+
+    if (data is Map) {
+      final rootMessage = _firstValidationMessage(
+        data['message'] ?? data['error'] ?? data['detail'],
+      );
+      if (rootMessage != null) fallbackMessage = rootMessage;
+
+      for (final key in const ['fieldErrors', 'errors', 'validationErrors']) {
+        final raw = data[key];
+        if (raw is Map) {
+          raw.forEach((field, value) {
+            final msg = _firstValidationMessage(value);
+            if (msg == null) return;
+            handled = _setFieldErrorFromKey('$field', msg) || handled;
+          });
+        } else if (raw is List) {
+          for (final item in raw) {
+            if (item is Map) {
+              final field = (item['field'] ??
+                      item['name'] ??
+                      item['property'] ??
+                      item['path'] ??
+                      '')
+                  .toString();
+              final msg = _firstValidationMessage(item);
+              if (msg == null) continue;
+              if (field.isNotEmpty) {
+                handled = _setFieldErrorFromKey(field, msg) || handled;
+              } else if (!handled && fallbackMessage == null) {
+                fallbackMessage = msg;
+              }
+            } else {
+              final msg = _firstValidationMessage(item);
+              if (msg == null || handled) continue;
+              fallbackMessage ??= msg;
+            }
+          }
+        }
+      }
+    } else if (data is List) {
+      final msg = _firstValidationMessage(data);
+      if (msg != null) fallbackMessage = msg;
+    } else if (data is String && data.trim().isNotEmpty) {
+      fallbackMessage = data.trim();
+    }
+
+    final normalizedMessage =
+        (fallbackMessage ?? '').toLowerCase().replaceAll('\n', ' ');
+    if (normalizedMessage.isNotEmpty && !handled) {
+      if (_setFieldErrorFromKey(normalizedMessage, fallbackMessage!)) {
+        handled = true;
+      } else if (_titleErr == null &&
+          _discountErr == null &&
+          _dateErr == null) {
+        _discountErr = fallbackMessage;
+        handled = true;
+      }
+    }
+
+    return handled;
+  }
+
   Future<void> _save() async {
-    if (_titleC.text.trim().isEmpty) {
-      _snack(context, 'Title required', error: true);
+    final title = _titleC.text.trim();
+    final description = _descC.text.trim();
+    final discount = _discC.text.trim();
+    final fromDate = _validFrom == null ? null : DateTime.tryParse(_validFrom!);
+    final toDate = _validTo == null ? null : DateTime.tryParse(_validTo!);
+
+    String? titleErr;
+    String? descErr;
+    String? discountErr;
+    String? dateErr;
+
+    if (title.isEmpty) {
+      titleErr = 'Title is required';
+    } else if (title.length < 3) {
+      titleErr = 'Title should be at least 3 characters';
+    }
+    if (discount.isEmpty) {
+      discountErr = 'Discount is required';
+    } else if (discount.length < 2) {
+      discountErr = 'Enter a valid discount value';
+    }
+    if (description.length > 400) {
+      descErr = 'Description should be less than 400 characters';
+    }
+    if (fromDate == null || toDate == null) {
+      dateErr = 'Please select both valid dates';
+    } else if (fromDate.isAfter(toDate)) {
+      dateErr = '"Valid From" cannot be after "Valid Until"';
+    }
+
+    setState(() {
+      _titleErr = titleErr;
+      _descErr = descErr;
+      _discountErr = discountErr;
+      _dateErr = dateErr;
+    });
+
+    if (titleErr != null ||
+        descErr != null ||
+        discountErr != null ||
+        dateErr != null) {
+      _snack(context, 'Please correct the highlighted fields', error: true);
       return;
     }
-    if (_discC.text.trim().isEmpty) {
-      _snack(context, 'Discount is required', error: true);
-      return;
-    }
-    if (_validFrom == null || _validTo == null) {
-      _snack(context, 'Both dates required', error: true);
-      return;
-    }
+
     setState(() => _saving = true);
     final payload = {
-      'title': _titleC.text.trim(),
-      'description': _descC.text.trim(),
-      'discount': _discC.text.trim(),
+      'title': title,
+      'description': description,
+      'discount': discount,
       'active': _isActive,
       'validFrom': '${_validFrom}T00:00:00',
       'validTo': '${_validTo}T23:59:59',
@@ -4480,16 +4872,24 @@ class _OfferFormState extends State<_OfferForm> {
       final id = widget.offer?['id'];
       bool success;
       if (id != null)
-        success = await OfferService().updateOffer(id, payload);
+        success =
+            await OfferService().updateOffer(id, payload, throwOnError: true);
       else
-        success = await OfferService().createOffer(payload);
+        success = await OfferService().createOffer(payload, throwOnError: true);
 
       if (success)
         widget.onSaved();
       else
         _snack(context, 'Save failed', error: true);
-    } catch (_) {
-      if (mounted) _snack(context, 'Save failed', error: true);
+    } catch (error) {
+      if (!mounted) return;
+      final handled = _applyServerValidationErrors(error);
+      setState(() {});
+      _snack(
+        context,
+        handled ? 'Please correct the highlighted fields' : _apiError(error),
+        error: true,
+      );
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -4519,28 +4919,55 @@ class _OfferFormState extends State<_OfferForm> {
               const SizedBox(height: 16),
               TextField(
                   controller: _titleC,
-                  decoration:
-                      _inp('Offer title *', icon: Icons.local_offer_outlined)),
+                  style: const TextStyle(color: AppColors.textPrimary),
+                  onChanged: (_) {
+                    if (_titleErr != null) setState(() => _titleErr = null);
+                  },
+                  decoration: _inp('Offer title *',
+                      icon: Icons.local_offer_outlined, errorText: _titleErr)),
               const SizedBox(height: 10),
               TextField(
                   controller: _descC,
-                  decoration: _inp('Description'),
+                  style: const TextStyle(color: AppColors.textPrimary),
+                  onChanged: (_) {
+                    if (_descErr != null) setState(() => _descErr = null);
+                  },
+                  decoration: _inp('Description', errorText: _descErr),
                   maxLines: 2),
               const SizedBox(height: 10),
               TextField(
                   controller: _discC,
+                  style: const TextStyle(color: AppColors.textPrimary),
+                  onChanged: (_) {
+                    if (_discountErr != null) {
+                      setState(() => _discountErr = null);
+                    }
+                  },
                   decoration: _inp('Discount badge (e.g. 20% OFF)',
-                      icon: Icons.percent_rounded)),
+                      icon: Icons.percent_rounded, errorText: _discountErr)),
               const SizedBox(height: 10),
               Row(children: [
                 Expanded(
                     child: _datePick(
-                        'Valid From', _validFrom, () => _pickDate(true))),
+                        'Valid From', _validFrom, () => _pickDate(true),
+                        hasError: (_dateErr ?? '').isNotEmpty)),
                 const SizedBox(width: 10),
                 Expanded(
                     child: _datePick(
-                        'Valid Until', _validTo, () => _pickDate(false))),
+                        'Valid Until', _validTo, () => _pickDate(false),
+                        hasError: (_dateErr ?? '').isNotEmpty)),
               ]),
+              if ((_dateErr ?? '').isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  _dateErr!,
+                  style: const TextStyle(
+                    color: Color(0xFFDC2626),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
               const SizedBox(height: 10),
               DropdownButtonFormField<int?>(
                 value: _consultants.any(
@@ -4607,7 +5034,8 @@ class _OfferFormState extends State<_OfferForm> {
             ])),
       );
 
-  Widget _datePick(String label, String? date, VoidCallback onTap) =>
+  Widget _datePick(String label, String? date, VoidCallback onTap,
+          {bool hasError = false}) =>
       GestureDetector(
           onTap: onTap,
           child: Container(
@@ -4622,7 +5050,10 @@ class _OfferFormState extends State<_OfferForm> {
                     end: Alignment.bottomRight,
                   ),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.border)),
+                  border: Border.all(
+                      color:
+                          hasError ? const Color(0xFFDC2626) : AppColors.border,
+                      width: hasError ? 1.3 : 1)),
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -4951,9 +5382,9 @@ class _SkillsQuestionsTabState extends State<_SkillsQuestionsTab>
                                     if (name.isEmpty) return;
                                     final exists = _skills.any((skill) =>
                                         _normalizedKey((skill['skillName'] ??
-                                                    skill['name'] ??
-                                                    '')
-                                                .toString()) ==
+                                                skill['name'] ??
+                                                '')
+                                            .toString()) ==
                                         _normalizedKey(name));
                                     if (exists) {
                                       _snack(ctx, 'Skill already exists',
@@ -5370,8 +5801,8 @@ class _SkillsQuestionsTabState extends State<_SkillsQuestionsTab>
                                           .toList();
                                       if (questionText.isEmpty) return;
                                       if (_questionExists(questionText, type)) {
-                                        _snack(ctx,
-                                            'This question already exists',
+                                        _snack(
+                                            ctx, 'This question already exists',
                                             error: true);
                                         return;
                                       }
@@ -6650,41 +7081,42 @@ class _ContactTabState extends State<_ContactTab> {
     final visible = _visible;
     return Scaffold(
       backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: Row(children: [
-          const Text('Contact Messages',
-              style: TextStyle(
-                  color: AppColors.textPrimary,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16)),
-          if (_unread > 0) ...[
-            const SizedBox(width: 8),
-            Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      body: Column(children: [
+        // ── Toolbar row (no duplicate AppBar) ──
+        Container(
+          color: AppColors.surface,
+          padding: const EdgeInsets.fromLTRB(14, 10, 8, 0),
+          child: Row(children: [
+            if (_unread > 0)
+              Container(
+                margin: const EdgeInsets.only(right: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                    color: const Color(0xFFDC2626),
-                    borderRadius: BorderRadius.circular(20)),
-                child: Text('$_unread',
+                  color: const Color(0xFFDC2626),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text('$_unread unread',
                     style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700)))
-          ]
-        ]),
-        backgroundColor: AppColors.surface,
-        iconTheme: const IconThemeData(color: AppColors.textPrimary),
-        actions: [
-          if (_unread > 0)
-            TextButton(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700)),
+              ),
+            const Spacer(),
+            if (_unread > 0)
+              TextButton(
                 onPressed: _markAllRead,
-                child: const Text('Mark all read',
-                    style: TextStyle(fontSize: 12))),
-          IconButton(
-              icon: const Icon(Icons.refresh_rounded),
-              onPressed: () => _load(reset: true)),
-        ],
-      ),
-      body: Column(children: [
+                style:
+                    TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                child:
+                    const Text('Mark all read', style: TextStyle(fontSize: 12)),
+              ),
+            IconButton(
+              icon: const Icon(Icons.refresh_rounded, size: 20),
+              onPressed: () => _load(reset: true),
+              visualDensity: VisualDensity.compact,
+            ),
+          ]),
+        ),
         Container(
             color: AppColors.surface,
             padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
@@ -9052,79 +9484,192 @@ class _PlansScreenState extends State<_PlansScreen> {
         fc = TextEditingController(),
         tc = TextEditingController();
     showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: AppColors.surface,
-        shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-        builder: (_) => Padding(
-            padding: EdgeInsets.only(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) {
+        String? nameErr;
+        String? originalErr;
+        String? discountErr;
+        bool saving = false;
+
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            Future<void> submit() async {
+              final name = nc.text.trim();
+              final original = double.tryParse(oc.text.trim());
+              final discountParsed = dc.text.trim().isEmpty
+                  ? null
+                  : double.tryParse(dc.text.trim());
+
+              String? nextNameErr;
+              String? nextOriginalErr;
+              String? nextDiscountErr;
+
+              if (name.isEmpty) {
+                nextNameErr = 'Plan name is required';
+              } else if (name.length < 2) {
+                nextNameErr = 'Plan name should be at least 2 characters';
+              }
+              if (original == null || original <= 0) {
+                nextOriginalErr = 'Enter a valid original price';
+              }
+              if (discountParsed != null && discountParsed < 0) {
+                nextDiscountErr = 'Discount price cannot be negative';
+              } else if (discountParsed != null &&
+                  original != null &&
+                  discountParsed > original) {
+                nextDiscountErr = 'Discount price cannot exceed original price';
+              }
+
+              setModalState(() {
+                nameErr = nextNameErr;
+                originalErr = nextOriginalErr;
+                discountErr = nextDiscountErr;
+              });
+
+              if (nextNameErr != null ||
+                  nextOriginalErr != null ||
+                  nextDiscountErr != null) {
+                _snack(context, 'Please correct the highlighted fields',
+                    error: true);
+                return;
+              }
+
+              setModalState(() => saving = true);
+              final discountPrice = discountParsed ?? original!;
+              final ok = await _api.addSubscriptionPlan({
+                'name': name,
+                'originalPrice': original!,
+                'discountPrice': discountPrice,
+                if (fc.text.trim().isNotEmpty) 'features': fc.text.trim(),
+                if (tc.text.trim().isNotEmpty) 'tag': tc.text.trim(),
+              });
+
+              if (!ctx.mounted) return;
+              setModalState(() => saving = false);
+              if (ok) {
+                Navigator.pop(ctx);
+                _load();
+              } else {
+                _snack(context, 'Failed to create plan', error: true);
+              }
+            }
+
+            return Padding(
+              padding: EdgeInsets.only(
                 left: 20,
                 right: 20,
                 top: 20,
-                bottom: MediaQuery.of(context).viewInsets.bottom + 20),
-            child: SingleChildScrollView(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Text('New Plan', style: AppTextStyles.h3),
-              const SizedBox(height: 16),
-              TextField(
-                  controller: nc,
-                  decoration:
-                      _inp('Plan name *', icon: Icons.card_membership_rounded)),
-              const SizedBox(height: 10),
-              Row(children: [
-                Expanded(
-                    child: TextField(
-                        controller: oc,
-                        keyboardType: TextInputType.number,
-                        decoration:
-                            _inp('Original price (Rs) *', prefix: 'Rs '))),
-                const SizedBox(width: 10),
-                Expanded(
-                    child: TextField(
-                        controller: dc,
-                        keyboardType: TextInputType.number,
-                        decoration:
-                            _inp('Discount amount (Rs)', prefix: 'Rs ')))
-              ]),
-              const SizedBox(height: 10),
-              TextField(
-                  controller: fc,
-                  decoration: _inp('Features (comma-separated)',
-                      icon: Icons.star_outline_rounded)),
-              const SizedBox(height: 10),
-              TextField(
-                  controller: tc,
-                  decoration:
-                      _inp('Tag (e.g. Popular)', icon: Icons.sell_outlined)),
-              const SizedBox(height: 16),
-              SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: FilledButton(
-                      onPressed: () async {
-                        if (nc.text.isEmpty || oc.text.isEmpty) return;
-                        final original = double.tryParse(oc.text) ?? 0;
-                        final discountInput = double.tryParse(dc.text) ?? 0;
-                        final discount = dc.text.trim().isEmpty
-                            ? original
-                            : (discountInput <= original
-                                ? (original - discountInput)
-                                : discountInput);
-                        final ok = await _api.addSubscriptionPlan({
-                          'name': nc.text.trim(),
-                          'originalPrice': original,
-                          'discountPrice': discount,
-                          if (fc.text.isNotEmpty) 'features': fc.text.trim(),
-                          if (tc.text.isNotEmpty) 'tag': tc.text.trim()
-                        });
-                        if (ok && mounted) {
-                          Navigator.pop(context);
-                          _load();
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('New Plan', style: AppTextStyles.h3),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: nc,
+                      style: const TextStyle(color: AppColors.textPrimary),
+                      onChanged: (_) {
+                        if (nameErr != null) {
+                          setModalState(() => nameErr = null);
                         }
                       },
-                      child: const Text('Create Plan'))),
-            ]))));
+                      decoration: _inp('Plan name *',
+                          icon: Icons.card_membership_rounded,
+                          errorText: nameErr),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(children: [
+                      Expanded(
+                        child: TextField(
+                          controller: oc,
+                          style: const TextStyle(color: AppColors.textPrimary),
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          onChanged: (_) {
+                            if (originalErr != null) {
+                              setModalState(() => originalErr = null);
+                            }
+                          },
+                          decoration: _inp(
+                            'Original price (Rs) *',
+                            prefix: 'Rs ',
+                            errorText: originalErr,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextField(
+                          controller: dc,
+                          style: const TextStyle(color: AppColors.textPrimary),
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          onChanged: (_) {
+                            if (discountErr != null) {
+                              setModalState(() => discountErr = null);
+                            }
+                          },
+                          decoration: _inp(
+                            'Discount price (Rs)',
+                            prefix: 'Rs ',
+                            errorText: discountErr,
+                          ),
+                        ),
+                      ),
+                    ]),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: fc,
+                      style: const TextStyle(color: AppColors.textPrimary),
+                      decoration: _inp('Features (comma-separated)',
+                          icon: Icons.star_outline_rounded),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: tc,
+                      style: const TextStyle(color: AppColors.textPrimary),
+                      decoration:
+                          _inp('Tag (e.g. Popular)', icon: Icons.sell_outlined),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 48,
+                      child: FilledButton(
+                        onPressed: saving ? null : submit,
+                        child: saving
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Text('Create Plan'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    ).whenComplete(() {
+      nc.dispose();
+      oc.dispose();
+      dc.dispose();
+      fc.dispose();
+      tc.dispose();
+    });
   }
 
   @override

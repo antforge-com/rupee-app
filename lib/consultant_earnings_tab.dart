@@ -122,7 +122,8 @@ class _ConsultantEarningsTabState extends State<ConsultantEarningsTab> {
         .join(' ');
   }
 
-  String _displayUserName({int? userId, String? preferred, String fallback = 'Client'}) {
+  String _displayUserName(
+      {int? userId, String? preferred, String fallback = 'Client'}) {
     final direct = _normalizeName(preferred ?? '');
     if (direct.isNotEmpty &&
         direct.toLowerCase() != 'client' &&
@@ -157,20 +158,19 @@ class _ConsultantEarningsTabState extends State<ConsultantEarningsTab> {
     return rows;
   }
 
-  List<Booking> get _upcoming =>
-      _bookings.where((booking) => booking.isConfirmed && !booking.isExpired).toList();
+  List<Booking> get _upcoming => _bookings
+      .where((booking) => booking.isConfirmed && !booking.isExpired)
+      .toList();
 
   double get _totalEarnings =>
       _completed.fold(0, (sum, booking) => sum + (booking.amount ?? 0));
 
   double get _thisMonthEarnings {
     final now = DateTime.now();
-    return _completed
-        .where((booking) {
-          final date = _parseDate(booking.slotDate);
-          return date != null && date.month == now.month && date.year == now.year;
-        })
-        .fold(0, (sum, booking) => sum + (booking.amount ?? 0));
+    return _completed.where((booking) {
+      final date = _parseDate(booking.slotDate);
+      return date != null && date.month == now.month && date.year == now.year;
+    }).fold(0, (sum, booking) => sum + (booking.amount ?? 0));
   }
 
   Map<String, double> get _monthlyBreakdown {
@@ -189,29 +189,27 @@ class _ConsultantEarningsTabState extends State<ConsultantEarningsTab> {
       for (final booking in _bookings) booking.id: booking,
     };
 
-    final rows = _feedbacks
-        .map((feedback) {
-          final booking = feedback.bookingId != null
-              ? bookingsById[feedback.bookingId!]
-              : null;
-          return _ConsultantFeedbackEntry(
-            source: 'BOOKING',
-            sourceLabel: 'Booking Feedback',
-            sourceId: feedback.bookingId ?? feedback.id,
-            userId: feedback.userId ?? booking?.userId,
-            userName: _displayUserName(
-              userId: feedback.userId ?? booking?.userId,
-              preferred: feedback.clientName ?? booking?.clientName,
-            ),
-            rating: feedback.rating,
-            comments: feedback.comments,
-            createdAt: feedback.createdAt ?? booking?.createdAt ?? booking?.slotDate,
-            detailLabel: booking == null
-                ? 'Booking #${feedback.bookingId ?? feedback.id}'
-                : '${booking.slotDate ?? 'Date pending'}${booking.timeRange?.isNotEmpty == true ? ' · ${booking.timeRange}' : ''}',
-          );
-        })
-        .toList();
+    final rows = _feedbacks.map((feedback) {
+      final booking =
+          feedback.bookingId != null ? bookingsById[feedback.bookingId!] : null;
+      return _ConsultantFeedbackEntry(
+        source: 'BOOKING',
+        sourceLabel: 'Booking Feedback',
+        sourceId: feedback.bookingId ?? feedback.id,
+        userId: feedback.userId ?? booking?.userId,
+        userName: _displayUserName(
+          userId: feedback.userId ?? booking?.userId,
+          preferred: feedback.clientName ?? booking?.clientName,
+        ),
+        rating: feedback.rating,
+        comments: feedback.comments,
+        createdAt:
+            feedback.createdAt ?? booking?.createdAt ?? booking?.slotDate,
+        detailLabel: booking == null
+            ? 'Booking #${feedback.bookingId ?? feedback.id}'
+            : '${booking.slotDate ?? 'Date pending'}${booking.timeRange?.isNotEmpty == true ? ' · ${booking.timeRange}' : ''}',
+      );
+    }).toList();
 
     rows.sort((a, b) => _compareFeedbackDates(a.createdAt, b.createdAt));
     return rows;
@@ -380,11 +378,14 @@ class _ConsultantEarningsTabState extends State<ConsultantEarningsTab> {
               Expanded(
                 child: SizedBox(
                   height: 112,
-                  child: StatCard(
-                    title: 'Upcoming',
-                    value: '${_upcoming.length}',
-                    icon: Icons.schedule_rounded,
+                  child: _outlinedStatCard(
                     color: AppColors.primaryLight,
+                    child: StatCard(
+                      title: 'Upcoming',
+                      value: '${_upcoming.length}',
+                      icon: Icons.schedule_rounded,
+                      color: AppColors.primaryLight,
+                    ),
                   ),
                 ),
               ),
@@ -392,11 +393,15 @@ class _ConsultantEarningsTabState extends State<ConsultantEarningsTab> {
               Expanded(
                 child: SizedBox(
                   height: 112,
-                  child: StatCard(
-                    title: 'Pending',
-                    value: '${_bookings.where((booking) => booking.isPending).length}',
-                    icon: Icons.hourglass_empty_rounded,
+                  child: _outlinedStatCard(
                     color: AppColors.warning,
+                    child: StatCard(
+                      title: 'Pending',
+                      value:
+                          '${_bookings.where((booking) => booking.isPending).length}',
+                      icon: Icons.hourglass_empty_rounded,
+                      color: AppColors.warning,
+                    ),
                   ),
                 ),
               ),
@@ -460,8 +465,9 @@ class _ConsultantEarningsTabState extends State<ConsultantEarningsTab> {
                   const SizedBox(height: 14),
                   ...[5, 4, 3, 2, 1].map((star) {
                     final count = distribution[star] ?? 0;
-                    final ratio =
-                        visibleFeedbacks.isEmpty ? 0.0 : count / visibleFeedbacks.length;
+                    final ratio = visibleFeedbacks.isEmpty
+                        ? 0.0
+                        : count / visibleFeedbacks.length;
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 6),
                       child: Row(
@@ -479,8 +485,8 @@ class _ConsultantEarningsTabState extends State<ConsultantEarningsTab> {
                               child: LinearProgressIndicator(
                                 value: ratio,
                                 minHeight: 8,
-                                backgroundColor:
-                                    AppColors.primaryLight.withValues(alpha: 0.08),
+                                backgroundColor: AppColors.primaryLight
+                                    .withValues(alpha: 0.08),
                                 valueColor: const AlwaysStoppedAnimation(
                                   AppColors.primaryLight,
                                 ),
@@ -504,8 +510,10 @@ class _ConsultantEarningsTabState extends State<ConsultantEarningsTab> {
           if (visibleFeedbacks.isEmpty)
             EmptyState(
               icon: Icons.rate_review_outlined,
-              title: 'No ${_feedbackFilterLabel(_feedbackFilter).toLowerCase()} yet',
-              subtitle: 'Reviews will appear here after completed sessions and resolved tickets.',
+              title:
+                  'No ${_feedbackFilterLabel(_feedbackFilter).toLowerCase()} yet',
+              subtitle:
+                  'Reviews will appear here after completed sessions and resolved tickets.',
             )
           else
             ...visibleFeedbacks.map(
@@ -672,58 +680,58 @@ class _ConsultantEarningsTabState extends State<ConsultantEarningsTab> {
             SectionHeader(title: 'Completed Sessions'),
             const SizedBox(height: 10),
             ..._completed.take(10).map(
-              (booking) => Card(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: AppColors.success.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(
-                          Icons.task_alt_rounded,
-                          color: AppColors.success,
-                          size: 20,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              _displayUserName(
-                                userId: booking.userId,
-                                preferred: booking.clientName,
-                              ),
-                              style: AppTextStyles.h4,
+                  (booking) => Card(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppColors.success.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(12),
                             ),
-                            Text(
-                              '${booking.slotDate ?? ''}${booking.timeRange?.isNotEmpty == true ? ' · ${booking.timeRange}' : ''}',
-                              style: AppTextStyles.caption,
+                            child: const Icon(
+                              Icons.task_alt_rounded,
+                              color: AppColors.success,
+                              size: 20,
                             ),
-                          ],
-                        ),
-                      ),
-                      if (booking.amount != null)
-                        Text(
-                          '+Rs ${booking.amount!.toStringAsFixed(0)}',
-                          style: const TextStyle(
-                            color: AppColors.success,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 15,
                           ),
-                          textAlign: TextAlign.right,
-                        ),
-                    ],
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _displayUserName(
+                                    userId: booking.userId,
+                                    preferred: booking.clientName,
+                                  ),
+                                  style: AppTextStyles.h4,
+                                ),
+                                Text(
+                                  '${booking.slotDate ?? ''}${booking.timeRange?.isNotEmpty == true ? ' · ${booking.timeRange}' : ''}',
+                                  style: AppTextStyles.caption,
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (booking.amount != null)
+                            Text(
+                              '+Rs ${booking.amount!.toStringAsFixed(0)}',
+                              style: const TextStyle(
+                                color: AppColors.success,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 15,
+                              ),
+                              textAlign: TextAlign.right,
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
           ] else
             const EmptyState(
               icon: Icons.payments_outlined,
@@ -734,6 +742,19 @@ class _ConsultantEarningsTabState extends State<ConsultantEarningsTab> {
       ),
     );
   }
+
+  Widget _outlinedStatCard({required Color color, required Widget child}) =>
+      Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: color.withValues(alpha: 0.42),
+            width: 1.2,
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: child,
+      );
 
   Widget _miniStat(String label, String value, Color color) => Container(
         padding: const EdgeInsets.all(12),

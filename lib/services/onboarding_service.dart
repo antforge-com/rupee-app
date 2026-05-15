@@ -59,9 +59,19 @@ class OnboardingService {
           if (subscriptionPlanId != null) 'subscriptionPlanId': subscriptionPlanId,
         },
       );
-      return OnboardingProfile.fromJson(response.data as Map<String, dynamic>);
+      final payload = response.data;
+      if (payload is Map<String, dynamic>) {
+        final row = payload['data'] is Map
+            ? Map<String, dynamic>.from(payload['data'] as Map)
+            : payload;
+        return OnboardingProfile.fromJson(row);
+      }
+      throw Exception('Registration failed. Unexpected server response.');
+    } on DioException catch (e) {
+      throw Exception(_extractErrorMessage(e));
     } catch (e) {
-      return null;
+      if (e is Exception) rethrow;
+      throw Exception('Registration failed. Please try again.');
     }
   }
 
@@ -178,5 +188,15 @@ class OnboardingService {
     } catch (e) {
       return false;
     }
+  }
+
+  String _extractErrorMessage(DioException e) {
+    final data = e.response?.data;
+    if (data is Map) {
+      final raw = data['message'] ?? data['error'] ?? data['details'];
+      final message = raw?.toString().trim() ?? '';
+      if (message.isNotEmpty) return message;
+    }
+    return 'Registration failed. Please try again.';
   }
 }

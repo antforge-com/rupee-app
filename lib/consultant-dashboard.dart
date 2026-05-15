@@ -516,6 +516,8 @@ class _ConsultantDashboardState extends State<ConsultantDashboard> {
   }
 
   void _openNotifications() {
+    final svc = context.read<NotificationService>();
+    svc.refresh().catchError((_) {});
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -724,18 +726,26 @@ class _ConsultantBookingsTab extends StatefulWidget {
 
 class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
     with SingleTickerProviderStateMixin {
+  static const int _pageSize = 10;
+
   final _svc = BookingService();
   late TabController _tabs;
   List<Booking> _bookings = [];
+  final Map<int, List<Booking>> _pageCache = {};
   List<Map<String, dynamic>> _specialBookings = [];
   bool _loading = true;
+  bool _paging = false;
   bool _specialLoading = false;
+  int _currentPage = 1;
+  int _totalPages = 1;
+  int _totalElements = 0;
+  int _requestToken = 0;
 
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 4, vsync: this);
-    _load();
+    _load(refreshSpecial: true);
   }
 
   @override
@@ -744,22 +754,213 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
     super.dispose();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _specialLoading = true;
-    });
-    final results = await Future.wait([
-      _svc.getBookingsByConsultant(widget.consultantId, size: 100),
-      _svc.getSpecialBookingsByConsultant(widget.consultantId),
-    ]);
-    if (mounted)
+  Future<void> _load({
+    int page = 1,
+    bool force = false,
+    bool clearCache = false,
+    bool refreshSpecial = false,
+  }) async {
+    final targetPage = page < 1 ? 1 : page;
+    if (clearCache) _pageCache.clear();
+
+    if (!force) {
+      final cached = _pageCache[targetPage];
+      if (cached != null) {
+        if (mounted) {
+          setState(() {
+            _bookings = cached;
+            _currentPage = targetPage;
+            _loading = false;
+            _paging = false;
+          });
+        }
+        unawaited(_prefetchAdjacentPages(targetPage));
+        return;
+      }
+    }
+
+    if (mounted) {
       setState(() {
-        _bookings = results[0] as List<Booking>;
+        if (_bookings.isEmpty || force || clearCache) {
+          _loading = true;
+          _paging = false;
+        } else {
+          _paging = true;
+        }
+        if (refreshSpecial && _specialBookings.isEmpty) {
+          _specialLoading = true;
+        }
+      });
+    }
+
+    final requestToken = ++_requestToken;
+    try {
+      final regularFuture = _svc.getBookingsByConsultantPaginated(
+        widget.consultantId,
+        page: targetPage - 1,
+        size: _pageSize,
+      );
+      final specialFuture = refreshSpecial
+          ? _svc.getSpecialBookingsByConsultant(widget.consultantId)
+          : Future.value(_specialBookings);
+      final results = await Future.wait([regularFuture, specialFuture]);
+      if (requestToken != _requestToken || !mounted) return;
+
+      final regular =
+          results[0] as ({List<dynamic> content, int totalElements});
+      final bookings = regular.content.whereType<Booking>().toList();
+      final rawTotalElements =
+          regular.totalElements <= 0 ? bookings.length : regular.totalElements;
+      var computedTotalPages = rawTotalElements <= 0
+          ? (bookings.length == _pageSize ? targetPage + 1 : targetPage)
+          : ((rawTotalElements + _pageSize - 1) ~/ _pageSize);
+      if (computedTotalPages <= 0) computedTotalPages = 1;
+      final safeCurrentPage =
+          targetPage > computedTotalPages ? computedTotalPages : targetPage;
+
+      _pageCache[targetPage] = bookings;
+
+      setState(() {
+        _bookings = bookings;
         _specialBookings = results[1] as List<Map<String, dynamic>>;
+        _currentPage = safeCurrentPage;
+        _totalPages = computedTotalPages;
+        _totalElements = rawTotalElements;
         _loading = false;
+        _paging = false;
         _specialLoading = false;
       });
+      unawaited(_prefetchAdjacentPages(safeCurrentPage));
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _paging = false;
+          _specialLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _prefetchAdjacentPages(int currentPage) async {
+    final neighbors = [currentPage - 1, currentPage + 1];
+    for (final page in neighbors) {
+      if (page < 1 || page > _totalPages) continue;
+      if (_pageCache.containsKey(page)) continue;
+      unawaited(_prefetchPage(page));
+    }
+  }
+
+  Future<void> _prefetchPage(int page) async {
+    try {
+      final result = await _svc.getBookingsByConsultantPaginated(
+        widget.consultantId,
+        page: page - 1,
+        size: _pageSize,
+      );
+      if (!mounted || _pageCache.containsKey(page)) return;
+      _pageCache[page] = result.content.whereType<Booking>().toList();
+    } catch (_) {}
+  }
+
+  Future<void> _refreshCurrent({bool refreshSpecial = false}) => _load(
+        page: _currentPage,
+        force: true,
+        clearCache: true,
+        refreshSpecial: refreshSpecial,
+      );
+
+  void _goToPage(int page) {
+    if (page < 1 || page > _totalPages || page == _currentPage) return;
+    _load(page: page);
+  }
+
+  List<int> _visiblePages() {
+    if (_totalPages <= 1) return const [1];
+    final pages = <int>{1, _totalPages, _currentPage};
+    for (var p = _currentPage - 1; p <= _currentPage + 1; p++) {
+      if (p >= 1 && p <= _totalPages) pages.add(p);
+    }
+    final out = pages.toList()..sort();
+    return out;
+  }
+
+  Widget _paginationBar() {
+    if (_totalPages <= 1) return const SizedBox.shrink();
+    final pages = _visiblePages();
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(children: [
+        IconButton(
+          onPressed:
+              _currentPage > 1 ? () => _goToPage(_currentPage - 1) : null,
+          icon: const Icon(Icons.chevron_left_rounded),
+          visualDensity: VisualDensity.compact,
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              for (var i = 0; i < pages.length; i++) ...[
+                if (i > 0 && pages[i] - pages[i - 1] > 1)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4),
+                    child: Text('...',
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: AppColors.textMuted,
+                            fontWeight: FontWeight.w700)),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: GestureDetector(
+                    onTap: () => _goToPage(pages[i]),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _currentPage == pages[i]
+                            ? AppColors.accent
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: _currentPage == pages[i]
+                              ? AppColors.accent
+                              : AppColors.border,
+                        ),
+                      ),
+                      child: Text(
+                        '${pages[i]}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: _currentPage == pages[i]
+                              ? Colors.white
+                              : AppColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ]),
+          ),
+        ),
+        IconButton(
+          onPressed: _currentPage < _totalPages
+              ? () => _goToPage(_currentPage + 1)
+              : null,
+          icon: const Icon(Icons.chevron_right_rounded),
+          visualDensity: VisualDensity.compact,
+        ),
+      ]),
+    );
   }
 
   List<Booking> get _upcoming =>
@@ -857,10 +1058,47 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
   }
 
   Future<void> _updateStatus(Booking b, String newStatus) async {
-    final ok = await _svc.updateBooking(b.id, bookingStatus: newStatus);
+    final normalizedStatus = newStatus.trim().toUpperCase();
+    Future<bool> attemptUpdate({String? paymentStatus, bool minimal = false}) {
+      return _svc.updateBooking(
+        b.id,
+        bookingStatus: normalizedStatus,
+        paymentStatus: paymentStatus,
+        consultantId: minimal ? null : (b.consultantId ?? widget.consultantId),
+        timeSlotId: minimal ? null : b.timeSlotId,
+        meetingMode: minimal ? null : b.meetingMode,
+        meetingLink: minimal ? null : b.meetingLink,
+        meetingId: minimal ? null : b.meetingId,
+        meetingNotes: minimal ? null : b.meetingNotes,
+      );
+    }
+
+    final attempts = <Future<bool> Function()>[
+      () => attemptUpdate(),
+      () => attemptUpdate(minimal: true),
+    ];
+    if (normalizedStatus == 'CONFIRMED') {
+      attempts.insert(
+        0,
+        () => attemptUpdate(paymentStatus: 'SUCCESS'),
+      );
+      attempts.add(
+        () => attemptUpdate(paymentStatus: 'PAID'),
+      );
+      attempts.add(
+        () => attemptUpdate(paymentStatus: 'SUCCESS', minimal: true),
+      );
+    }
+
+    var ok = false;
+    for (final attempt in attempts) {
+      ok = await attempt();
+      if (ok) break;
+    }
+
     if (mounted) {
-      _snack(ok ? 'Status -> $newStatus' : 'Update failed', ok);
-      if (ok) _load();
+      _snack(ok ? 'Status -> $normalizedStatus' : 'Update failed', ok);
+      if (ok) _refreshCurrent(refreshSpecial: true);
     }
   }
 
@@ -871,7 +1109,7 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
     final ok = await _svc.cancelBooking(b.id);
     if (mounted) {
       _snack(ok ? 'Booking cancelled' : 'Cancel failed', ok);
-      if (ok) _load();
+      if (ok) _refreshCurrent(refreshSpecial: true);
     }
   }
 
@@ -882,10 +1120,20 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
         'Complete',
         AppColors.success);
     if (confirm != true) return;
-    final ok = await _svc.updateBooking(b.id, bookingStatus: 'COMPLETED');
+    final ok = await _svc.updateBooking(
+          b.id,
+          bookingStatus: 'COMPLETED',
+          consultantId: b.consultantId ?? widget.consultantId,
+          timeSlotId: b.timeSlotId,
+          meetingMode: b.meetingMode,
+          meetingLink: b.meetingLink,
+          meetingId: b.meetingId,
+          meetingNotes: b.meetingNotes,
+        ) ||
+        await _svc.updateBooking(b.id, bookingStatus: 'COMPLETED');
     if (mounted) {
       _snack(ok ? 'Marked as completed' : 'Update failed', ok);
-      if (ok) _load();
+      if (ok) _refreshCurrent(refreshSpecial: true);
     }
   }
 
@@ -932,7 +1180,7 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
                     if (ctx.mounted) {
                       Navigator.pop(ctx);
                       _snack(ok ? 'Meeting link saved!' : 'Failed to save', ok);
-                      if (ok) _load();
+                      if (ok) _refreshCurrent(refreshSpecial: true);
                     }
                   },
                 ),
@@ -1012,12 +1260,19 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
       Container(
         color: AppColors.surface,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Row(children: [
-          _pill(_pending.length, AppColors.warning, 'Pending'),
-          const SizedBox(width: 8),
-          _pill(_upcoming.length, AppColors.info, 'Upcoming'),
-          const Spacer(),
-          Text('${_bookings.length} total', style: AppTextStyles.caption),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            _pill(_pending.length, AppColors.warning, 'Pending'),
+            const SizedBox(width: 8),
+            _pill(_upcoming.length, AppColors.info, 'Upcoming'),
+            const Spacer(),
+            Text('$_totalElements total', style: AppTextStyles.caption),
+          ]),
+          const SizedBox(height: 6),
+          Text(
+            'Page $_currentPage of $_totalPages • 10 bookings per page',
+            style: AppTextStyles.caption,
+          ),
         ]),
       ),
       Container(
@@ -1038,6 +1293,8 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
         ),
       ),
       const Divider(height: 1),
+      if (_paging)
+        const LinearProgressIndicator(color: AppColors.accent, minHeight: 2),
       Expanded(
         child: _loading
             ? ListView.builder(
@@ -1046,7 +1303,7 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
                 itemBuilder: (_, __) => const Padding(
                     padding: EdgeInsets.only(bottom: 12), child: ShimmerCard()))
             : RefreshIndicator(
-                onRefresh: _load,
+                onRefresh: () => _refreshCurrent(refreshSpecial: true),
                 child: TabBarView(controller: _tabs, children: [
                   _buildList(_upcoming, 'No upcoming sessions'),
                   _buildList(_pending, 'No pending bookings'),
@@ -1059,12 +1316,23 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
   }
 
   Widget _buildList(List<Booking> list, String emptyTitle) {
-    if (list.isEmpty)
+    if (list.isEmpty) {
+      if (_totalPages > 1) {
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            EmptyState(icon: Icons.calendar_today_outlined, title: emptyTitle),
+            _paginationBar(),
+          ],
+        );
+      }
       return EmptyState(icon: Icons.calendar_today_outlined, title: emptyTitle);
+    }
     return ListView.builder(
       padding: const EdgeInsets.all(16),
-      itemCount: list.length,
+      itemCount: list.length + (_totalPages > 1 ? 1 : 0),
       itemBuilder: (_, i) {
+        if (i >= list.length) return _paginationBar();
         final b = list[i];
         final color = _statusColor(b.status);
         final clientName = _sanitizeDisplayText(b.clientName, fallback: 'User');
@@ -1243,7 +1511,7 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
       );
     }
     return RefreshIndicator(
-      onRefresh: _load,
+      onRefresh: () => _refreshCurrent(refreshSpecial: true),
       child: ListView.builder(
         padding: const EdgeInsets.all(16),
         itemCount: _specialBookings.length,
@@ -1253,7 +1521,9 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
             booking: sb,
             onGiveSlot: () => _showGiveSlotSheet(sb),
             onReschedule: () => _showRescheduleSheet(sb),
-            onRefresh: _load,
+            onRefresh: () {
+              unawaited(_refreshCurrent(refreshSpecial: true));
+            },
           );
         },
       ),
@@ -1272,7 +1542,7 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
         bookingId: id,
         onSaved: () {
           Navigator.pop(ctx);
-          _load();
+          _refreshCurrent(refreshSpecial: true);
         },
       ),
     );
@@ -1280,8 +1550,20 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
 
   void _showRescheduleSheet(Map<String, dynamic> sb) {
     final id = (sb['id'] as num?)?.toInt() ?? 0;
-    final scheduledDate = _sanitizeDisplayText(sb['scheduledDate']);
-    final scheduledTime = _sanitizeDisplayText(sb['scheduledTime']);
+    final scheduledDate = _sanitizeDisplayText(
+      sb['scheduledDate'] ??
+          sb['scheduled_date'] ??
+          sb['slotDate'] ??
+          sb['date'] ??
+          sb['bookingDate'],
+    );
+    final scheduledTime = _sanitizeDisplayText(
+      sb['scheduledTime'] ??
+          sb['scheduled_time'] ??
+          sb['startTime'] ??
+          sb['slotTime'] ??
+          sb['time'],
+    );
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1294,7 +1576,7 @@ class _ConsultantBookingsTabState extends State<_ConsultantBookingsTab>
         currentTime: scheduledTime,
         onSaved: () {
           Navigator.pop(ctx);
-          _load();
+          _refreshCurrent(refreshSpecial: true);
         },
       ),
     );
@@ -1389,8 +1671,20 @@ class _SpecialBookingCard extends StatelessWidget {
     final notes = _cleanSpecialBookingNotes(booking['userNotes']);
     final amount =
         double.tryParse(booking['totalAmount']?.toString() ?? '0') ?? 0;
-    final schedDate = _sanitizeDisplayText(booking['scheduledDate']);
-    final schedTime = _sanitizeDisplayText(booking['scheduledTime']);
+    final schedDate = _sanitizeDisplayText(
+      booking['scheduledDate'] ??
+          booking['scheduled_date'] ??
+          booking['slotDate'] ??
+          booking['date'] ??
+          booking['bookingDate'],
+    );
+    final schedTime = _sanitizeDisplayText(
+      booking['scheduledTime'] ??
+          booking['scheduled_time'] ??
+          booking['startTime'] ??
+          booking['slotTime'] ??
+          booking['time'],
+    );
     final meetLink = (booking['meetingLink'] ?? '').toString().trim();
     final isRequested = status == 'REQUESTED';
     final isConfirmed = status == 'CONFIRMED';
@@ -2360,10 +2654,18 @@ class _ConsultantTicketsTab extends StatefulWidget {
 }
 
 class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
+  static const int _pageSize = 10;
+
   final _svc = TicketService();
   List<Ticket> _tickets = [];
+  final Map<int, List<Ticket>> _pageCache = {};
   bool _loading = true;
+  bool _paging = false;
   String _filter = 'ALL';
+  int _currentPage = 1;
+  int _totalPages = 1;
+  int _totalElements = 0;
+  int _requestToken = 0;
   final ScrollController _filterChipScrollCtrl = ScrollController();
   static const _filters = ['ALL', 'NEW', 'OPEN', 'IN_PROGRESS', 'RESOLVED'];
   late final Map<String, GlobalKey> _filterChipKeys = {
@@ -2376,10 +2678,208 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
     _load();
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
-    _tickets = await _svc.getTicketsByConsultant(widget.consultantId);
-    if (mounted) setState(() => _loading = false);
+  Future<void> _load({
+    int page = 1,
+    bool force = false,
+    bool clearCache = false,
+  }) async {
+    final targetPage = page < 1 ? 1 : page;
+    if (clearCache) _pageCache.clear();
+
+    if (!force) {
+      final cached = _pageCache[targetPage];
+      if (cached != null) {
+        if (mounted) {
+          setState(() {
+            _tickets = cached;
+            _currentPage = targetPage;
+            _loading = false;
+            _paging = false;
+          });
+        }
+        unawaited(_prefetchAdjacentPages(targetPage));
+        return;
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        if (_tickets.isEmpty || force || clearCache) {
+          _loading = true;
+          _paging = false;
+        } else {
+          _paging = true;
+        }
+      });
+    }
+
+    final requestToken = ++_requestToken;
+    try {
+      final result = await _svc.getTicketsByConsultantPaginated(
+        widget.consultantId,
+        page: targetPage - 1,
+        size: _pageSize,
+        sortBy: 'createdAt',
+      );
+      if (requestToken != _requestToken || !mounted) return;
+
+      final rowsRaw = result['tickets'];
+      final rows =
+          rowsRaw is List ? rowsRaw.whereType<Ticket>().toList() : <Ticket>[];
+      final rawTotalElements = _asInt(result['totalElements']) ?? rows.length;
+      var computedTotalPages = _asInt(result['totalPages']) ??
+          (rawTotalElements <= 0
+              ? (rows.length == _pageSize ? targetPage + 1 : targetPage)
+              : ((rawTotalElements + _pageSize - 1) ~/ _pageSize));
+      if (computedTotalPages <= 0) computedTotalPages = 1;
+      final safeCurrentPage =
+          targetPage > computedTotalPages ? computedTotalPages : targetPage;
+      final safeTotalElements =
+          rawTotalElements < rows.length ? rows.length : rawTotalElements;
+
+      _pageCache[targetPage] = rows;
+
+      setState(() {
+        _tickets = rows;
+        _currentPage = safeCurrentPage;
+        _totalPages = computedTotalPages;
+        _totalElements = safeTotalElements;
+        _loading = false;
+        _paging = false;
+      });
+      unawaited(_prefetchAdjacentPages(safeCurrentPage));
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _paging = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _prefetchAdjacentPages(int currentPage) async {
+    final neighbors = [currentPage - 1, currentPage + 1];
+    for (final page in neighbors) {
+      if (page < 1 || page > _totalPages) continue;
+      if (_pageCache.containsKey(page)) continue;
+      unawaited(_prefetchPage(page));
+    }
+  }
+
+  Future<void> _prefetchPage(int page) async {
+    try {
+      final result = await _svc.getTicketsByConsultantPaginated(
+        widget.consultantId,
+        page: page - 1,
+        size: _pageSize,
+        sortBy: 'createdAt',
+      );
+      if (!mounted || _pageCache.containsKey(page)) return;
+      final rowsRaw = result['tickets'];
+      final rows =
+          rowsRaw is List ? rowsRaw.whereType<Ticket>().toList() : <Ticket>[];
+      _pageCache[page] = rows;
+    } catch (_) {}
+  }
+
+  Future<void> _refreshCurrent() => _load(
+        page: _currentPage,
+        force: true,
+        clearCache: true,
+      );
+
+  void _goToPage(int page) {
+    if (page < 1 || page > _totalPages || page == _currentPage) return;
+    _load(page: page);
+  }
+
+  List<int> _visiblePages() {
+    if (_totalPages <= 1) return const [1];
+    final pages = <int>{1, _totalPages, _currentPage};
+    for (var p = _currentPage - 1; p <= _currentPage + 1; p++) {
+      if (p >= 1 && p <= _totalPages) pages.add(p);
+    }
+    final out = pages.toList()..sort();
+    return out;
+  }
+
+  Widget _paginationBar() {
+    if (_totalPages <= 1) return const SizedBox.shrink();
+    final pages = _visiblePages();
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(children: [
+        IconButton(
+          onPressed:
+              _currentPage > 1 ? () => _goToPage(_currentPage - 1) : null,
+          icon: const Icon(Icons.chevron_left_rounded),
+          visualDensity: VisualDensity.compact,
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              for (var i = 0; i < pages.length; i++) ...[
+                if (i > 0 && pages[i] - pages[i - 1] > 1)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4),
+                    child: Text('...',
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: AppColors.textMuted,
+                            fontWeight: FontWeight.w700)),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: GestureDetector(
+                    onTap: () => _goToPage(pages[i]),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _currentPage == pages[i]
+                            ? AppColors.accent
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: _currentPage == pages[i]
+                              ? AppColors.accent
+                              : AppColors.border,
+                        ),
+                      ),
+                      child: Text(
+                        '${pages[i]}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: _currentPage == pages[i]
+                              ? Colors.white
+                              : AppColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ]),
+          ),
+        ),
+        IconButton(
+          onPressed: _currentPage < _totalPages
+              ? () => _goToPage(_currentPage + 1)
+              : null,
+          icon: const Icon(Icons.chevron_right_rounded),
+          visualDensity: VisualDensity.compact,
+        ),
+      ]),
+    );
   }
 
   @override
@@ -2391,6 +2891,13 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
   List<Ticket> get _filtered => _filter == 'ALL'
       ? _tickets
       : _tickets.where((t) => t.status.toUpperCase() == _filter).toList();
+
+  int? _asInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value == null) return null;
+    return int.tryParse(value.toString().trim());
+  }
 
   int get _slaRiskCount => _tickets.where((t) {
         final s = _computeSla(t);
@@ -2481,49 +2988,66 @@ class _ConsultantTicketsTabState extends State<_ConsultantTicketsTab> {
       Container(
         color: AppColors.surface,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: SingleChildScrollView(
-          controller: _filterChipScrollCtrl,
-          scrollDirection: Axis.horizontal,
-          child: Row(
-              children: _filters.map((f) {
-            final count = f == 'ALL'
-                ? _tickets.length
-                : _tickets.where((t) => t.status.toUpperCase() == f).length;
-            final active = _filter == f;
-            return Padding(
-              key: _filterChipKeys[f],
-              padding: const EdgeInsets.only(right: 8),
-              child: ChoiceChip(
-                label: Text('$f ($count)',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color:
-                            active ? Colors.white : AppColors.textSecondary)),
-                selected: active,
-                selectedColor: AppColors.primaryLight,
-                backgroundColor: AppColors.surfaceVariant,
-                onSelected: (_) => _setFilter(f),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20)),
-                side: BorderSide.none,
-              ),
-            );
-          }).toList()),
-        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SingleChildScrollView(
+            controller: _filterChipScrollCtrl,
+            scrollDirection: Axis.horizontal,
+            child: Row(
+                children: _filters.map((f) {
+              final count = f == 'ALL'
+                  ? _tickets.length
+                  : _tickets.where((t) => t.status.toUpperCase() == f).length;
+              final active = _filter == f;
+              return Padding(
+                key: _filterChipKeys[f],
+                padding: const EdgeInsets.only(right: 8),
+                child: ChoiceChip(
+                  label: Text('$f ($count)',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color:
+                              active ? Colors.white : AppColors.textSecondary)),
+                  selected: active,
+                  selectedColor: AppColors.primaryLight,
+                  backgroundColor: AppColors.surfaceVariant,
+                  onSelected: (_) => _setFilter(f),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20)),
+                  side: BorderSide.none,
+                ),
+              );
+            }).toList()),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Page $_currentPage of $_totalPages • $_totalElements tickets',
+            style: AppTextStyles.caption,
+          ),
+        ]),
       ),
+      if (_paging)
+        const LinearProgressIndicator(color: AppColors.accent, minHeight: 2),
       const Divider(height: 1),
       Expanded(
         child: _loading
             ? const Center(child: CircularProgressIndicator())
             : _filtered.isEmpty
-                ? const EmptyState(
-                    icon: Icons.inbox_outlined, title: 'No tickets assigned')
+                ? ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      const EmptyState(
+                          icon: Icons.inbox_outlined,
+                          title: 'No tickets assigned'),
+                      if (_totalPages > 1) _paginationBar(),
+                    ],
+                  )
                 : RefreshIndicator(
-                    onRefresh: _load,
+                    onRefresh: _refreshCurrent,
                     child: ListView.builder(
                       padding: const EdgeInsets.all(16),
-                      itemCount: _filtered.length,
+                      itemCount: _filtered.length + (_totalPages > 1 ? 1 : 0),
                       itemBuilder: (_, i) {
+                        if (i >= _filtered.length) return _paginationBar();
                         final t = _filtered[i];
                         return _TicketListCard(
                           ticket: t,
@@ -2710,8 +3234,8 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
   DateTime? _parseToLocalDateTime(dynamic raw) {
     final value = raw?.toString().trim() ?? '';
     if (value.isEmpty) return null;
-    final hasTimezone = value.endsWith('Z') ||
-        RegExp(r'[+-]\d{2}:\d{2}$').hasMatch(value);
+    final hasTimezone =
+        value.endsWith('Z') || RegExp(r'[+-]\d{2}:\d{2}$').hasMatch(value);
     final normalized = hasTimezone ? value : '${value}Z';
     final parsed = DateTime.tryParse(normalized);
     if (parsed != null) return parsed.toLocal();
@@ -2722,7 +3246,15 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
   String _formatChatTime(dynamic raw) {
     final parsed = _parseToLocalDateTime(raw);
     if (parsed == null) return '';
-    return DateFormat('d MMM HH:mm').format(parsed);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final msgDay = DateTime(parsed.year, parsed.month, parsed.day);
+    if (msgDay == today) {
+      return '${DateFormat('hh:mm a').format(parsed)} IST';
+    } else if (today.difference(msgDay).inDays < 7) {
+      return '${DateFormat('d MMM, hh:mm a').format(parsed)} IST';
+    }
+    return '${DateFormat('d MMM yyyy, hh:mm a').format(parsed)} IST';
   }
 
   Future<void> _sendReply() async {
@@ -2740,8 +3272,8 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
         final nowIso = DateTime.now().toUtc().toIso8601String();
         final normalized = {
           ...saved,
-          'createdAt': (saved['createdAt'] ?? saved['timestamp'] ?? nowIso)
-              .toString(),
+          'createdAt':
+              (saved['createdAt'] ?? saved['timestamp'] ?? nowIso).toString(),
         };
         _replyCtrl.clear();
         setState(() {
@@ -2880,7 +3412,8 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
           padding: const EdgeInsets.symmetric(vertical: 12),
           child: _handleBar()),
       Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        padding: EdgeInsets.fromLTRB(
+            16, 0, 16, MediaQuery.of(context).viewInsets.bottom > 0 ? 0 : 12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             Expanded(
@@ -3045,12 +3578,20 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
                               senderName: isAgent
                                   ? 'You'
                                   : (widget.ticket.userName ?? 'Client'),
-                              time: _formatChatTime(c['createdAt']),
+                              time: _formatChatTime(
+                                  c['createdAt'] ?? c['timestamp']),
                             );
                           }),
             ),
             Container(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              padding: EdgeInsets.fromLTRB(
+                  12,
+                  8,
+                  12,
+                  (MediaQuery.of(context).viewInsets.bottom > 0
+                          ? MediaQuery.of(context).viewInsets.bottom
+                          : MediaQuery.of(context).padding.bottom) +
+                      8),
               decoration: const BoxDecoration(
                   border: Border(top: BorderSide(color: AppColors.border))),
               child: Row(children: [
@@ -3059,7 +3600,7 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
                   controller: _replyCtrl,
                   maxLines: null,
                   decoration: InputDecoration(
-                    hintText: 'Type reply...',
+                    hintText: 'Type your message...',
                     filled: true,
                     fillColor: AppColors.background,
                     border: OutlineInputBorder(
@@ -3130,8 +3671,11 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
                                               color: AppColors.warning,
                                               fontWeight: FontWeight.w700)),
                                       const Spacer(),
-                                      if (n['createdAt'] != null)
-                                        Text(_formatChatTime(n['createdAt']),
+                                      if (n['createdAt'] != null ||
+                                          n['timestamp'] != null)
+                                        Text(
+                                            _formatChatTime(n['createdAt'] ??
+                                                n['timestamp']),
                                             style: AppTextStyles.caption),
                                     ]),
                                     const SizedBox(height: 6),
@@ -3255,23 +3799,22 @@ class _TicketDetailSheetState extends State<_TicketDetailSheet>
                 if (widget.ticket.slaResolveBy != null) ...[
                   const SizedBox(height: 12),
                   _detailRow('SLA Deadline', () {
-                    try {
-                      return DateFormat('d MMM yyyy, HH:mm').format(
-                          DateTime.parse(widget.ticket.slaResolveBy!)
-                              .toLocal());
-                    } catch (_) {
-                      return widget.ticket.slaResolveBy!;
+                    final parsed =
+                        _parseToLocalDateTime(widget.ticket.slaResolveBy);
+                    if (parsed != null) {
+                      return '${DateFormat('d MMM yyyy, hh:mm a').format(parsed)} IST';
                     }
+                    return widget.ticket.slaResolveBy!;
                   }()),
                 ],
                 if (widget.ticket.createdAt != null)
                   _detailRow('Created', () {
-                    try {
-                      return DateFormat('d MMM yyyy, HH:mm').format(
-                          DateTime.parse(widget.ticket.createdAt!).toLocal());
-                    } catch (_) {
-                      return widget.ticket.createdAt!;
+                    final parsed =
+                        _parseToLocalDateTime(widget.ticket.createdAt);
+                    if (parsed != null) {
+                      return '${DateFormat('d MMM yyyy, hh:mm a').format(parsed)} IST';
                     }
+                    return widget.ticket.createdAt!;
                   }()),
               ]),
         ]),
@@ -3619,6 +4162,9 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
       if (!_selectedSlotKeys.contains(slot.key) || slot.status == 'BOOKED') {
         continue;
       }
+      if (slot.status == targetStatus) {
+        continue;
+      }
 
       bool ok;
       if (slot.existing != null) {
@@ -3626,15 +4172,19 @@ class _ConsultantScheduleTabState extends State<_ConsultantScheduleTab> {
           'status': targetStatus,
         });
       } else {
-        ok = targetStatus == 'UNAVAILABLE' &&
-            await _svc.addCustomSlot(
-                  consultantId: widget.consultantId,
-                  slotDate: _selectedDate,
-                  masterTimeSlotId: slot.master.id,
-                  durationMinutes: slot.master.durationMinutes,
-                  status: 'UNAVAILABLE',
-                ) !=
-                null;
+        if (targetStatus == 'UNAVAILABLE') {
+          ok = await _svc.addCustomSlot(
+                consultantId: widget.consultantId,
+                slotDate: _selectedDate,
+                masterTimeSlotId: slot.master.id,
+                durationMinutes: slot.master.durationMinutes,
+                status: 'UNAVAILABLE',
+              ) !=
+              null;
+        } else {
+          // Slot is virtual + available already, so restore is effectively done.
+          ok = true;
+        }
       }
       allOk = allOk && ok;
     }
@@ -5944,6 +6494,7 @@ class _NotificationPanel extends StatelessWidget {
                   final n = svc.notifications[i];
                   final color = _notifColor(n);
                   final icon = _notifIcon(n);
+                  final subtitle = _notifSubtitle(n);
                   return ListTile(
                     contentPadding:
                         const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -5955,17 +6506,21 @@ class _NotificationPanel extends StatelessWidget {
                           shape: BoxShape.circle),
                       child: Icon(icon, color: color, size: 20),
                     ),
-                    title: Text(_safeGet(n, 'title', 'Notification'),
+                    title: Text(
+                        n.title.trim().isNotEmpty
+                            ? n.title.trim()
+                            : 'Notification',
                         style: TextStyle(
-                            fontWeight: _safeRead<bool>(n, 'isRead') == true
-                                ? FontWeight.w400
-                                : FontWeight.w700,
+                            fontWeight:
+                                n.isRead ? FontWeight.w400 : FontWeight.w700,
                             fontSize: 13)),
-                    subtitle: Text(_notifSubtitle(n),
-                        style: const TextStyle(fontSize: 12),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis),
-                    trailing: _safeRead<bool>(n, 'isRead') != true
+                    subtitle: subtitle.isNotEmpty
+                        ? Text(subtitle,
+                            style: const TextStyle(fontSize: 12),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis)
+                        : null,
+                    trailing: !n.isRead
                         ? Container(
                             width: 8,
                             height: 8,
@@ -5973,11 +6528,12 @@ class _NotificationPanel extends StatelessWidget {
                                 color: AppColors.accent,
                                 shape: BoxShape.circle))
                         : null,
-                    onTap: () {
-                      final rawId = _safeRead(n, 'id');
-                      final int parsedId =
-                          int.tryParse(rawId?.toString() ?? '') ?? 0;
-                      if (parsedId > 0) svc.markAsRead(parsedId);
+                    onTap: () async {
+                      if (n.id > 0 && !n.isRead) {
+                        await svc.markAsRead(n.id);
+                      }
+                      if (!context.mounted) return;
+                      _openNotificationDetails(context, n, subtitle);
                     },
                   );
                 },
@@ -5990,29 +6546,29 @@ class _NotificationPanel extends StatelessWidget {
   }
 }
 
-Color _notifColor(dynamic n) {
-  final type = _safeGet(n, 'type', '');
+Color _notifColor(AppNotification n) {
+  final type = n.type.toUpperCase();
   switch (type) {
-    case 'success':
+    case 'SUCCESS':
     case 'TICKET_UPDATED':
       return AppColors.success;
-    case 'error':
+    case 'ERROR':
     case 'ESCALATION':
       return AppColors.danger;
-    case 'warning':
+    case 'WARNING':
       return AppColors.warning;
     default:
       return AppColors.info;
   }
 }
 
-IconData _notifIcon(dynamic n) {
-  final type = _safeGet(n, 'type', '');
+IconData _notifIcon(AppNotification n) {
+  final type = n.type.toUpperCase();
   switch (type) {
-    case 'success':
+    case 'SUCCESS':
     case 'TICKET_UPDATED':
       return Icons.check_circle_outline;
-    case 'error':
+    case 'ERROR':
     case 'ESCALATION':
       return Icons.error_outline;
     case 'NEW_ASSIGNMENT':
@@ -6022,23 +6578,53 @@ IconData _notifIcon(dynamic n) {
   }
 }
 
-String _notifSubtitle(dynamic n) {
-  for (final key in ['message', 'body', 'description']) {
-    final val = _safeRead(n, key);
-    if (val != null && val.toString().isNotEmpty) return val.toString();
+String _notifSubtitle(AppNotification n) {
+  if (n.body.trim().isNotEmpty) return n.body.trim();
+  final data = n.data ?? const <String, dynamic>{};
+  for (final key in ['message', 'body', 'content', 'description', 'text']) {
+    final val = data[key];
+    if (val != null && val.toString().trim().isNotEmpty) {
+      return val.toString().trim();
+    }
   }
   return '';
 }
 
-String _safeGet(dynamic obj, String key, String fallback) =>
-    _safeRead<String>(obj, key) ?? fallback;
+void _openNotificationDetails(
+  BuildContext context,
+  AppNotification notification,
+  String subtitle,
+) {
+  final title = notification.title.trim().isNotEmpty
+      ? notification.title.trim()
+      : 'Notification';
+  final message = subtitle.trim().isNotEmpty
+      ? subtitle.trim()
+      : 'No additional details available.';
+  final stamp =
+      DateFormat('d MMM, h:mm a').format(notification.createdAt.toLocal());
 
-T? _safeRead<T>(dynamic obj, String key) {
-  try {
-    return (obj as dynamic)[key] as T?;
-  } catch (_) {
-    return null;
-  }
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: AppColors.surface,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (ctx) => Padding(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: AppTextStyles.h3),
+          const SizedBox(height: 8),
+          Text(stamp, style: AppTextStyles.caption),
+          const SizedBox(height: 14),
+          Text(message, style: AppTextStyles.body),
+        ],
+      ),
+    ),
+  );
 }
 
 Widget _handleBar() => Center(

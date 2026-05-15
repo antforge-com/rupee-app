@@ -391,12 +391,13 @@ class _BookingsPageState extends State<BookingsPage> {
   Map<int, String> _consultantNames = {};
 
   bool _loading = true;
-  bool _loadingMore = false;
-  int _nextPage = 0;
+  bool _paging = false;          // page-transition spinner
+  int _currentPage = 1;          // 1-based
   int _totalPages = 1;
   int _totalElements = 0;
-  bool _hasMore = true;
   int _specialTotal = 0;
+  int _requestToken = 0;
+  final Map<int, List<_BookingItem>> _pageCache = {};
 
   String _filter = 'ALL';
   String _search = '';
@@ -423,10 +424,10 @@ class _BookingsPageState extends State<BookingsPage> {
   @override
   void initState() {
     super.initState();
-    _load(reset: true);
+    _load(page: 1);
     _pollTimer = Timer.periodic(
-      const Duration(seconds: 15),
-      (_) => _load(reset: true, silent: true),
+      const Duration(seconds: 30),
+      (_) => _load(page: _currentPage, silent: true),
     );
   }
 
@@ -479,7 +480,7 @@ class _BookingsPageState extends State<BookingsPage> {
       _filter = filter;
       _search = '';
     });
-    _load(reset: true);
+    _load(page: 1, force: true, clearCache: true);
     _scrollFilterChipIntoView(filter);
   }
 
@@ -646,85 +647,190 @@ class _BookingsPageState extends State<BookingsPage> {
       .where(_isRevenueBooking)
       .fold(0.0, (sum, b) => sum + b.amount);
 
-  Future<void> _load({bool reset = false, bool silent = false}) async {
-    if (reset) {
-      if (!silent) {
-        setState(() {
-          _loading = true;
-          _nextPage = 0;
-          _hasMore = true;
-          _regularBookings = [];
-          _specialBookings = [];
-          _specialTotal = 0;
-          _totalElements = 0;
-          _totalPages = 1;
-        });
-      } else {
-        _nextPage = 0;
-        _hasMore = true;
-        _totalElements = 0;
-        _totalPages = 1;
+  Future<void> _load({
+    int page = 1,
+    bool silent = false,
+    bool force = false,
+    bool clearCache = false,
+  }) async {
+    final targetPage = page < 1 ? 1 : page;
+    if (clearCache) _pageCache.clear();
+
+    // Use cache when available and not forced
+    if (!force) {
+      final cached = _pageCache[targetPage];
+      if (cached != null) {
+        final special = _specialBookings;
+        if (mounted) {
+          setState(() {
+            _regularBookings = cached;
+            _currentPage = targetPage;
+            _loading = false;
+            _paging = false;
+          });
+        }
+        unawaited(_prefetchAdjacentPages(targetPage));
+        return;
       }
-    } else {
-      if (_loadingMore || !_hasMore) return;
-      setState(() => _loadingMore = true);
     }
 
-    try {
-      final pageToLoad = reset ? 0 : _nextPage;
-      final regularFuture = _fetchRegularPage(pageToLoad);
-      final specialFuture =
-          reset ? _fetchSpecialBookings() : Future.value(_specialBookings);
+    if (mounted) {
+      setState(() {
+        if (_regularBookings.isEmpty || force || clearCache) {
+          if (!silent) _loading = true;
+        } else {
+          _paging = true;
+        }
+      });
+    }
 
-      final results = await Future.wait<dynamic>([
-        regularFuture,
-        specialFuture,
-        if (reset)
-          _fetchNameLookups()
-        else
-          Future.value({
-            'users': _userNames,
-            'consultants': _consultantNames,
-          }),
-      ]);
+    final token = ++_requestToken;
+    try {
+      final regularFuture = _fetchRegularPage(targetPage - 1); // 0-based API
+      final specialFuture = (targetPage == 1 || _specialBookings.isEmpty)
+          ? _fetchSpecialBookings()
+          : Future.value(_specialBookings);
+      final namesFuture = (targetPage == 1 || _userNames.isEmpty)
+          ? _fetchNameLookups()
+          : Future.value({'users': _userNames, 'consultants': _consultantNames});
+
+      final results = await Future.wait<dynamic>([regularFuture, specialFuture, namesFuture]);
+      if (token != _requestToken) return;
+
       final regularPage = results[0] as _RegularPageResult;
       final specialItems = results[1] as List<_BookingItem>;
       final lookupRaw = results[2] as Map;
-      final usersLookup =
-          Map<int, String>.from((lookupRaw['users'] as Map?) ?? const {});
-      final consultantsLookup = Map<int, String>.from(
-        (lookupRaw['consultants'] as Map?) ?? const {},
-      );
+      final usersLookup = Map<int, String>.from((lookupRaw['users'] as Map?) ?? const {});
+      final consultantsLookup = Map<int, String>.from((lookupRaw['consultants'] as Map?) ?? const {});
 
-      if (!mounted) return;
+      _pageCache[targetPage] = regularPage.items;
+
+      if (!mounted || token != _requestToken) return;
       setState(() {
-        if (reset) {
-          _regularBookings = regularPage.items;
-          _specialBookings = specialItems;
-          _userNames = usersLookup;
-          _consultantNames = consultantsLookup;
-        } else {
-          _regularBookings.addAll(regularPage.items);
-        }
-        _specialTotal = _specialBookings.length;
-        _nextPage = regularPage.nextPage;
+        _regularBookings = regularPage.items;
+        _specialBookings = specialItems;
+        _userNames = usersLookup;
+        _consultantNames = consultantsLookup;
+        _specialTotal = specialItems.length;
+        _currentPage = targetPage;
         _totalPages = regularPage.totalPages;
         _totalElements = regularPage.totalElements;
-        _hasMore = regularPage.hasMore;
         _loading = false;
-        _loadingMore = false;
+        _paging = false;
       });
+      unawaited(_prefetchAdjacentPages(targetPage));
     } catch (_) {
       if (mounted && !silent) {
         setState(() {
           _loading = false;
-          _loadingMore = false;
+          _paging = false;
         });
       } else if (mounted) {
-        setState(() => _loadingMore = false);
+        setState(() => _paging = false);
       }
     }
   }
+
+  Future<void> _prefetchAdjacentPages(int current) async {
+    for (final page in [current - 1, current + 1]) {
+      if (page < 1 || page > _totalPages) continue;
+      if (_pageCache.containsKey(page)) continue;
+      unawaited(_prefetchBookingPage(page));
+    }
+  }
+
+  Future<void> _prefetchBookingPage(int page) async {
+    try {
+      final result = await _fetchRegularPage(page - 1);
+      if (!mounted || _pageCache.containsKey(page)) return;
+      _pageCache[page] = result.items;
+    } catch (_) {}
+  }
+
+  void _goToPage(int page) {
+    if (page < 1 || page > _totalPages || page == _currentPage) return;
+    _load(page: page);
+  }
+
+  List<int> _visiblePageNumbers() {
+    if (_totalPages <= 1) return const [1];
+    final pages = <int>{1, _totalPages, _currentPage};
+    for (var p = _currentPage - 1; p <= _currentPage + 1; p++) {
+      if (p >= 1 && p <= _totalPages) pages.add(p);
+    }
+    return (pages.toList()..sort());
+  }
+
+  Widget _paginationBar() {
+    if (_totalPages <= 1) return const SizedBox.shrink();
+    final pages = _visiblePageNumbers();
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(children: [
+        IconButton(
+          onPressed: _currentPage > 1 ? () => _goToPage(_currentPage - 1) : null,
+          icon: const Icon(Icons.chevron_left_rounded),
+          visualDensity: VisualDensity.compact,
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              for (var i = 0; i < pages.length; i++) ...[
+                if (i > 0 && pages[i] - pages[i - 1] > 1)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Text('...', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textMuted)),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: GestureDetector(
+                    onTap: () => _goToPage(pages[i]),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _currentPage == pages[i] ? AppColors.primaryLight : Colors.transparent,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: _currentPage == pages[i] ? AppColors.primaryLight : AppColors.border,
+                        ),
+                      ),
+                      child: Text(
+                        '${pages[i]}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: _currentPage == pages[i] ? Colors.white : AppColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ]),
+          ),
+        ),
+        IconButton(
+          onPressed: _currentPage < _totalPages ? () => _goToPage(_currentPage + 1) : null,
+          icon: const Icon(Icons.chevron_right_rounded),
+          visualDensity: VisualDensity.compact,
+        ),
+        if (_paging)
+          const SizedBox(
+            width: 14, height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primaryLight),
+          ),
+      ]),
+    );
+  }
+
 
   Future<_RegularPageResult> _fetchRegularPage(int page) async {
     if (widget.isAdmin) {
@@ -820,16 +926,37 @@ class _BookingsPageState extends State<BookingsPage> {
           1, _toInt(row['durationInHours'] ?? row['duration_in_hours']) ?? 1);
       final duration = durationHours == 1 ? '1 hr' : '$durationHours hrs';
 
-      final date = _firstNonEmpty([
+      var date = _firstNonEmpty([
         row['scheduledDate'],
         row['scheduled_date'],
+        row['slotDate'],
+        row['slot_date'],
+        row['bookingDate'],
+        row['booking_date'],
+        row['date'],
+        row['preferredDate'],
         meta?['scheduledDate'],
         meta?['preferredDate'],
       ]);
 
+      final scheduledAt = _firstNonEmpty([
+        row['scheduledAt'],
+        row['scheduled_at'],
+      ]);
+      if (date.isEmpty && scheduledAt.isNotEmpty) {
+        final parsed = DateTime.tryParse(scheduledAt);
+        if (parsed != null) {
+          date = parsed.toIso8601String().split('T').first;
+        }
+      }
+
       final scheduledTimeRaw = _firstMeaningfulValue([
         row['scheduledTime'],
         row['scheduled_time'],
+        row['startTime'],
+        row['slotTime'],
+        row['slot_time'],
+        row['time'],
         meta?['scheduledTime'],
         meta?['preferredTime'],
       ]);
@@ -837,10 +964,20 @@ class _BookingsPageState extends State<BookingsPage> {
 
       var timeRange = _firstNonEmpty([
         row['scheduledTimeRange'],
+        row['scheduled_time_range'],
         row['timeRange'],
+        row['time_range'],
         meta?['scheduledTimeRange'],
         meta?['preferredTimeRange'],
       ]);
+      if (timeRange.isEmpty && scheduledTime.isEmpty && scheduledAt.isNotEmpty) {
+        final parsed = DateTime.tryParse(scheduledAt);
+        if (parsed != null) {
+          final hh = parsed.hour.toString().padLeft(2, '0');
+          final mm = parsed.minute.toString().padLeft(2, '0');
+          timeRange = _buildSpecialTimeRange('$hh:$mm', durationHours);
+        }
+      }
       if (timeRange.isEmpty && scheduledTime.isNotEmpty) {
         timeRange = _buildSpecialTimeRange(scheduledTime, durationHours);
       }
@@ -1078,7 +1215,6 @@ class _BookingsPageState extends State<BookingsPage> {
   @override
   Widget build(BuildContext context) {
     final filtered = _filtered;
-    final showLoadMore = _hasMore && _filter != 'SPECIAL';
     final counts = _counts;
 
     return Column(
@@ -1185,11 +1321,14 @@ class _BookingsPageState extends State<BookingsPage> {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                if (showLoadMore)
-                  const Text(
-                    '  -  scroll for more',
-                    style: TextStyle(fontSize: 10, color: AppColors.textMuted),
+                const Spacer(),
+                Text(
+                  'Page $_currentPage of $_totalPages',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textSecondary,
                   ),
+                ),
               ],
             ),
           ),
@@ -1228,29 +1367,28 @@ class _BookingsPageState extends State<BookingsPage> {
                       ),
                     )
                   : RefreshIndicator(
-                      onRefresh: () => _load(reset: true),
+                      onRefresh: () => _load(page: 1, force: true, clearCache: true),
                       child: ListView.builder(
                         padding: const EdgeInsets.fromLTRB(14, 8, 14, 24),
-                        itemCount: filtered.length +
-                            (_loadingMore ? 1 : 0) +
-                            (showLoadMore && !_loadingMore ? 1 : 0),
+                        itemCount: filtered.length + 1,
                         itemBuilder: (_, i) {
-                          if (i == filtered.length && _loadingMore) {
-                            return const Center(
-                              child: Padding(
-                                padding: EdgeInsets.all(16),
-                                child: CircularProgressIndicator(),
-                              ),
+                          if (i == filtered.length) {
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 8, bottom: 12),
+                              child: Column(children: [
+                                if (_totalPages > 1) _paginationBar(),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Page $_currentPage of $_totalPages  •  $_totalElements bookings',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: AppColors.textMuted,
+                                  ),
+                                ),
+                              ]),
                             );
                           }
-                          if (i == filtered.length && showLoadMore) {
-                            return TextButton(
-                              onPressed: _load,
-                              child: const Text('Load more'),
-                            );
-                          }
-                          if (i >= filtered.length)
-                            return const SizedBox.shrink();
                           final booking = filtered[i];
                           final clientDisplayName = _displayClientName(booking);
                           final consultantDisplayName =
@@ -1345,341 +1483,348 @@ class _BookingCard extends StatelessWidget {
         _string(b.slotDate).isEmpty;
 
     final who = isAdmin ? clientDisplayName : consultantDisplayName;
+    final counterpart = isAdmin ? consultantDisplayName : clientDisplayName;
     final initial = who.isNotEmpty ? who[0].toUpperCase() : '#';
 
+    final hasDate = b.slotDate != null && b.slotDate!.isNotEmpty;
+    final hasTime = b.timeRange != null && b.timeRange!.isNotEmpty;
+    final hasDuration = b.isSpecial && b.duration != null && b.duration!.isNotEmpty;
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
+      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isCancelled
+              ? const Color(0xFFFECACA)
+              : isCompleted
+                  ? const Color(0xFFD1FAE5)
+                  : color.withValues(alpha: 0.15),
+          width: 1,
+        ),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Header: avatar + name + status chip ──────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 10, 0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 CircleAvatar(
-                  radius: 18,
-                  backgroundColor: color.withValues(alpha: 0.1),
-                  child: Text(
-                    initial,
-                    style: TextStyle(
-                      color: color,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                    ),
-                  ),
+                  radius: 20,
+                  backgroundColor: color.withValues(alpha: 0.12),
+                  child: Text(initial,
+                      style: TextStyle(color: color,
+                          fontWeight: FontWeight.w800, fontSize: 14)),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              isAdmin
-                                  ? clientDisplayName
-                                  : consultantDisplayName,
-                              style: AppTextStyles.h4,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                      Row(children: [
+                        Expanded(
+                          child: Text(who,
+                              style: const TextStyle(fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.textPrimary),
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                        if (b.isSpecial)
+                          Container(
+                            margin: const EdgeInsets.only(left: 6),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                                color: const Color(0xFFF59E0B),
+                                borderRadius: BorderRadius.circular(10)),
+                            child: const Text('SPECIAL',
+                                style: TextStyle(fontSize: 9,
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white,
+                                    letterSpacing: 0.3)),
                           ),
-                          if (b.isSpecial)
-                            Container(
-                              margin: const EdgeInsets.only(left: 6),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFB45309),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: const Text(
-                                'SPECIAL',
-                                style: TextStyle(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w800,
-                                  color: Colors.white,
-                                  letterSpacing: 0.3,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
+                      ]),
+                      const SizedBox(height: 2),
                       Text(
                         isAdmin
-                            ? 'Consultant: $consultantDisplayName'
-                            : 'Client: $clientDisplayName',
-                        style: AppTextStyles.caption,
+                            ? 'Consultant: $counterpart'
+                            : 'Client: $counterpart',
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.textSecondary),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
                 ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _statusBg(chipStatus),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    chipStatus,
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: color,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.3,
+                const SizedBox(width: 6),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                          color: _statusBg(chipStatus),
+                          borderRadius: BorderRadius.circular(20)),
+                      child: Text(chipStatus,
+                          style: TextStyle(fontSize: 10, color: color,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.3)),
                     ),
-                  ),
+                  ],
                 ),
                 if (isAdmin && !b.isSpecial && onStatusChanged != null)
                   PopupMenuButton<String>(
-                    tooltip: 'Change booking status',
+                    tooltip: 'Change status',
                     icon: const Icon(Icons.more_vert_rounded,
                         color: AppColors.textSecondary, size: 18),
                     onSelected: onStatusChanged,
                     itemBuilder: (_) => const [
-                      PopupMenuItem(
-                          value: 'PENDING', child: Text('Mark Pending')),
-                      PopupMenuItem(
-                          value: 'CONFIRMED', child: Text('Mark Confirmed')),
-                      PopupMenuItem(
-                          value: 'COMPLETED', child: Text('Mark Completed')),
-                      PopupMenuItem(
-                          value: 'CANCELLED', child: Text('Mark Cancelled')),
+                      PopupMenuItem(value: 'PENDING',   child: Text('Mark Pending')),
+                      PopupMenuItem(value: 'CONFIRMED', child: Text('Mark Confirmed')),
+                      PopupMenuItem(value: 'COMPLETED', child: Text('Mark Completed')),
+                      PopupMenuItem(value: 'CANCELLED', child: Text('Mark Cancelled')),
                     ],
                   ),
               ],
             ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 16,
-              runSpacing: 6,
-              children: [
-                if (awaitingSchedule)
-                  _detailChip(
-                    Icons.calendar_month_rounded,
-                    'Awaiting schedule from consultant',
-                    const Color(0xFFC2410C),
-                  )
-                else if (b.slotDate != null && b.slotDate!.isNotEmpty)
-                  _detailChip(
-                    Icons.calendar_today_rounded,
-                    _fmtDate(b.slotDate),
-                    AppColors.primaryLight,
-                  ),
-                if (b.timeRange != null && b.timeRange!.isNotEmpty)
-                  _detailChip(
-                      Icons.access_time_rounded, b.timeRange!, AppColors.info),
-                if (b.isSpecial &&
-                    b.duration != null &&
-                    b.duration!.isNotEmpty &&
-                    (b.timeRange == null || b.timeRange!.isEmpty))
-                  _detailChip(
-                    Icons.hourglass_top_rounded,
-                    b.duration!,
-                    const Color(0xFFC2410C),
-                  ),
-                if (b.meetingMode != null && b.meetingMode!.isNotEmpty)
-                  _detailChip(
-                    b.meetingMode!.toUpperCase() == 'ONLINE'
-                        ? Icons.videocam_rounded
-                        : b.meetingMode!.toUpperCase() == 'PHONE'
-                            ? Icons.phone_rounded
-                            : Icons.location_on_rounded,
-                    b.meetingMode!,
-                    AppColors.textSecondary,
-                  ),
-                if (b.amount > 0)
-                  _detailChip(
-                    Icons.currency_rupee_rounded,
-                    'Rs ${b.amount.toStringAsFixed(0)}',
-                    const Color(0xFF059669),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              '#${b.id}',
-              style: const TextStyle(
-                fontSize: 10,
-                color: AppColors.textMuted,
-                fontWeight: FontWeight.w600,
+          ),
+
+          // ── Date / Time / Mode info box ───────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: awaitingSchedule
+                    ? const Color(0xFFFFF7ED)
+                    : const Color(0xFFF0FDF4),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: awaitingSchedule
+                      ? const Color(0xFFFED7AA)
+                      : const Color(0xFFBBF7D0),
+                ),
               ),
+              child: awaitingSchedule
+                  ? Row(children: const [
+                      Icon(Icons.schedule_rounded,
+                          size: 14, color: Color(0xFFC2410C)),
+                      SizedBox(width: 6),
+                      Expanded(
+                        child: Text('Awaiting schedule from consultant',
+                            style: TextStyle(fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFFC2410C))),
+                      ),
+                    ])
+                  : Wrap(
+                      spacing: 18,
+                      runSpacing: 8,
+                      children: [
+                        if (hasDate)
+                          _infoCell(Icons.calendar_today_rounded,
+                              'Date', _fmtDate(b.slotDate),
+                              AppColors.primaryLight),
+                        if (hasTime)
+                          _infoCell(Icons.access_time_rounded,
+                              'Time', b.timeRange!, AppColors.info),
+                        if (!hasDate && !hasTime && hasDuration)
+                          _infoCell(Icons.hourglass_top_rounded,
+                              'Duration', b.duration!,
+                              const Color(0xFFC2410C)),
+                        if (b.meetingMode != null &&
+                            b.meetingMode!.isNotEmpty)
+                          _infoCell(
+                            b.meetingMode!.toUpperCase() == 'ONLINE'
+                                ? Icons.videocam_rounded
+                                : b.meetingMode!.toUpperCase() == 'PHONE'
+                                    ? Icons.phone_rounded
+                                    : Icons.location_on_rounded,
+                            'Mode', b.meetingMode!,
+                            AppColors.textSecondary),
+                        if (b.amount > 0)
+                          _infoCell(Icons.currency_rupee_rounded,
+                              'Amount',
+                              'Rs ${b.amount.toStringAsFixed(2)}',
+                              const Color(0xFF059669)),
+                      ],
+                    ),
             ),
-            if (b.meetingLink != null && b.meetingLink!.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          ),
+
+          // ── Booking ID ────────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
+            child: Text('#${b.id}',
+                style: const TextStyle(fontSize: 10,
+                    color: AppColors.textMuted, fontWeight: FontWeight.w600)),
+          ),
+
+          // ── Meeting link ──────────────────────────────────────────────
+          if (b.meetingLink != null && b.meetingLink!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF059669).withValues(alpha: 0.06),
+                  color:
+                      const Color(0xFF059669).withValues(alpha: 0.06),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: const Color(0xFF059669).withValues(alpha: 0.2),
+                      color: const Color(0xFF059669)
+                          .withValues(alpha: 0.2)),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.videocam_rounded,
+                      size: 14, color: Color(0xFF059669)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(b.meetingLink!,
+                        style: const TextStyle(fontSize: 11,
+                            color: Color(0xFF059669),
+                            fontWeight: FontWeight.w600),
+                        overflow: TextOverflow.ellipsis),
                   ),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.videocam_rounded,
-                      size: 14,
-                      color: Color(0xFF059669),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        b.meetingLink!,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF059669),
-                          fontWeight: FontWeight.w600,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
+                ]),
               ),
-            ],
-            if (isAdmin && !b.isSpecial && !isCancelled && !isCompleted) ...[
-              const SizedBox(height: 10),
-              const Divider(height: 1),
-              const SizedBox(height: 10),
-              Wrap(
+            ),
+
+          // ── Action buttons ────────────────────────────────────────────
+          if (onViewAnswers != null ||
+              (isAdmin && !b.isSpecial && !isCancelled && !isCompleted) ||
+              canCancel) ...[
+            const Padding(
+              padding: EdgeInsets.fromLTRB(14, 10, 14, 0),
+              child:
+                  Divider(height: 1, color: AppColors.border),
+            ),
+            Padding(
+              padding:
+                  const EdgeInsets.fromLTRB(10, 8, 10, 10),
+              child: Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  if (isPending && onConfirm != null)
+                  if (onViewAnswers != null)
+                    OutlinedButton.icon(
+                      onPressed: onViewAnswers,
+                      icon: const Icon(Icons.quiz_outlined, size: 14),
+                      label: const Text('View Answers'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.primaryLight,
+                        side: const BorderSide(
+                            color: AppColors.primaryLight),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        textStyle: const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  if (isAdmin && isPending && onConfirm != null)
                     OutlinedButton.icon(
                       onPressed: onConfirm,
-                      icon: const Icon(Icons.check_circle_outline_rounded,
-                          size: 15),
+                      icon: const Icon(
+                          Icons.check_circle_outline_rounded,
+                          size: 14),
                       label: const Text('Confirm'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: const Color(0xFF059669),
-                        side: const BorderSide(color: Color(0xFF059669)),
+                        side: const BorderSide(
+                            color: Color(0xFF059669)),
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
+                            horizontal: 12, vertical: 6),
                         textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
+                            fontSize: 12, fontWeight: FontWeight.w600),
                       ),
                     ),
-                  if (isConfirmed && onAddMeetingLink != null)
+                  if (isAdmin && isConfirmed && onAddMeetingLink != null)
                     OutlinedButton.icon(
                       onPressed: onAddMeetingLink,
-                      icon: const Icon(Icons.link_rounded, size: 15),
-                      label: Text(
-                        b.meetingLink?.isNotEmpty == true
-                            ? 'Edit Link'
-                            : 'Add Link',
-                      ),
+                      icon: const Icon(Icons.link_rounded, size: 14),
+                      label: Text(b.meetingLink?.isNotEmpty == true
+                          ? 'Update Link'
+                          : 'Add Link'),
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.primaryLight,
-                        side: const BorderSide(color: AppColors.primaryLight),
+                        foregroundColor: AppColors.info,
+                        side: const BorderSide(color: AppColors.info),
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
+                            horizontal: 12, vertical: 6),
                         textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
+                            fontSize: 12, fontWeight: FontWeight.w600),
                       ),
                     ),
-                  if (isConfirmed && onMarkCompleted != null)
+                  if (isAdmin &&
+                      isConfirmed &&
+                      onMarkCompleted != null)
                     OutlinedButton.icon(
                       onPressed: onMarkCompleted,
-                      icon: const Icon(Icons.done_all_rounded, size: 15),
+                      icon: const Icon(Icons.done_all_rounded,
+                          size: 14),
                       label: const Text('Complete'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: const Color(0xFF7C3AED),
-                        side: const BorderSide(color: Color(0xFF7C3AED)),
+                        side: const BorderSide(
+                            color: Color(0xFF7C3AED)),
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
+                            horizontal: 12, vertical: 6),
                         textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
+                            fontSize: 12, fontWeight: FontWeight.w600),
                       ),
                     ),
                   if (canCancel)
                     OutlinedButton.icon(
                       onPressed: onCancel,
-                      icon: const Icon(Icons.cancel_outlined, size: 15),
+                      icon: const Icon(Icons.cancel_outlined, size: 14),
                       label: const Text('Cancel'),
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFFDC2626),
-                        side: const BorderSide(color: Color(0xFFDC2626)),
+                        foregroundColor: AppColors.danger,
+                        side:
+                            const BorderSide(color: AppColors.danger),
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
+                            horizontal: 12, vertical: 6),
                         textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
+                            fontSize: 12, fontWeight: FontWeight.w600),
                       ),
                     ),
                 ],
               ),
-            ],
-            if (onViewAnswers != null) ...[
-              const SizedBox(height: 10),
-              Align(
-                alignment: Alignment.centerRight,
-                child: OutlinedButton.icon(
-                  onPressed: onViewAnswers,
-                  icon: const Icon(Icons.description_outlined, size: 15),
-                  label: const Text('View Answers'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.primary,
-                    side: const BorderSide(color: AppColors.primary),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
-                    ),
-                    textStyle: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-            if (!isAdmin && canCancel) ...[
-              const SizedBox(height: 10),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  onPressed: onCancel,
-                  icon: const Icon(Icons.cancel_outlined, size: 15),
-                  label: const Text('Cancel Booking'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: const Color(0xFFDC2626),
-                    textStyle: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
+            ),
+          ] else
+            const SizedBox(height: 10),
+        ],
       ),
     );
   }
+
+  Widget _infoCell(
+          IconData icon, String label, String value, Color color) =>
+      Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 13, color: color),
+        const SizedBox(width: 4),
+        Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label,
+                  style: TextStyle(
+                      fontSize: 9,
+                      color: color.withValues(alpha: 0.7),
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.3)),
+              Text(value,
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: color,
+                      fontWeight: FontWeight.w700)),
+            ]),
+      ]);
+
 
   Widget _detailChip(IconData icon, String label, Color color) => Row(
         mainAxisSize: MainAxisSize.min,

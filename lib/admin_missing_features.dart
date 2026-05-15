@@ -3503,7 +3503,6 @@ class _AdminAddMemberScreenState extends State<AdminAddMemberScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      appBar: AppBar(title: const Text('Add Member')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(

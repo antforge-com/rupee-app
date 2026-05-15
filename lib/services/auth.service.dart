@@ -14,7 +14,6 @@
 import 'package:dio/dio.dart';
 import 'package:finadvise/api_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../models/models.dart';
 
 // ─── Key constants (match web's localStorage keys) ──────────────────────────
 const _kToken = 'fin_token';
@@ -305,18 +304,53 @@ class AuthService {
     required String newPassword,
     required String confirmPassword,
   }) async {
-    try {
-      await _apiClient.dio.put(
-        '/api/users/change-password',
-        data: {
-          'newPassword': newPassword,
-          'confirmPassword': confirmPassword,
-        },
-      );
-      return const PasswordChangeResult(success: true);
-    } catch (e) {
-      return PasswordChangeResult(success: false, error: _extractError(e));
+    final endpoints = [
+      '/api/users/change-password',
+      '/api/auth/change-password',
+      '/api/users/password',
+    ];
+    final primaryBody = {
+      'newPassword': newPassword,
+      'confirmPassword': confirmPassword,
+    };
+    final legacyBody = {
+      'newPassword': newPassword,
+      'confirmPassword': confirmPassword,
+      'password': newPassword,
+    };
+
+    for (final endpoint in endpoints) {
+      try {
+        final resp = await _apiClient.dio.put(endpoint, data: primaryBody);
+        final statusCode = resp.statusCode ?? 0;
+        if (statusCode >= 200 && statusCode < 300) {
+          return const PasswordChangeResult(success: true);
+        }
+      } catch (e) {
+        final status = (e as dynamic).response?.statusCode ?? 0;
+        final errMsg = _extractError(e).toLowerCase();
+        if (status == 404 || status == 405) continue;
+
+        if (status == 400 &&
+            (errMsg.contains('password is required') ||
+                errMsg.contains('missing password'))) {
+          try {
+            final fallbackResp =
+                await _apiClient.dio.put(endpoint, data: legacyBody);
+            final fallbackCode = fallbackResp.statusCode ?? 0;
+            if (fallbackCode >= 200 && fallbackCode < 300) {
+              return const PasswordChangeResult(success: true);
+            }
+          } catch (_) {}
+        }
+
+        return PasswordChangeResult(success: false, error: _extractError(e));
+      }
     }
+    return const PasswordChangeResult(
+      success: false,
+      error: 'Password change failed. Please try again.',
+    );
   }
 
   // ── TERMS & CONDITIONS ────────────────────────────────────────────────────

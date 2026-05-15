@@ -22,7 +22,8 @@ import 'package:flutter/material.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-void _snack(BuildContext ctx, String msg, {bool error = false, IconData? icon}) {
+void _snack(BuildContext ctx, String msg,
+    {bool error = false, IconData? icon}) {
   ScaffoldMessenger.of(ctx)
     ..clearSnackBars()
     ..showSnackBar(
@@ -30,15 +31,21 @@ void _snack(BuildContext ctx, String msg, {bool error = false, IconData? icon}) 
         content: Row(
           children: [
             Icon(
-              icon ?? (error ? Icons.error_outline_rounded : Icons.check_circle_outline_rounded),
+              icon ??
+                  (error
+                      ? Icons.error_outline_rounded
+                      : Icons.check_circle_outline_rounded),
               color: Colors.white,
               size: 18,
             ),
             const SizedBox(width: 10),
-            Expanded(child: Text(msg, style: const TextStyle(fontWeight: FontWeight.w500))),
+            Expanded(
+                child: Text(msg,
+                    style: const TextStyle(fontWeight: FontWeight.w500))),
           ],
         ),
-        backgroundColor: error ? const Color(0xFFDC2626) : const Color(0xFF059669),
+        backgroundColor:
+            error ? const Color(0xFFDC2626) : const Color(0xFF059669),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
@@ -47,11 +54,14 @@ void _snack(BuildContext ctx, String msg, {bool error = false, IconData? icon}) 
     );
 }
 
-InputDecoration _inp(String label, {IconData? icon, String? hint, Widget? suffix}) =>
+InputDecoration _inp(String label,
+        {IconData? icon, String? hint, Widget? suffix}) =>
     InputDecoration(
       labelText: label,
       hintText: hint,
-      prefixIcon: icon != null ? Icon(icon, size: 19, color: AppColors.textSecondary) : null,
+      prefixIcon: icon != null
+          ? Icon(icon, size: 19, color: AppColors.textSecondary)
+          : null,
       suffixIcon: suffix,
       filled: true,
       fillColor: AppColors.surfaceVariant,
@@ -76,7 +86,8 @@ InputDecoration _inp(String label, {IconData? icon, String? hint, Widget? suffix
     );
 
 double _normalizeSessionFee(dynamic raw) {
-  final value = raw is num ? raw.toDouble() : double.tryParse('${raw ?? ''}') ?? 0;
+  final value =
+      raw is num ? raw.toDouble() : double.tryParse('${raw ?? ''}') ?? 0;
   if (value >= 10000 && value < 1000000 && value % 10 == 0) {
     return value / 10;
   }
@@ -94,7 +105,8 @@ String _apiError(Object error, {String fallback = 'Something went wrong.'}) {
     final data = error.response?.data;
     if (data is Map) {
       final direct = data['message'] ?? data['error'];
-      if (direct != null && '$direct'.trim().isNotEmpty) return '$direct'.trim();
+      if (direct != null && '$direct'.trim().isNotEmpty)
+        return '$direct'.trim();
       final fieldErrors = data['fieldErrors'];
       if (fieldErrors is Map && fieldErrors.isNotEmpty) {
         return '${fieldErrors.values.first}'.trim();
@@ -104,8 +116,10 @@ String _apiError(Object error, {String fallback = 'Something went wrong.'}) {
     } else if (data is String && data.trim().isNotEmpty) {
       return data.trim();
     }
-    if (error.response?.statusCode == 409) return 'A consultant with this email already exists.';
-    if (error.response?.statusCode == 403) return 'Access denied. Admin privileges required.';
+    if (error.response?.statusCode == 409)
+      return 'A consultant with this email already exists.';
+    if (error.response?.statusCode == 403)
+      return 'Access denied. Admin privileges required.';
   }
   return fallback;
 }
@@ -116,39 +130,81 @@ class _SkillGroup {
   final String group;
   final IconData icon;
   final List<String> skills;
-  const _SkillGroup({required this.group, required this.icon, required this.skills});
+  const _SkillGroup(
+      {required this.group, required this.icon, required this.skills});
 }
 
 const _skillGroups = [
   _SkillGroup(
     group: 'Tax & Compliance',
     icon: Icons.receipt_long_rounded,
-    skills: ['Income Tax', 'GST', 'Tax Planning', 'Tax Filing', 'Corporate Tax', 'International Tax', 'Audit & Compliance'],
+    skills: [
+      'Income Tax',
+      'GST',
+      'Tax Planning',
+      'Tax Filing',
+      'Corporate Tax',
+      'International Tax',
+      'Audit & Compliance'
+    ],
   ),
   _SkillGroup(
     group: 'Investment',
     icon: Icons.trending_up_rounded,
-    skills: ['Equity', 'Mutual Funds', 'SIP', 'Portfolio Management', 'Stock Analysis', 'Bonds & Debentures', 'Derivatives'],
+    skills: [
+      'Equity',
+      'Mutual Funds',
+      'SIP',
+      'Portfolio Management',
+      'Stock Analysis',
+      'Bonds & Debentures',
+      'Derivatives'
+    ],
   ),
   _SkillGroup(
     group: 'Wealth & Retirement',
     icon: Icons.account_balance_rounded,
-    skills: ['Wealth Management', 'Retirement Planning', 'Pension', 'Estate Planning', 'Trust Management'],
+    skills: [
+      'Wealth Management',
+      'Retirement Planning',
+      'Pension',
+      'Estate Planning',
+      'Trust Management'
+    ],
   ),
   _SkillGroup(
     group: 'Insurance & Risk',
     icon: Icons.shield_rounded,
-    skills: ['Life Insurance', 'Health Insurance', 'Term Plans', 'Risk Assessment', 'ULIP'],
+    skills: [
+      'Life Insurance',
+      'Health Insurance',
+      'Term Plans',
+      'Risk Assessment',
+      'ULIP'
+    ],
   ),
   _SkillGroup(
     group: 'Real Estate & Loans',
     icon: Icons.home_rounded,
-    skills: ['Real Estate Investment', 'Home Loans', 'NRI Investment', 'Property Tax', 'Mortgage Planning'],
+    skills: [
+      'Real Estate Investment',
+      'Home Loans',
+      'NRI Investment',
+      'Property Tax',
+      'Mortgage Planning'
+    ],
   ),
   _SkillGroup(
     group: 'Business Finance',
     icon: Icons.business_center_rounded,
-    skills: ['Business Planning', 'Startup Finance', 'Cash Flow', 'Accounting', 'MSME Advisory', 'Valuation'],
+    skills: [
+      'Business Planning',
+      'Startup Finance',
+      'Cash Flow',
+      'Accounting',
+      'MSME Advisory',
+      'Valuation'
+    ],
   ),
 ];
 
@@ -170,14 +226,15 @@ class _AdminAdvisorsTabState extends State<AdminAdvisorsTab> {
   bool _loading = true;
   String _search = '';
   Timer? _pollTimer;
-  
+
   final Dio _dio = ApiClient().dio;
 
   @override
   void initState() {
     super.initState();
     _load();
-    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) => _load(silent: true));
+    _pollTimer =
+        Timer.periodic(const Duration(seconds: 30), (_) => _load(silent: true));
   }
 
   @override
@@ -241,8 +298,12 @@ class _AdminAdvisorsTabState extends State<AdminAdvisorsTab> {
           : (raw is List ? raw : const []);
       for (final item in list) {
         if (item is! Map) continue;
-        final status = (item['bookingStatus'] ?? item['status'] ?? '').toString().toUpperCase();
-        if (status == 'CONFIRMED' || status == 'PENDING' || status == 'RESCHEDULED') {
+        final status = (item['bookingStatus'] ?? item['status'] ?? '')
+            .toString()
+            .toUpperCase();
+        if (status == 'CONFIRMED' ||
+            status == 'PENDING' ||
+            status == 'RESCHEDULED') {
           return true;
         }
       }
@@ -276,7 +337,8 @@ class _AdminAdvisorsTabState extends State<AdminAdvisorsTab> {
       showDialog(
         context: context,
         builder: (_) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
           title: const Row(
             children: [
               Icon(Icons.block_rounded, color: Color(0xFFDC2626)),
@@ -305,10 +367,13 @@ class _AdminAdvisorsTabState extends State<AdminAdvisorsTab> {
         title: Text('Delete ${advisor.name}?'),
         content: const Text('This action cannot be undone.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFDC2626)),
             child: const Text('Delete'),
           ),
         ],
@@ -324,7 +389,9 @@ class _AdminAdvisorsTabState extends State<AdminAdvisorsTab> {
       _snack(context, '${advisor.name} deleted');
     } catch (error) {
       if (!mounted) return;
-      _snack(context, _apiError(error, fallback: 'Unable to delete consultant.'), error: true);
+      _snack(
+          context, _apiError(error, fallback: 'Unable to delete consultant.'),
+          error: true);
     }
   }
 
@@ -342,7 +409,8 @@ class _AdminAdvisorsTabState extends State<AdminAdvisorsTab> {
                   children: [
                     TextField(
                       onChanged: (v) => setState(() => _search = v),
-                      decoration: _inp('Search consultants...', icon: Icons.search_rounded),
+                      decoration: _inp('Search consultants...',
+                          icon: Icons.search_rounded),
                     ),
                     const SizedBox(height: 10),
                     SizedBox(
@@ -352,12 +420,15 @@ class _AdminAdvisorsTabState extends State<AdminAdvisorsTab> {
                         style: FilledButton.styleFrom(
                           backgroundColor: AppColors.primaryLight,
                           padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
                         ),
-                        icon: const Icon(Icons.add_rounded, color: Colors.white),
+                        icon:
+                            const Icon(Icons.add_rounded, color: Colors.white),
                         label: const Text(
                           'Add Consultant',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                          style: TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.w700),
                         ),
                       ),
                     ),
@@ -369,7 +440,8 @@ class _AdminAdvisorsTabState extends State<AdminAdvisorsTab> {
                   Expanded(
                     child: TextField(
                       onChanged: (v) => setState(() => _search = v),
-                      decoration: _inp('Search consultants...', icon: Icons.search_rounded),
+                      decoration: _inp('Search consultants...',
+                          icon: Icons.search_rounded),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -377,13 +449,16 @@ class _AdminAdvisorsTabState extends State<AdminAdvisorsTab> {
                     onPressed: _showAddAdvisor,
                     style: FilledButton.styleFrom(
                       backgroundColor: AppColors.primaryLight,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
                     ),
                     icon: const Icon(Icons.add_rounded, color: Colors.white),
                     label: const Text(
                       'Add Consultant',
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.w700),
                     ),
                   ),
                 ],
@@ -403,17 +478,21 @@ class _AdminAdvisorsTabState extends State<AdminAdvisorsTab> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.people_outline_rounded, size: 62, color: AppColors.textMuted),
+                          const Icon(Icons.people_outline_rounded,
+                              size: 62, color: AppColors.textMuted),
                           const SizedBox(height: 12),
                           Text('No consultants found', style: AppTextStyles.h3),
                           const SizedBox(height: 6),
-                          Text('Add your first consultant to get started.', style: AppTextStyles.caption),
+                          Text('Add your first consultant to get started.',
+                              style: AppTextStyles.caption),
                           const SizedBox(height: 18),
                           FilledButton.icon(
                             onPressed: _showAddAdvisor,
-                            style: FilledButton.styleFrom(backgroundColor: AppColors.primaryLight),
+                            style: FilledButton.styleFrom(
+                                backgroundColor: AppColors.primaryLight),
                             icon: const Icon(Icons.add, color: Colors.white),
-                            label: const Text('Add Consultant', style: TextStyle(color: Colors.white)),
+                            label: const Text('Add Consultant',
+                                style: TextStyle(color: Colors.white)),
                           ),
                         ],
                       ),
@@ -446,7 +525,8 @@ class _AdvisorCard extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onDelete;
 
-  const _AdvisorCard({required this.advisor, required this.onTap, required this.onDelete});
+  const _AdvisorCard(
+      {required this.advisor, required this.onTap, required this.onDelete});
 
   @override
   Widget build(BuildContext context) {
@@ -474,10 +554,14 @@ class _AdvisorCard extends StatelessWidget {
               CircleAvatar(
                 radius: 26,
                 backgroundColor: AppColors.primary.withValues(alpha: 0.1),
-                backgroundImage: advisor.photoUrl != null ? NetworkImage(advisor.photoUrl!) : null,
+                backgroundImage: advisor.photoUrl != null
+                    ? NetworkImage(advisor.photoUrl!)
+                    : null,
                 child: advisor.photoUrl == null
                     ? Text(
-                        advisor.name.isEmpty ? '?' : advisor.name[0].toUpperCase(),
+                        advisor.name.isEmpty
+                            ? '?'
+                            : advisor.name[0].toUpperCase(),
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w700,
@@ -494,11 +578,15 @@ class _AdvisorCard extends StatelessWidget {
                     Row(
                       children: [
                         Expanded(
-                          child: Text(advisor.name, style: AppTextStyles.h4, overflow: TextOverflow.ellipsis),
+                          child: Text(advisor.name,
+                              style: AppTextStyles.h4,
+                              overflow: TextOverflow.ellipsis),
                         ),
                         StatusChip(
                           status: advisor.isActive ? 'ACTIVE' : 'INACTIVE',
-                          color: advisor.isActive ? AppColors.success : AppColors.textMuted,
+                          color: advisor.isActive
+                              ? AppColors.success
+                              : AppColors.textMuted,
                         ),
                       ],
                     ),
@@ -513,9 +601,11 @@ class _AdvisorCard extends StatelessWidget {
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.star_rounded, size: 13, color: AppColors.gold),
+                              const Icon(Icons.star_rounded,
+                                  size: 13, color: AppColors.gold),
                               const SizedBox(width: 2),
-                              Text(advisor.rating!.toStringAsFixed(1), style: AppTextStyles.caption),
+                              Text(advisor.rating!.toStringAsFixed(1),
+                                  style: AppTextStyles.caption),
                             ],
                           ),
                         if (advisor.charges != null)
@@ -527,15 +617,18 @@ class _AdvisorCard extends StatelessWidget {
                             ),
                           ),
                         if ((advisor.shiftDisplay).isNotEmpty)
-                          Text(advisor.shiftDisplay, style: AppTextStyles.caption),
+                          Text(advisor.shiftDisplay,
+                              style: AppTextStyles.caption),
                       ],
                     ),
                   ],
                 ),
               ),
               PopupMenuButton<String>(
-                icon: const Icon(Icons.more_vert_rounded, color: AppColors.textMuted),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                icon: const Icon(Icons.more_vert_rounded,
+                    color: AppColors.textMuted),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
                 onSelected: (v) {
                   if (v == 'detail') onTap();
                   if (v == 'delete') onDelete();
@@ -543,11 +636,20 @@ class _AdvisorCard extends StatelessWidget {
                 itemBuilder: (_) => const [
                   PopupMenuItem(
                     value: 'detail',
-                    child: Row(children: [Icon(Icons.info_outline_rounded, size: 18), SizedBox(width: 10), Text('View Details')]),
+                    child: Row(children: [
+                      Icon(Icons.info_outline_rounded, size: 18),
+                      SizedBox(width: 10),
+                      Text('View Details')
+                    ]),
                   ),
                   PopupMenuItem(
                     value: 'delete',
-                    child: Row(children: [Icon(Icons.delete_outline_rounded, size: 18, color: AppColors.danger), SizedBox(width: 10), Text('Delete', style: TextStyle(color: AppColors.danger))]),
+                    child: Row(children: [
+                      Icon(Icons.delete_outline_rounded,
+                          size: 18, color: AppColors.danger),
+                      SizedBox(width: 10),
+                      Text('Delete', style: TextStyle(color: AppColors.danger))
+                    ]),
                   ),
                 ],
               ),
@@ -565,7 +667,8 @@ class AdvisorDetailScreen extends StatefulWidget {
   final ConsultantModel advisor;
   final VoidCallback onChanged;
 
-  const AdvisorDetailScreen({super.key, required this.advisor, required this.onChanged});
+  const AdvisorDetailScreen(
+      {super.key, required this.advisor, required this.onChanged});
 
   @override
   State<AdvisorDetailScreen> createState() => _AdvisorDetailScreenState();
@@ -602,11 +705,12 @@ class _AdvisorDetailScreenState extends State<AdvisorDetailScreen>
     if (years == null) return '';
 
     if (advisor.name.trim().toLowerCase() == 'divya') {
-      final minYears = years.floor() <= 0 ? 1 : years.floor();
+      final minYears = years.round() <= 0 ? 1 : years.round();
       return '$minYears+ years';
     }
 
-    return '${years.toStringAsFixed(1)} years';
+    final roundedYears = years.round() <= 0 ? 1 : years.round();
+    return '$roundedYears years';
   }
 
   @override
@@ -659,7 +763,8 @@ class _AdvisorDetailScreenState extends State<AdvisorDetailScreen>
                   width: double.infinity,
                   padding: const EdgeInsets.all(24),
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: [AppColors.primary, AppColors.primaryLight]),
+                    gradient: const LinearGradient(
+                        colors: [AppColors.primary, AppColors.primaryLight]),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Column(
@@ -667,26 +772,43 @@ class _AdvisorDetailScreenState extends State<AdvisorDetailScreen>
                       CircleAvatar(
                         radius: 44,
                         backgroundColor: Colors.white24,
-                        backgroundImage: advisor.photoUrl != null ? NetworkImage(advisor.photoUrl!) : null,
+                        backgroundImage: advisor.photoUrl != null
+                            ? NetworkImage(advisor.photoUrl!)
+                            : null,
                         child: advisor.photoUrl == null
                             ? Text(
-                                advisor.name.isEmpty ? '?' : advisor.name[0].toUpperCase(),
-                                style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w800, color: Colors.white),
+                                advisor.name.isEmpty
+                                    ? '?'
+                                    : advisor.name[0].toUpperCase(),
+                                style: const TextStyle(
+                                    fontSize: 36,
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white),
                               )
                             : null,
                       ),
                       const SizedBox(height: 12),
-                      Text(advisor.name, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800), textAlign: TextAlign.center),
+                      Text(advisor.name,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800),
+                          textAlign: TextAlign.center),
                       if ((advisor.designation ?? '').isNotEmpty)
-                        Text(advisor.designation!, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                        Text(advisor.designation!,
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 13)),
                       if (advisor.rating != null) ...[
                         const SizedBox(height: 8),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const Icon(Icons.star_rounded, color: AppColors.gold, size: 16),
-                            Text(' ${advisor.rating!.toStringAsFixed(1)} · ${advisor.reviewCount ?? 0} reviews',
-                                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                            const Icon(Icons.star_rounded,
+                                color: AppColors.gold, size: 16),
+                            Text(
+                                ' ${advisor.rating!.toStringAsFixed(1)} · ${advisor.reviewCount ?? 0} reviews',
+                                style: const TextStyle(
+                                    color: Colors.white70, fontSize: 12)),
                           ],
                         ),
                       ],
@@ -697,21 +819,24 @@ class _AdvisorDetailScreenState extends State<AdvisorDetailScreen>
                 _infoCard([
                   _infoRow(Icons.email_outlined, 'Email', advisor.email),
                   if (advisor.yearsOfExperience != null)
-                    _infoRow(
-                        Icons.workspace_premium_outlined,
-                        'Experience',
+                    _infoRow(Icons.workspace_premium_outlined, 'Experience',
                         _experienceLabel(advisor)),
                   if (advisor.slotsDuration != null)
-                    _infoRow(Icons.timer_outlined, 'Slot Duration', '${advisor.slotsDuration} mins'),
+                    _infoRow(Icons.timer_outlined, 'Slot Duration',
+                        '${advisor.slotsDuration} mins'),
                   if (advisor.charges != null)
-                    _infoRow(Icons.currency_rupee_rounded, 'Session Fee', 'Rs ${_normalizeSessionFee(advisor.charges).toStringAsFixed(0)}'),
+                    _infoRow(Icons.currency_rupee_rounded, 'Session Fee',
+                        'Rs ${_normalizeSessionFee(advisor.charges).toStringAsFixed(0)}'),
                   if (advisor.shiftDisplay.isNotEmpty)
-                    _infoRow(Icons.access_time_rounded, 'Working Hours', advisor.shiftDisplay),
+                    _infoRow(Icons.access_time_rounded, 'Working Hours',
+                        advisor.shiftDisplay),
                   _infoRow(
                     Icons.verified_outlined,
                     'Status',
                     advisor.isActive ? 'Active' : 'Inactive',
-                    valueColor: advisor.isActive ? AppColors.success : AppColors.textMuted,
+                    valueColor: advisor.isActive
+                        ? AppColors.success
+                        : AppColors.textMuted,
                   ),
                 ]),
                 if (advisor.skills.isNotEmpty) ...[
@@ -734,12 +859,18 @@ class _AdvisorDetailScreenState extends State<AdvisorDetailScreen>
                           runSpacing: 8,
                           children: advisor.skills
                               .map((s) => Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 5),
                                     decoration: BoxDecoration(
-                                      color: AppColors.primaryLight.withValues(alpha: 0.1),
+                                      color: AppColors.primaryLight
+                                          .withValues(alpha: 0.1),
                                       borderRadius: BorderRadius.circular(20),
                                     ),
-                                    child: Text(s, style: const TextStyle(fontSize: 12, color: AppColors.primaryLight, fontWeight: FontWeight.w600)),
+                                    child: Text(s,
+                                        style: const TextStyle(
+                                            fontSize: 12,
+                                            color: AppColors.primaryLight,
+                                            fontWeight: FontWeight.w600)),
                                   ))
                               .toList(),
                         ),
@@ -759,20 +890,29 @@ class _AdvisorDetailScreenState extends State<AdvisorDetailScreen>
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.schedule, size: 48, color: AppColors.textMuted),
+                          const Icon(Icons.schedule,
+                              size: 48, color: AppColors.textMuted),
                           const SizedBox(height: 12),
                           Text('No timeslots', style: AppTextStyles.h3),
-                          Text('This consultant has no timeslots configured', style: AppTextStyles.caption),
+                          Text('This consultant has no timeslots configured',
+                              style: AppTextStyles.caption),
                         ],
                       ),
                     )
                   : LayoutBuilder(
                       builder: (context, constraints) {
                         final width = constraints.maxWidth;
-                        final columns = width >= 1100 ? 5 : width >= 840 ? 4 : width >= 620 ? 3 : 2;
+                        final columns = width >= 1100
+                            ? 5
+                            : width >= 840
+                                ? 4
+                                : width >= 620
+                                    ? 3
+                                    : 2;
                         return GridView.builder(
                           padding: const EdgeInsets.all(12),
-                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
                             crossAxisCount: columns,
                             crossAxisSpacing: 8,
                             mainAxisSpacing: 8,
@@ -790,15 +930,30 @@ class _AdvisorDetailScreenState extends State<AdvisorDetailScreen>
                               decoration: BoxDecoration(
                                 color: color.withValues(alpha: 0.08),
                                 borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: color.withValues(alpha: 0.35)),
+                                border: Border.all(
+                                    color: color.withValues(alpha: 0.35)),
                               ),
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+                                  Container(
+                                      width: 7,
+                                      height: 7,
+                                      decoration: BoxDecoration(
+                                          color: color,
+                                          shape: BoxShape.circle)),
                                   const SizedBox(height: 4),
-                                  Text(slot.timeRange, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color), textAlign: TextAlign.center),
-                                  Text(slot.slotDate, style: TextStyle(fontSize: 9, color: color.withValues(alpha: 0.75))),
+                                  Text(slot.timeRange,
+                                      style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                          color: color),
+                                      textAlign: TextAlign.center),
+                                  Text(slot.slotDate,
+                                      style: TextStyle(
+                                          fontSize: 9,
+                                          color:
+                                              color.withValues(alpha: 0.75))),
                                 ],
                               ),
                             );
@@ -821,7 +976,9 @@ class _AdvisorDetailScreenState extends State<AdvisorDetailScreen>
         child: Column(children: rows),
       );
 
-  Widget _infoRow(IconData icon, String label, String value, {Color? valueColor}) => Padding(
+  Widget _infoRow(IconData icon, String label, String value,
+          {Color? valueColor}) =>
+      Padding(
         padding: const EdgeInsets.symmetric(vertical: 7),
         child: Row(
           children: [
@@ -832,7 +989,9 @@ class _AdvisorDetailScreenState extends State<AdvisorDetailScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(label, style: AppTextStyles.caption),
-                  Text(value, style: AppTextStyles.label.copyWith(color: valueColor ?? AppColors.textPrimary)),
+                  Text(value,
+                      style: AppTextStyles.label.copyWith(
+                          color: valueColor ?? AppColors.textPrimary)),
                 ],
               ),
             ),
@@ -897,7 +1056,9 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
       _desigCtrl.text = a.designation ?? '';
       _chargesCtrl.text = _normalizeSessionFee(a.charges).toStringAsFixed(0);
       _descCtrl.text = a.description ?? '';
-      _experienceCtrl.text = a.yearsOfExperience?.toStringAsFixed(1) ?? '';
+      _experienceCtrl.text = a.yearsOfExperience == null
+          ? ''
+          : a.yearsOfExperience!.round().toString();
       _slotDuration = a.slotsDuration ?? 60;
       _selectedSkills.addAll(a.skills);
       if (a.shiftStartTime != null) {
@@ -927,12 +1088,17 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
     super.dispose();
   }
 
-  String _canonical(String s) => s.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+  String _canonical(String s) =>
+      s.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
 
   String _titleCase(String s) {
     final trimmed = s.trim();
     if (trimmed.isEmpty) return '';
-    return trimmed.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).map((p) => '${p[0].toUpperCase()}${p.substring(1)}').join(' ');
+    return trimmed
+        .split(RegExp(r'\s+'))
+        .where((p) => p.isNotEmpty)
+        .map((p) => '${p[0].toUpperCase()}${p.substring(1)}')
+        .join(' ');
   }
 
   String _fmtTime(TimeOfDay t) =>
@@ -944,7 +1110,8 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
 
   void _toggleSkill(String skill) {
     final normalized = _titleCase(skill);
-    final existingIndex = _selectedSkills.indexWhere((s) => _canonical(s) == _canonical(normalized));
+    final existingIndex = _selectedSkills
+        .indexWhere((s) => _canonical(s) == _canonical(normalized));
     setState(() {
       if (existingIndex >= 0) {
         _selectedSkills.removeAt(existingIndex);
@@ -958,11 +1125,13 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
   void _addCustomSkill() {
     final raw = _customSkillCtrl.text.trim();
     if (raw.isEmpty) return;
-    final parts = raw.split(',').map(_titleCase).where((s) => s.isNotEmpty).toList();
+    final parts =
+        raw.split(',').map(_titleCase).where((s) => s.isNotEmpty).toList();
     if (parts.isEmpty) return;
     setState(() {
       for (final item in parts) {
-        final exists = _selectedSkills.any((s) => _canonical(s) == _canonical(item));
+        final exists =
+            _selectedSkills.any((s) => _canonical(s) == _canonical(item));
         if (!exists) _selectedSkills.add(item);
       }
       _errorText = null;
@@ -998,7 +1167,8 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
     final startMinutes = (_shiftStart.hour * 60) + _shiftStart.minute;
     final endMinutes = (_shiftEnd.hour * 60) + _shiftEnd.minute;
     if (endMinutes <= startMinutes) {
-      setState(() => _errorText = 'Availability end time must be after the start time.');
+      setState(() =>
+          _errorText = 'Availability end time must be after the start time.');
       return;
     }
 
@@ -1038,13 +1208,18 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
 
     try {
       if (widget.advisor != null) {
-        await _dio.put('/api/consultants/${widget.advisor!.id}', data: formData);
+        await _dio.put('/api/consultants/${widget.advisor!.id}',
+            data: formData);
       } else {
         await _dio.post('/api/consultants', data: formData);
       }
 
       if (!mounted) return;
-      _snack(context, widget.advisor != null ? 'Consultant updated' : 'Consultant added successfully');
+      _snack(
+          context,
+          widget.advisor != null
+              ? 'Consultant updated'
+              : 'Consultant added successfully');
       widget.onSaved();
     } catch (error) {
       if (!mounted) return;
@@ -1081,7 +1256,9 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                 children: [
                   Expanded(
                     child: SheetHandle(
-                      title: widget.advisor != null ? 'Edit Consultant' : 'Add New Consultant',
+                      title: widget.advisor != null
+                          ? 'Edit Consultant'
+                          : 'Add New Consultant',
                     ),
                   ),
                   IconButton(
@@ -1094,10 +1271,12 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
               // Full Name
               TextFormField(
                 controller: _nameCtrl,
-                decoration: _inp('Full Name *', icon: Icons.person_outline_rounded),
+                decoration:
+                    _inp('Full Name *', icon: Icons.person_outline_rounded),
                 validator: (v) {
                   if ((v ?? '').trim().isEmpty) return 'Full name is required';
-                  if ((v ?? '').trim().length < 2) return 'Enter consultant\'s full name';
+                  if ((v ?? '').trim().length < 2)
+                    return 'Enter consultant\'s full name';
                   return null;
                 },
               ),
@@ -1107,11 +1286,13 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
               TextFormField(
                 controller: _emailCtrl,
                 keyboardType: TextInputType.emailAddress,
-                decoration: _inp('Email (Login ID) *', icon: Icons.email_outlined),
+                decoration:
+                    _inp('Email (Login ID) *', icon: Icons.email_outlined),
                 validator: (v) {
                   final value = (v ?? '').trim();
                   if (value.isEmpty) return 'Email is required';
-                  if (!value.contains('@') || !value.contains('.')) return 'Enter a valid email address';
+                  if (!value.contains('@') || !value.contains('.'))
+                    return 'Enter a valid email address';
                   return null;
                 },
               ),
@@ -1124,9 +1305,11 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                     flex: 2,
                     child: TextFormField(
                       controller: _desigCtrl,
-                      decoration: _inp('Designation *', icon: Icons.work_outline_rounded),
+                      decoration: _inp('Designation *',
+                          icon: Icons.work_outline_rounded),
                       validator: (v) {
-                        if ((v ?? '').trim().isEmpty) return 'Designation required';
+                        if ((v ?? '').trim().isEmpty)
+                          return 'Designation required';
                         return null;
                       },
                     ),
@@ -1136,8 +1319,10 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                     flex: 1,
                     child: TextFormField(
                       controller: _experienceCtrl,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      decoration: _inp('Exp. (yrs) *', icon: Icons.workspace_premium_outlined),
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: _inp('Exp. (yrs) *',
+                          icon: Icons.workspace_premium_outlined),
                       validator: (v) {
                         final value = (v ?? '').trim();
                         if (value.isEmpty) return 'Required';
@@ -1156,25 +1341,33 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
-                children: _designationExamples.map((example) => ActionChip(
-                  label: Text(example, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
-                  backgroundColor: AppColors.surfaceVariant,
-                  side: const BorderSide(color: AppColors.border),
-                  onPressed: () => setState(() => _desigCtrl.text = example),
-                )).toList(),
+                children: _designationExamples
+                    .map((example) => ActionChip(
+                          label: Text(example,
+                              style: const TextStyle(
+                                  fontSize: 11, fontWeight: FontWeight.w600)),
+                          backgroundColor: AppColors.surfaceVariant,
+                          side: const BorderSide(color: AppColors.border),
+                          onPressed: () =>
+                              setState(() => _desigCtrl.text = example),
+                        ))
+                    .toList(),
               ),
               const SizedBox(height: 10),
 
               // Session Fee
               TextFormField(
                 controller: _chargesCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: _inp('Base Charge per Person (Rs) *', icon: Icons.currency_rupee_rounded),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: _inp('Base Charge per Person (Rs) *',
+                    icon: Icons.currency_rupee_rounded),
                 validator: (v) {
                   final value = (v ?? '').trim();
                   if (value.isEmpty) return 'Session fee is required';
                   final parsed = double.tryParse(value);
-                  if (parsed == null || parsed <= 0) return 'Enter a valid charge amount';
+                  if (parsed == null || parsed <= 0)
+                    return 'Enter a valid charge amount';
                   if (parsed > 100000) return 'Cannot exceed ₹1,00,000';
                   return null;
                 },
@@ -1188,7 +1381,8 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                 decoration: _inp(
                   'Profile Description (optional)',
                   icon: Icons.description_outlined,
-                  hint: 'Short consultant intro shown on profile & booking screens',
+                  hint:
+                      'Short consultant intro shown on profile & booking screens',
                 ),
               ),
               const SizedBox(height: 14),
@@ -1211,7 +1405,9 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                         child: Column(
                           children: [
                             Text('Start', style: AppTextStyles.caption),
-                            Text(_fmtTime(_shiftStart), style: AppTextStyles.label.copyWith(color: AppColors.primaryLight)),
+                            Text(_fmtTime(_shiftStart),
+                                style: AppTextStyles.label
+                                    .copyWith(color: AppColors.primaryLight)),
                           ],
                         ),
                       ),
@@ -1219,7 +1415,8 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                   ),
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 10),
-                    child: Text('to', style: TextStyle(color: AppColors.textMuted)),
+                    child: Text('to',
+                        style: TextStyle(color: AppColors.textMuted)),
                   ),
                   Expanded(
                     child: GestureDetector(
@@ -1234,7 +1431,9 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                         child: Column(
                           children: [
                             Text('End', style: AppTextStyles.caption),
-                            Text(_fmtTime(_shiftEnd), style: AppTextStyles.label.copyWith(color: AppColors.primaryLight)),
+                            Text(_fmtTime(_shiftEnd),
+                                style: AppTextStyles.label
+                                    .copyWith(color: AppColors.primaryLight)),
                           ],
                         ),
                       ),
@@ -1250,7 +1449,11 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
               Row(
                 children: [60, 120, 180].map((mins) {
                   final active = _slotDuration == mins;
-                  final label = mins == 60 ? '1 hr' : mins == 120 ? '2 hrs' : '3 hrs';
+                  final label = mins == 60
+                      ? '1 hr'
+                      : mins == 120
+                          ? '2 hrs'
+                          : '3 hrs';
                   return Expanded(
                     child: Padding(
                       padding: const EdgeInsets.only(right: 8),
@@ -1260,10 +1463,14 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                           duration: const Duration(milliseconds: 150),
                           padding: const EdgeInsets.symmetric(vertical: 11),
                           decoration: BoxDecoration(
-                            color: active ? AppColors.primaryLight.withValues(alpha: 0.1) : AppColors.surfaceVariant,
+                            color: active
+                                ? AppColors.primaryLight.withValues(alpha: 0.1)
+                                : AppColors.surfaceVariant,
                             borderRadius: BorderRadius.circular(10),
                             border: Border.all(
-                              color: active ? AppColors.primaryLight : AppColors.border,
+                              color: active
+                                  ? AppColors.primaryLight
+                                  : AppColors.border,
                               width: active ? 2 : 1,
                             ),
                           ),
@@ -1273,7 +1480,9 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                             style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w700,
-                              color: active ? AppColors.primaryLight : AppColors.textSecondary,
+                              color: active
+                                  ? AppColors.primaryLight
+                                  : AppColors.textSecondary,
                             ),
                           ),
                         ),
@@ -1284,7 +1493,8 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
               ),
               Text(
                 'Used to generate bookable slots for this consultant.',
-                style: AppTextStyles.caption.copyWith(color: AppColors.textMuted),
+                style:
+                    AppTextStyles.caption.copyWith(color: AppColors.textMuted),
               ),
               const SizedBox(height: 16),
 
@@ -1302,13 +1512,20 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
-                  children: _selectedSkills.map((skill) => Chip(
-                    label: Text(skill, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white)),
-                    backgroundColor: const Color(0xFF0F766E),
-                    side: BorderSide.none,
-                    deleteIcon: const Icon(Icons.close_rounded, size: 16, color: Colors.white70),
-                    onDeleted: () => _toggleSkill(skill),
-                  )).toList(),
+                  children: _selectedSkills
+                      .map((skill) => Chip(
+                            label: Text(skill,
+                                style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white)),
+                            backgroundColor: const Color(0xFF0F766E),
+                            side: BorderSide.none,
+                            deleteIcon: const Icon(Icons.close_rounded,
+                                size: 16, color: Colors.white70),
+                            onDeleted: () => _toggleSkill(skill),
+                          ))
+                      .toList(),
                 ),
                 const SizedBox(height: 10),
               ],
@@ -1332,15 +1549,23 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                             padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
                             decoration: BoxDecoration(
                               color: AppColors.surfaceVariant,
-                              border: Border(bottom: BorderSide(color: AppColors.border.withValues(alpha: 0.5))),
+                              border: Border(
+                                  bottom: BorderSide(
+                                      color: AppColors.border
+                                          .withValues(alpha: 0.5))),
                             ),
                             child: Row(
                               children: [
-                                Icon(group.icon, size: 14, color: AppColors.textSecondary),
+                                Icon(group.icon,
+                                    size: 14, color: AppColors.textSecondary),
                                 const SizedBox(width: 6),
                                 Text(
                                   group.group.toUpperCase(),
-                                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.textSecondary, letterSpacing: 0.5),
+                                  style: const TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.textSecondary,
+                                      letterSpacing: 0.5),
                                 ),
                               ],
                             ),
@@ -1352,24 +1577,31 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                               spacing: 7,
                               runSpacing: 7,
                               children: group.skills.map((skill) {
-                                final isSelected = _selectedSkills.any((s) => _canonical(s) == _canonical(skill));
+                                final isSelected = _selectedSkills.any(
+                                    (s) => _canonical(s) == _canonical(skill));
                                 return GestureDetector(
                                   onTap: () => _toggleSkill(skill),
                                   child: AnimatedContainer(
                                     duration: const Duration(milliseconds: 150),
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 5),
                                     decoration: BoxDecoration(
-                                      color: isSelected ? const Color(0xFF0F766E) : Colors.white,
+                                      color: isSelected
+                                          ? const Color(0xFF0F766E)
+                                          : Colors.white,
                                       borderRadius: BorderRadius.circular(20),
                                       border: Border.all(
-                                        color: isSelected ? const Color(0xFF0F766E) : AppColors.border,
+                                        color: isSelected
+                                            ? const Color(0xFF0F766E)
+                                            : AppColors.border,
                                       ),
                                     ),
                                     child: Row(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         if (isSelected) ...[
-                                          const Icon(Icons.check_rounded, size: 12, color: Colors.white),
+                                          const Icon(Icons.check_rounded,
+                                              size: 12, color: Colors.white),
                                           const SizedBox(width: 4),
                                         ],
                                         Text(
@@ -1377,7 +1609,9 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                                           style: TextStyle(
                                             fontSize: 12,
                                             fontWeight: FontWeight.w600,
-                                            color: isSelected ? Colors.white : AppColors.textSecondary,
+                                            color: isSelected
+                                                ? Colors.white
+                                                : AppColors.textSecondary,
                                           ),
                                         ),
                                       ],
@@ -1401,14 +1635,16 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                   Expanded(
                     child: TextField(
                       controller: _customSkillCtrl,
-                      decoration: _inp('Add custom skill (comma-separated)', icon: Icons.add_task_outlined),
+                      decoration: _inp('Add custom skill (comma-separated)',
+                          icon: Icons.add_task_outlined),
                       onSubmitted: (_) => _addCustomSkill(),
                     ),
                   ),
                   const SizedBox(width: 10),
                   FilledButton(
                     onPressed: _addCustomSkill,
-                    style: FilledButton.styleFrom(backgroundColor: const Color(0xFF0F766E)),
+                    style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF0F766E)),
                     child: const Text('+ Add'),
                   ),
                 ],
@@ -1423,11 +1659,15 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                   decoration: BoxDecoration(
                     color: AppColors.danger.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppColors.danger.withValues(alpha: 0.2)),
+                    border: Border.all(
+                        color: AppColors.danger.withValues(alpha: 0.2)),
                   ),
                   child: Text(
                     _errorText!,
-                    style: const TextStyle(color: AppColors.danger, fontSize: 12, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                        color: AppColors.danger,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600),
                   ),
                 ),
               ],
@@ -1442,17 +1682,22 @@ class _AdvisorFormSheetState extends State<_AdvisorFormSheet> {
                   onPressed: _saving ? null : _submit,
                   style: FilledButton.styleFrom(
                     backgroundColor: AppColors.primaryLight,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
                   ),
                   child: _saving
                       ? const SizedBox(
                           width: 20,
                           height: 20,
-                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                          child: CircularProgressIndicator(
+                              color: Colors.white, strokeWidth: 2),
                         )
                       : Text(
-                          widget.advisor != null ? 'Save Changes' : 'Add Consultant',
-                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                          widget.advisor != null
+                              ? 'Save Changes'
+                              : 'Add Consultant',
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w700, fontSize: 15),
                         ),
                 ),
               ),
@@ -1481,15 +1726,30 @@ class _AdvisorSkeletonCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Container(width: 52, height: 52, decoration: BoxDecoration(color: AppColors.surfaceVariant, borderRadius: BorderRadius.circular(26))),
+          Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                  color: AppColors.surfaceVariant,
+                  borderRadius: BorderRadius.circular(26))),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(height: 12, width: 150, decoration: BoxDecoration(color: AppColors.surfaceVariant, borderRadius: BorderRadius.circular(6))),
+                Container(
+                    height: 12,
+                    width: 150,
+                    decoration: BoxDecoration(
+                        color: AppColors.surfaceVariant,
+                        borderRadius: BorderRadius.circular(6))),
                 const SizedBox(height: 8),
-                Container(height: 10, width: 110, decoration: BoxDecoration(color: AppColors.surfaceVariant, borderRadius: BorderRadius.circular(6))),
+                Container(
+                    height: 10,
+                    width: 110,
+                    decoration: BoxDecoration(
+                        color: AppColors.surfaceVariant,
+                        borderRadius: BorderRadius.circular(6))),
               ],
             ),
           ),
@@ -1515,7 +1775,9 @@ class StatusChip extends StatelessWidget {
         color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Text(status, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
+      child: Text(status,
+          style: TextStyle(
+              color: color, fontSize: 10, fontWeight: FontWeight.bold)),
     );
   }
 }
@@ -1535,10 +1797,13 @@ class SheetHandle extends StatelessWidget {
             margin: const EdgeInsets.only(bottom: 16),
             width: 40,
             height: 4,
-            decoration: BoxDecoration(color: Colors.grey.withValues(alpha: 0.3), borderRadius: BorderRadius.circular(2)),
+            decoration: BoxDecoration(
+                color: Colors.grey.withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(2)),
           ),
         ),
-        Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        Text(title,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         const SizedBox(height: 6),
       ],
     );

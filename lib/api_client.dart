@@ -6,7 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class ApiClient {
   static const String baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://52.55.178.31:8081',
+    defaultValue: 'http://35.154.251.25:8080',
   );
 
   static final ApiClient _instance = ApiClient._internal();

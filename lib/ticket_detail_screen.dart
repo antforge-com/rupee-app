@@ -23,7 +23,6 @@
 
 import 'dart:io';
 
-import 'package:finadvise/api_client.dart';
 import 'package:finadvise/models/models.dart';
 import 'package:finadvise/services/admin_service.dart';
 import 'package:finadvise/services/ticket_service.dart';
@@ -35,35 +34,36 @@ import 'package:share_plus/share_plus.dart';
 
 // ─── Timestamp helpers ────────────────────────────────────────────────────────
 
-String _utc(String s) => (s.endsWith('Z') || s.contains('+')) ? s : '${s}Z';
+DateTime? _parseServerDateTime(dynamic raw) {
+  final value = raw?.toString().trim() ?? '';
+  if (value.isEmpty) return null;
+  final hasTimezone =
+      value.endsWith('Z') || RegExp(r'[+-]\d{2}:\d{2}$').hasMatch(value);
+  final parsed = DateTime.tryParse(hasTimezone ? value : '${value}Z');
+  if (parsed != null) return parsed.toLocal();
+  return DateTime.tryParse(value)?.toLocal();
+}
 
 String _fmtDate(dynamic d) {
-  if (d == null || '$d'.isEmpty) return '--';
-  try {
-    return DateFormat('dd MMM yyyy')
-        .format(DateTime.parse(_utc('$d')).toLocal());
-  } catch (_) {
-    return '$d'.length >= 10 ? '$d'.substring(0, 10) : '$d';
-  }
+  final parsed = _parseServerDateTime(d);
+  if (parsed != null) return DateFormat('dd MMM yyyy').format(parsed);
+  final raw = d?.toString().trim() ?? '';
+  if (raw.isEmpty) return '--';
+  return raw.length >= 10 ? raw.substring(0, 10) : raw;
 }
 
 String _fmtTime(dynamic d) {
-  if (d == null || '$d'.isEmpty) return '';
-  try {
-    return DateFormat('h:mm a').format(DateTime.parse(_utc('$d')).toLocal());
-  } catch (_) {
-    return '';
-  }
+  final parsed = _parseServerDateTime(d);
+  if (parsed == null) return '';
+  return '${DateFormat('hh:mm a').format(parsed)} IST';
 }
 
 String _fmtDT(dynamic d) {
-  if (d == null || '$d'.isEmpty) return '--';
-  try {
-    return DateFormat('dd MMM yyyy, h:mm a')
-        .format(DateTime.parse(_utc('$d')).toLocal());
-  } catch (_) {
-    return '$d';
+  final parsed = _parseServerDateTime(d);
+  if (parsed != null) {
+    return '${DateFormat('dd MMM yyyy, hh:mm a').format(parsed)} IST';
   }
+  return d?.toString() ?? '--';
 }
 
 // ─── SLA ─────────────────────────────────────────────────────────────────────
@@ -90,7 +90,9 @@ _Sla? _calcSla(
   if (createdAt == null || createdAt.isEmpty) return null;
   try {
     final h = _slaMap[priority.toUpperCase()] ?? 24;
-    final deadline = DateTime.parse(_utc(createdAt)).add(Duration(hours: h));
+    final created = _parseServerDateTime(createdAt);
+    if (created == null) return null;
+    final deadline = created.add(Duration(hours: h));
     final minsLeft = deadline.difference(DateTime.now()).inMinutes;
     if (minsLeft >= 0) return null;
     return _Sla(true, -minsLeft, 'SLA BREACHED – $priority – ${h}h window');
@@ -229,6 +231,8 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
   final _replyCtrl = TextEditingController();
   final _noteCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
+  final _replyFocusNode = FocusNode();
+  final _noteFocusNode = FocusNode();
 
   late Ticket _t;
   String _status = '';
@@ -265,6 +269,8 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
     _replyCtrl.dispose();
     _noteCtrl.dispose();
     _scrollCtrl.dispose();
+    _replyFocusNode.dispose();
+    _noteFocusNode.dispose();
     super.dispose();
   }
 
@@ -603,7 +609,8 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
       final fileToken = _displayId.replaceAll('/', '_');
       final file = File('${dir.path}/ticket_${fileToken}_${_t.id}.txt');
       await file.writeAsString(txt);
-      await Share.shareXFiles([XFile(file.path)], subject: 'Ticket $_displayId');
+      await Share.shareXFiles([XFile(file.path)],
+          subject: 'Ticket $_displayId');
     } catch (_) {
       if (mounted) _toast(context, 'Export failed', ok: false);
     }
@@ -669,6 +676,7 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
       onTap: () => setState(() => _showPrioDrop = false),
       child: Scaffold(
         backgroundColor: const Color(0xFFF8FAFC),
+        resizeToAvoidBottomInset: true,
         body: Column(children: [
           _buildHeader(),
           if (sla != null && sla.breached) _buildSlaStrip(sla),
@@ -999,24 +1007,30 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
   // CONVERSATION TAB
   // ════════════════════════════════════════════════════════════════════════
 
-  Widget _buildConvTab() => ListView(
-        controller: _scrollCtrl,
-        padding: EdgeInsets.zero,
+  Widget _buildConvTab() => Column(
         children: [
-          _buildStepper(),
-          _div(),
-          _buildStatusSection(),
-          _div(),
-          _buildPrioritySection(),
-          _div(),
-          _buildDescSection(),
-          _div(),
-          _buildThread(),
+          Expanded(
+            child: ListView(
+              controller: _scrollCtrl,
+              padding: EdgeInsets.zero,
+              children: [
+                _buildStepper(),
+                _div(),
+                _buildStatusSection(),
+                _div(),
+                _buildPrioritySection(),
+                _div(),
+                _buildDescSection(),
+                _div(),
+                _buildThread(),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
           _buildReplyBox(),
           _buildNotesBox(),
           _buildEscalateBox(),
           _buildDangerBox(),
-          const SizedBox(height: 20),
         ],
       );
 
@@ -1193,6 +1207,7 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
         : isAgent
             ? 'Agent'
             : _userDisplayName;
+    final timeLabel = _fmtTime(c.createdAt);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -1237,9 +1252,10 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
                               ? const Color(0xFF0F766E)
                               : const Color(0xFFD97706))),
                 ),
-                Text(' · ${_fmtTime(c.createdAt)}',
-                    style:
-                        const TextStyle(fontSize: 9, color: Color(0xFF94A3B8))),
+                if (timeLabel.isNotEmpty)
+                  Text(' · $timeLabel',
+                      style: const TextStyle(
+                          fontSize: 9, color: Color(0xFF94A3B8))),
               ]),
               const SizedBox(height: 3),
               Container(
@@ -1297,7 +1313,8 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
         .replaceAll(RegExp(r'<div[^>]*>', caseSensitive: false), '\n')
         .replaceAll(RegExp(r'</div>', caseSensitive: false), '\n')
         .replaceAll(RegExp(r'<li[^>]*>', caseSensitive: false), '\n• ')
-        .replaceAll(RegExp(r'<[^>]+>', caseSensitive: false), '') // strip remaining tags
+        .replaceAll(RegExp(r'<[^>]+>', caseSensitive: false),
+            '') // strip remaining tags
         .replaceAll('&amp;', '&')
         .replaceAll('&lt;', '<')
         .replaceAll('&gt;', '>')
@@ -1307,7 +1324,9 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
 
     // Collapse 3+ consecutive newlines into 2 and trim
     text = text.replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
-    return text.isEmpty ? html : text; // fallback to original if stripping yields empty
+    return text.isEmpty
+        ? html
+        : text; // fallback to original if stripping yields empty
   }
 
   Widget _descriptionBubble(String description) {
@@ -1338,8 +1357,8 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
                           color: Color(0xFF475569))),
                   const SizedBox(width: 5),
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 5, vertical: 1),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                     decoration: BoxDecoration(
                       color: const Color(0xFFFFF7ED),
                       borderRadius: BorderRadius.circular(3),
@@ -1351,15 +1370,14 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
                             color: Color(0xFFD97706))),
                   ),
                   const Text(' · Original Issue',
-                      style: TextStyle(
-                          fontSize: 9, color: Color(0xFF94A3B8))),
+                      style: TextStyle(fontSize: 9, color: Color(0xFF94A3B8))),
                 ]),
                 const SizedBox(height: 3),
                 Container(
                   constraints: BoxConstraints(
                       maxWidth: MediaQuery.of(context).size.width * 0.76),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 13, vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
                   decoration: BoxDecoration(
                     color: const Color(0xFFFFF7ED),
                     border: Border.all(color: const Color(0xFFFED7AA)),
@@ -1372,9 +1390,7 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
                   ),
                   child: Text(cleanDesc,
                       style: const TextStyle(
-                          fontSize: 13,
-                          height: 1.6,
-                          color: Color(0xFF92400E))),
+                          fontSize: 13, height: 1.6, color: Color(0xFF92400E))),
                 ),
               ],
             ),
@@ -1399,8 +1415,14 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
   // ── Reply to Customer ─────────────────────────────────────────────────────
 
   Widget _buildReplyBox() => Container(
-        margin: const EdgeInsets.only(top: 16),
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+        padding: EdgeInsets.fromLTRB(
+            16,
+            12,
+            16,
+            (MediaQuery.of(context).viewInsets.bottom > 0
+                    ? MediaQuery.of(context).viewInsets.bottom
+                    : MediaQuery.of(context).padding.bottom) +
+                12),
         color: const Color(0xFFF8FAFC),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('REPLY TO CUSTOMER',
@@ -1414,12 +1436,23 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
             Expanded(
                 child: TextField(
               controller: _replyCtrl,
+              focusNode: _replyFocusNode,
               minLines: 2,
               maxLines: 4,
               onChanged: (_) => setState(() {}),
+              onTap: () {
+                Future.delayed(const Duration(milliseconds: 300), () {
+                  if (_scrollCtrl.hasClients) {
+                    _scrollCtrl.animateTo(
+                      _scrollCtrl.position.maxScrollExtent,
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeOut,
+                    );
+                  }
+                });
+              },
               decoration: const InputDecoration(
-                hintText:
-                    'Type a reply… (Enter to send, customer will be notified)',
+                hintText: 'Type your message...',
                 hintStyle: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
                 filled: true,
                 fillColor: Colors.white,
@@ -1460,9 +1493,7 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
                           height: 14,
                           child: CircularProgressIndicator(
                               strokeWidth: 2, color: Colors.white))
-                      : const Text('Send',
-                          style: TextStyle(
-                              fontWeight: FontWeight.w700, fontSize: 13)),
+                      : const Icon(Icons.send_rounded, size: 18),
                 )),
           ]),
         ]),
@@ -1496,7 +1527,6 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
             const SizedBox(height: 8),
             const LinearProgressIndicator(color: Color(0xFFD97706)),
           ] else
-            // TicketNote fields from actual models.dart: .content, .authorName, .createdAt
             ...List.generate(
                 _notes.length,
                 (i) => Container(
@@ -1527,11 +1557,12 @@ class _TicketDetailScreenState extends State<TicketDetailScreen>
             Expanded(
                 child: TextField(
               controller: _noteCtrl,
+              focusNode: _noteFocusNode,
               minLines: 2,
               maxLines: 3,
               onChanged: (_) => setState(() {}),
               decoration: const InputDecoration(
-                hintText: 'Add a private note… (Enter to save)',
+                hintText: 'Add a private note…',
                 hintStyle: TextStyle(color: Color(0xFFC8974B), fontSize: 13),
                 filled: true,
                 fillColor: Colors.white,

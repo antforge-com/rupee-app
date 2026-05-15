@@ -19,6 +19,7 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'api_client.dart';
+import 'app_runtime_flags.dart';
 import 'assessment_sheet.dart';
 import 'booking_answers_screen.dart';
 import 'email_to_ticket_screen.dart';
@@ -124,13 +125,12 @@ String _formatExperience(dynamic rawExperience, {String? consultantName}) {
 
   final normalizedName = (consultantName ?? '').trim().toLowerCase();
   if (normalizedName == 'divya') {
-    final minYears = value.floor() <= 0 ? 1 : value.floor();
+    final minYears = value.round() <= 0 ? 1 : value.round();
     return '$minYears+ yrs';
   }
 
-  final whole = value % 1 == 0;
-  final text = whole ? value.toInt().toString() : value.toStringAsFixed(1);
-  return '$text+ yrs';
+  final rounded = value.round() <= 0 ? 1 : value.round();
+  return '$rounded+ yrs';
 }
 
 Widget _headerProfileButton(
@@ -337,23 +337,54 @@ int _slotSortMinutes(Map<String, dynamic> slot) {
   return _parseClockMinutes(time) ?? 1 << 30;
 }
 
-bool _notifIsRead(Map<String, dynamic> notif) =>
-    notif['isRead'] == true || notif['read'] == true;
+bool _notifIsRead(Map<String, dynamic> notif) {
+  final raw =
+      notif['isRead'] ?? notif['read'] ?? notif['opened'] ?? notif['status'];
+  if (raw is bool) return raw;
+  if (raw is num) return raw != 0;
+  final value = raw?.toString().trim().toLowerCase() ?? '';
+  return value == 'true' ||
+      value == '1' ||
+      value == 'read' ||
+      value == 'opened' ||
+      value == 'seen' ||
+      value == 'viewed';
+}
+
+DateTime? _parseServerDateTime(String? raw) {
+  if (raw == null) return null;
+  final value = raw.trim();
+  if (value.isEmpty) return null;
+  final hasTimezone =
+      value.endsWith('Z') || RegExp(r'[+-]\d{2}:\d{2}$').hasMatch(value);
+  final parsed = DateTime.tryParse(hasTimezone ? value : '${value}Z');
+  if (parsed != null) return parsed.toLocal();
+  return DateTime.tryParse(value)?.toLocal();
+}
+
+String _formatIstChatTime(String? iso) {
+  final dt = _parseServerDateTime(iso);
+  if (dt == null) return '';
+  final now = DateTime.now();
+  final sameDay =
+      dt.year == now.year && dt.month == now.month && dt.day == now.day;
+  final pattern = sameDay ? 'hh:mm a' : 'dd MMM, hh:mm a';
+  return '${DateFormat(pattern).format(dt)} IST';
+}
 
 String _timeAgo(String? iso) {
-  if (iso == null) return '';
-  try {
-    final d = DateTime.parse(iso);
-    final diff = DateTime.now().difference(d);
-    if (diff.inSeconds < 60) return 'just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    if (diff.inDays < 7) return '${diff.inDays}d ago';
-    return _fmtDate(iso);
-  } catch (_) {
-    return '';
-  }
+  final d = _parseServerDateTime(iso);
+  if (d == null) return '';
+  final diff = DateTime.now().difference(d);
+  if (diff.inSeconds < 60) return 'just now';
+  if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+  if (diff.inHours < 24) return '${diff.inHours}h ago';
+  if (diff.inDays < 7) return '${diff.inDays}d ago';
+  return DateFormat('dd MMM yyyy').format(d);
 }
+
+String _formatCurrencyTwoDecimals(num amount) =>
+    '₹${amount.toStringAsFixed(2)}';
 
 String _stripHtml(String input) {
   if (input.trim().isEmpty) return '';
@@ -735,6 +766,19 @@ class _UserDashboardState extends State<UserDashboard> {
         Timer.periodic(const Duration(seconds: 30), (_) => _fetchUnread());
   }
 
+  void _onBottomTabTap(int index) {
+    setState(() {
+      _tab = index;
+      if (index == 3) _unread = 0;
+    });
+    if (index == 3) {
+      _notificationService
+          .markAllRead()
+          .then((_) => _fetchUnread())
+          .catchError((_) => _fetchUnread());
+    }
+  }
+
   Future<void> _fetchUnread() async {
     final uid = _toInt(_user['id']) ?? 0;
     if (uid <= 0) {
@@ -802,7 +846,7 @@ class _UserDashboardState extends State<UserDashboard> {
         bottomNavigationBar: _BottomNav(
           current: _tab,
           unread: _unread,
-          onTap: (i) => setState(() => _tab = i),
+          onTap: _onBottomTabTap,
         ),
       ),
     );
@@ -2011,7 +2055,8 @@ class _BookingSheetState extends State<_BookingSheet> {
                 .where((s) =>
                     (s.status ?? '').toString().toUpperCase() == 'AVAILABLE')
                 .toList();
-            slotId = (available.isNotEmpty ? available.first : match.first).id ?? 0;
+            slotId =
+                (available.isNotEmpty ? available.first : match.first).id ?? 0;
           }
         }
       }
@@ -2037,7 +2082,8 @@ class _BookingSheetState extends State<_BookingSheet> {
     if (mounted) setState(() => _booking = false);
 
     if (result == null) {
-      if (mounted) _toast(context, 'Failed to book. Please try again.', error: true);
+      if (mounted)
+        _toast(context, 'Failed to book. Please try again.', error: true);
       return;
     }
 
@@ -2047,33 +2093,59 @@ class _BookingSheetState extends State<_BookingSheet> {
     }
 
     if (RazorpayService.needsPayment(result)) {
+      if (kBypassBookingPaymentsForNow) {
+        final bookingId = (result['id'] as num?)?.toInt() ?? 0;
+        if (bookingId > 0) {
+          await _bookingService.updateBooking(
+            bookingId,
+            bookingStatus: 'CONFIRMED',
+            paymentStatus: 'SUCCESS',
+          );
+        }
+        if (mounted) {
+          await _finishNormalBooking(
+            {
+              ...result,
+              'bookingStatus': 'CONFIRMED',
+              'paymentStatus': 'SUCCESS',
+            },
+            consultantName,
+            cId,
+          );
+        }
+        return;
+      }
+
       final razorpay = RazorpayService();
       try {
-        final bookingId   = (result['id'] as num).toInt();
-        final orderId     = result['razorpayOrderId']?.toString() ?? '';
-        final totalAmt    = double.tryParse('${result['totalAmount'] ?? 0}') ?? 0;
-        final discountAmt = double.tryParse('${result['discountAmount'] ?? 0}') ?? 0;
+        final bookingId = (result['id'] as num).toInt();
+        final orderId = result['razorpayOrderId']?.toString() ?? '';
+        final totalAmt = double.tryParse('${result['totalAmount'] ?? 0}') ?? 0;
+        final discountAmt =
+            double.tryParse('${result['discountAmount'] ?? 0}') ?? 0;
 
         if (discountAmt > 0 && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Promo applied! You save ₹${discountAmt.toStringAsFixed(0)}'),
+            content: Text(
+                'Promo applied! You save ₹${discountAmt.toStringAsFixed(0)}'),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 2),
           ));
         }
 
         final confirmed = await razorpay.payAndVerifyBooking(
-          bookingId:       bookingId,
+          bookingId: bookingId,
           razorpayOrderId: orderId,
-          totalAmount:     totalAmt,
-          description:     'Consultation with $consultantName',
-          prefillEmail:    _currentUserEmail,
+          totalAmount: totalAmt,
+          description: 'Consultation with $consultantName',
+          prefillEmail: _currentUserEmail,
         );
 
         if (mounted) {
           await _finishNormalBooking(
             confirmed.isNotEmpty ? confirmed : result,
-            consultantName, cId,
+            consultantName,
+            cId,
           );
         }
       } catch (e) {
@@ -2095,16 +2167,18 @@ class _BookingSheetState extends State<_BookingSheet> {
     if (!mounted) return;
     final bookingId = (booking['id'] as num).toInt();
     _notificationService.sendBookingConfirmation(bookingId).catchError((_) {});
-    _notificationService.addLocalNotification(AppNotification(
-      id: DateTime.now().millisecondsSinceEpoch,
-      title: 'Booking Confirmed',
-      body: 'Your session with $consultantName is booked for '
-          '${_fmtBookingDate((_selSlot?['slotDate'] ?? '').toString())} '
-          '${(_selSlot?['displayTimeRange'] ?? _selSlot?['timeRange'] ?? '').toString()}',
-      type: 'BOOKING_CONFIRMED',
-      createdAt: DateTime.now(),
-      data: {'bookingId': bookingId},
-    )).catchError((_) {});
+    _notificationService
+        .addLocalNotification(AppNotification(
+          id: DateTime.now().millisecondsSinceEpoch,
+          title: 'Booking Confirmed',
+          body: 'Your session with $consultantName is booked for '
+              '${_fmtBookingDate((_selSlot?['slotDate'] ?? '').toString())} '
+              '${(_selSlot?['displayTimeRange'] ?? _selSlot?['timeRange'] ?? '').toString()}',
+          type: 'BOOKING_CONFIRMED',
+          createdAt: DateTime.now(),
+          data: {'bookingId': bookingId},
+        ))
+        .catchError((_) {});
     Navigator.pop(context);
     _toast(context, 'Session booked successfully! 🎉');
     Future.delayed(const Duration(milliseconds: 500), () {
@@ -2122,8 +2196,11 @@ class _BookingSheetState extends State<_BookingSheet> {
   String get _currentUserEmail {
     try {
       return widget.c['userEmail']?.toString() ??
-             widget.c['identifier']?.toString() ?? '';
-    } catch (_) { return ''; }
+          widget.c['identifier']?.toString() ??
+          '';
+    } catch (_) {
+      return '';
+    }
   }
 
   Future<void> _confirmSpecialBooking() async {
@@ -2182,7 +2259,10 @@ class _BookingSheetState extends State<_BookingSheet> {
     if (mounted) setState(() => _booking = false);
 
     if (created == null) {
-      if (mounted) _toast(context, 'Failed to request the special booking. Please try again.', error: true);
+      if (mounted)
+        _toast(
+            context, 'Failed to request the special booking. Please try again.',
+            error: true);
       return;
     }
 
@@ -2192,16 +2272,41 @@ class _BookingSheetState extends State<_BookingSheet> {
     }
 
     if (RazorpayService.needsPayment(created)) {
+      if (kBypassBookingPaymentsForNow) {
+        final specialBookingId = (created['id'] as num?)?.toInt() ?? 0;
+        if (specialBookingId > 0) {
+          await _bookingService.updateSpecialBooking(specialBookingId, {
+            'status': 'CONFIRMED',
+            'bookingStatus': 'CONFIRMED',
+            'paymentStatus': 'SUCCESS',
+          });
+        }
+        if (mounted) {
+          await _finishSpecialBooking(
+            {
+              ...created,
+              'bookingStatus': 'CONFIRMED',
+              'paymentStatus': 'SUCCESS',
+            },
+            consultantName,
+            cId,
+          );
+        }
+        return;
+      }
+
       final razorpay = RazorpayService();
       try {
         final specialBookingId = (created['id'] as num).toInt();
-        final orderId          = created['razorpayOrderId']?.toString() ?? '';
-        final totalAmt         = double.tryParse('${created['totalAmount'] ?? 0}') ?? 0;
-        final discountAmt      = double.tryParse('${created['discountAmount'] ?? 0}') ?? 0;
+        final orderId = created['razorpayOrderId']?.toString() ?? '';
+        final totalAmt = double.tryParse('${created['totalAmount'] ?? 0}') ?? 0;
+        final discountAmt =
+            double.tryParse('${created['discountAmount'] ?? 0}') ?? 0;
 
         if (discountAmt > 0 && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Promo applied! You save ₹${discountAmt.toStringAsFixed(0)}'),
+            content: Text(
+                'Promo applied! You save ₹${discountAmt.toStringAsFixed(0)}'),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 2),
           ));
@@ -2209,16 +2314,17 @@ class _BookingSheetState extends State<_BookingSheet> {
 
         final confirmed = await razorpay.payAndVerifySpecialBooking(
           specialBookingId: specialBookingId,
-          razorpayOrderId:  orderId,
-          totalAmount:      totalAmt,
-          description:      'Special booking with $consultantName',
-          prefillEmail:     _currentUserEmail,
+          razorpayOrderId: orderId,
+          totalAmount: totalAmt,
+          description: 'Special booking with $consultantName',
+          prefillEmail: _currentUserEmail,
         );
 
         if (mounted) {
           await _finishSpecialBooking(
             confirmed.isNotEmpty ? confirmed : created,
-            consultantName, cId,
+            consultantName,
+            cId,
           );
         }
       } catch (e) {
@@ -2258,19 +2364,21 @@ class _BookingSheetState extends State<_BookingSheet> {
   Widget build(BuildContext context) {
     final name = widget.c['name'] ?? 'Expert';
     final base = double.tryParse(widget.c['charges']?.toString() ?? '0') ?? 0;
-    final fee = _calcFee(base, widget.feeConfig) - base;
+    // Platform fee added on top of consultant charges
+    final totalWithFee = _calcFee(base, widget.feeConfig);
+    final platformFee = totalWithFee - base;
     double discount = 0;
     if (_selOffer != null) {
       final d = double.tryParse(_selOffer!['discount']?.toString() ?? '0') ?? 0;
       final type =
           (_selOffer!['discountType'] ?? 'FLAT').toString().toUpperCase();
       if (type == 'PERCENTAGE') {
-        discount = base * d / 100;
+        discount = totalWithFee * d / 100;
       } else {
         discount = d;
       }
     }
-    final total = base + fee - discount;
+    final total = (totalWithFee - discount).clamp(0.0, double.infinity);
 
     return DraggableScrollableSheet(
       initialChildSize: 0.9,
@@ -3085,17 +3193,36 @@ class _BookingSheetState extends State<_BookingSheet> {
                                             Text('Session Fee',
                                                 style: _ts(14, FontWeight.w600,
                                                     _C.text3)),
-                                            Text('₹${base.toStringAsFixed(0)}',
+                                            Text('₹${base.toStringAsFixed(2)}',
                                                 style: _ts(14, FontWeight.w700,
                                                     _C.text1)),
                                           ]),
+                                      if (platformFee > 0) ...[
+                                        const SizedBox(height: 8),
+                                        Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Text('Platform Fee',
+                                                  style: _ts(
+                                                      13,
+                                                      FontWeight.w500,
+                                                      _C.text3)),
+                                              Text(
+                                                  '+₹${platformFee.toStringAsFixed(2)}',
+                                                  style: _ts(
+                                                      13,
+                                                      FontWeight.w600,
+                                                      _C.text2)),
+                                            ]),
+                                      ],
                                       if (discount > 0) ...[
                                         const SizedBox(height: 12),
                                         Row(
                                             mainAxisAlignment:
                                                 MainAxisAlignment.spaceBetween,
                                             children: [
-                                              Text('Offer Applied',
+                                              Text('Offer Discount',
                                                   style: _ts(
                                                       14,
                                                       FontWeight.w600,
@@ -3121,7 +3248,7 @@ class _BookingSheetState extends State<_BookingSheet> {
                                             Text('Total Amount',
                                                 style: _ts(16, FontWeight.w800,
                                                     _C.text1)),
-                                            Text('₹${total.toStringAsFixed(0)}',
+                                            Text('₹${total.toStringAsFixed(2)}',
                                                 style: _ts(18, FontWeight.w900,
                                                     _C.blue)),
                                           ]),
@@ -3160,9 +3287,17 @@ class _BookingsTab extends StatefulWidget {
 }
 
 class _BookingsTabState extends State<_BookingsTab> {
+  static const int _pageSize = 10;
+
   List<Map<String, dynamic>> _bookings = [];
+  final Map<int, List<Map<String, dynamic>>> _pageCache = {};
   bool _loading = true;
+  bool _paging = false;
   String _filter = 'UPCOMING'; // UPCOMING | HISTORY
+  int _currentPage = 1;
+  int _totalPages = 1;
+  int _totalElements = 0;
+  int _requestToken = 0;
 
   @override
   void initState() {
@@ -3170,27 +3305,277 @@ class _BookingsTabState extends State<_BookingsTab> {
     _load();
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
-    final list = await _bookingService.getMyBookings(size: 50);
-    final enriched = <Booking>[];
-    for (final booking in list) {
+  Future<void> _load({
+    int page = 1,
+    bool force = false,
+    bool clearCache = false,
+  }) async {
+    final targetPage = page < 1 ? 1 : page;
+
+    if (clearCache) _pageCache.clear();
+
+    if (!force) {
+      final cached = _pageCache[targetPage];
+      if (cached != null) {
+        if (mounted) {
+          setState(() {
+            _bookings = cached;
+            _currentPage = targetPage;
+            _loading = false;
+            _paging = false;
+          });
+        }
+        unawaited(_prefetchAdjacentPages(targetPage));
+        return;
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        if (_bookings.isEmpty || force || clearCache) {
+          _loading = true;
+          _paging = false;
+        } else {
+          _paging = true;
+        }
+      });
+    }
+
+    final requestToken = ++_requestToken;
+    try {
+      final result = await _bookingService.getMyBookingsPaginated(
+        page: targetPage - 1,
+        size: _pageSize,
+      );
+      if (requestToken != _requestToken) return;
+
+      final rowsRaw = result['bookings'];
+      final rows =
+          rowsRaw is List ? rowsRaw.whereType<Booking>().toList() : <Booking>[];
+      final hydrated = await _hydrateBookingPage(rows);
+      if (requestToken != _requestToken || !mounted) return;
+
+      final rawTotalElements =
+          _toInt(result['totalElements']) ?? hydrated.length;
+      var computedTotalPages = _toInt(result['totalPages']) ??
+          (rawTotalElements <= 0
+              ? (hydrated.length == _pageSize ? targetPage + 1 : targetPage)
+              : ((rawTotalElements + _pageSize - 1) ~/ _pageSize));
+      if (computedTotalPages <= 0) computedTotalPages = 1;
+
+      final safeTotalElements = rawTotalElements < hydrated.length
+          ? hydrated.length
+          : rawTotalElements;
+      final safeCurrentPage =
+          targetPage > computedTotalPages ? computedTotalPages : targetPage;
+
+      _pageCache[targetPage] = hydrated;
+
+      setState(() {
+        _bookings = hydrated;
+        _currentPage = safeCurrentPage;
+        _totalPages = computedTotalPages;
+        _totalElements = safeTotalElements;
+        _loading = false;
+        _paging = false;
+      });
+      unawaited(_prefetchAdjacentPages(safeCurrentPage));
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _paging = false;
+        });
+      }
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _hydrateBookingPage(
+      List<Booking> bookings) async {
+    final enriched = await Future.wait(bookings.map((booking) async {
       final needsHydration = (booking.consultantName ?? '').trim().isEmpty ||
           (booking.slotDate ?? '').trim().isEmpty ||
           (booking.timeRange ?? '').trim().isEmpty ||
           (booking.amount ?? 0) == 0;
-      if (needsHydration) {
-        final detailed = await _bookingService.getBookingById(booking.id);
-        enriched.add(detailed ?? booking);
-      } else {
-        enriched.add(booking);
+      if (!needsHydration) return booking;
+      final detailed = await _bookingService.getBookingById(booking.id);
+      return detailed ?? booking;
+    }));
+
+    final consultantNameCache = <int, String>{};
+    final fullyEnriched = await Future.wait(enriched.map((b) async {
+      var bJson = b.toJson();
+      final cName = (bJson['consultantName'] ?? '').toString().trim();
+      final cId = int.tryParse('${bJson['consultantId'] ?? ''}');
+      if ((cName.isEmpty || cName.toLowerCase() == 'expert') &&
+          cId != null &&
+          cId > 0) {
+        final cachedName = consultantNameCache[cId];
+        if (cachedName != null && cachedName.isNotEmpty) {
+          bJson = {...bJson, 'consultantName': cachedName};
+        } else {
+          try {
+            final resp = await ApiClient().dio.get('/api/consultants/$cId');
+            final data = resp.data;
+            if (data is Map) {
+              final name =
+                  (data['name'] ?? data['fullName'] ?? '').toString().trim();
+              if (name.isNotEmpty) {
+                consultantNameCache[cId] = name;
+                bJson = {...bJson, 'consultantName': name};
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
+      if ((bJson['slotDate'] ?? '').toString().isEmpty &&
+          bJson['timeSlot'] is Map) {
+        final ts = bJson['timeSlot'] as Map;
+        final slotDate = (ts['slotDate'] ?? ts['date'] ?? '').toString();
+        final timeRange = (ts['timeRange'] ?? ts['time'] ?? '').toString();
+        if (slotDate.isNotEmpty) bJson = {...bJson, 'slotDate': slotDate};
+        if (timeRange.isNotEmpty) bJson = {...bJson, 'timeRange': timeRange};
+      }
+      return bJson;
+    }));
+
+    return fullyEnriched;
+  }
+
+  Future<void> _prefetchAdjacentPages(int currentPage) async {
+    final neighbors = [currentPage - 1, currentPage + 1];
+    for (final page in neighbors) {
+      if (page < 1 || page > _totalPages) continue;
+      if (_pageCache.containsKey(page)) continue;
+      unawaited(_prefetchPage(page));
+    }
+  }
+
+  Future<void> _prefetchPage(int page) async {
+    try {
+      final result = await _bookingService.getMyBookingsPaginated(
+        page: page - 1,
+        size: _pageSize,
+      );
+      if (!mounted || _pageCache.containsKey(page)) return;
+      final rowsRaw = result['bookings'];
+      final rows =
+          rowsRaw is List ? rowsRaw.whereType<Booking>().toList() : <Booking>[];
+      final hydrated = await _hydrateBookingPage(rows);
+      if (!mounted || _pageCache.containsKey(page)) return;
+      _pageCache[page] = hydrated;
+    } catch (_) {}
+  }
+
+  Future<void> _refreshCurrent() => _load(
+        page: _currentPage,
+        force: true,
+        clearCache: true,
+      );
+
+  void _goToPage(int page) {
+    if (page < 1 || page > _totalPages || page == _currentPage) return;
+    _load(page: page);
+  }
+
+  List<int> _visiblePages() {
+    if (_totalPages <= 1) return const [1];
+    final pages = <int>{1, _totalPages, _currentPage};
+    for (var p = _currentPage - 1; p <= _currentPage + 1; p++) {
+      if (p >= 1 && p <= _totalPages) pages.add(p);
+    }
+    final out = pages.toList()..sort();
+    return out;
+  }
+
+  Widget _paginationBar() {
+    if (_totalPages <= 1) return const SizedBox.shrink();
+
+    final pages = _visiblePages();
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _C.border),
+      ),
+      child: Row(children: [
+        IconButton(
+          onPressed:
+              _currentPage > 1 ? () => _goToPage(_currentPage - 1) : null,
+          icon: const Icon(Icons.chevron_left_rounded),
+          visualDensity: VisualDensity.compact,
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              for (var i = 0; i < pages.length; i++) ...[
+                if (i > 0 && pages[i] - pages[i - 1] > 1)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child:
+                        Text('...', style: _ts(11, FontWeight.w700, _C.text4)),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: GestureDetector(
+                    onTap: () => _goToPage(pages[i]),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _currentPage == pages[i]
+                            ? _C.blue
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: _currentPage == pages[i] ? _C.blue : _C.border,
+                        ),
+                      ),
+                      child: Text(
+                        '${pages[i]}',
+                        style: _ts(
+                          12,
+                          FontWeight.w700,
+                          _currentPage == pages[i] ? Colors.white : _C.text3,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ]),
+          ),
+        ),
+        IconButton(
+          onPressed: _currentPage < _totalPages
+              ? () => _goToPage(_currentPage + 1)
+              : null,
+          icon: const Icon(Icons.chevron_right_rounded),
+          visualDensity: VisualDensity.compact,
+        ),
+      ]),
+    );
+  }
+
+  List<Map<String, dynamic>> get _calendarBookings {
+    if (_pageCache.isEmpty) return _bookings;
+    final byId = <int, Map<String, dynamic>>{};
+    var tempId = -1;
+    for (final page in _pageCache.values) {
+      for (final item in page) {
+        final id = (item['id'] as num?)?.toInt();
+        if (id != null && id > 0) {
+          byId[id] = item;
+        } else {
+          byId[tempId--] = item;
+        }
       }
     }
-    if (mounted)
-      setState(() {
-        _bookings = enriched.map((e) => e.toJson()).toList();
-        _loading = false;
-      });
+    return byId.values.toList(growable: false);
   }
 
   bool _isUpcoming(Map<String, dynamic> b) {
@@ -3253,7 +3638,7 @@ class _BookingsTabState extends State<_BookingsTab> {
     if (mounted) {
       _toast(context, ok ? 'Booking cancelled.' : 'Could not cancel.',
           error: !ok);
-      if (ok) _load();
+      if (ok) _refreshCurrent();
     }
   }
 
@@ -3270,7 +3655,7 @@ class _BookingsTabState extends State<_BookingsTab> {
             Text('My Bookings', style: _ts(24, FontWeight.w900, _C.text1)),
             const Spacer(),
             TextButton.icon(
-              onPressed: _load,
+              onPressed: _refreshCurrent,
               icon: const Icon(Icons.refresh_rounded, size: 18),
               label: Text('Refresh', style: _ts(13, FontWeight.w600, _C.text2)),
               style: TextButton.styleFrom(
@@ -3325,8 +3710,15 @@ class _BookingsTabState extends State<_BookingsTab> {
               ),
             ),
           ]),
+          const SizedBox(height: 8),
+          Text(
+            'Page $_currentPage of $_totalPages • $_totalElements bookings',
+            style: _ts(11, FontWeight.w600, _C.text4),
+          ),
         ]),
       ),
+
+      if (_paging) const LinearProgressIndicator(color: _C.blue, minHeight: 2),
 
       Expanded(
         child: _loading
@@ -3334,28 +3726,37 @@ class _BookingsTabState extends State<_BookingsTab> {
                 padding: const EdgeInsets.all(16),
                 children: List.generate(3, (_) => const _Shimmer(height: 160)))
             : _filtered.isEmpty
-                ? _emptyState(
-                    _filter == 'UPCOMING'
-                        ? Icons.calendar_today_rounded
-                        : Icons.history_rounded,
-                    _filter == 'UPCOMING'
-                        ? 'No Upcoming Sessions'
-                        : 'No Past Sessions',
-                    _filter == 'UPCOMING'
-                        ? 'Book a session with an expert to get started'
-                        : 'Your completed sessions will appear here',
+                ? ListView(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                    children: [
+                      _emptyState(
+                        _filter == 'UPCOMING'
+                            ? Icons.calendar_today_rounded
+                            : Icons.history_rounded,
+                        _filter == 'UPCOMING'
+                            ? 'No Upcoming Sessions'
+                            : 'No Past Sessions',
+                        _filter == 'UPCOMING'
+                            ? 'Book a session with an expert to get started'
+                            : 'Your completed sessions will appear here',
+                      ),
+                      if (_totalPages > 1) _paginationBar(),
+                    ],
                   )
                 : RefreshIndicator(
-                    onRefresh: _load,
+                    onRefresh: _refreshCurrent,
                     color: _C.blue,
                     child: ListView.builder(
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-                      itemCount: _filtered.length,
-                      itemBuilder: (_, i) => _BookingCard(
-                        b: _filtered[i],
-                        onCancel: _cancel,
-                        onFeedback: (b) => _openFeedback(context, b),
-                      ),
+                      itemCount: _filtered.length + (_totalPages > 1 ? 1 : 0),
+                      itemBuilder: (_, i) {
+                        if (i >= _filtered.length) return _paginationBar();
+                        return _BookingCard(
+                          b: _filtered[i],
+                          onCancel: _cancel,
+                          onFeedback: (b) => _openFeedback(context, b),
+                        );
+                      },
                     ),
                   ),
       ),
@@ -3374,7 +3775,7 @@ class _BookingsTabState extends State<_BookingsTab> {
         context: context,
         isScrollControlled: true,
         backgroundColor: Colors.transparent,
-        builder: (_) => _BookingsCalendarModal(bookings: _bookings),
+        builder: (_) => _BookingsCalendarModal(bookings: _calendarBookings),
       );
 }
 
@@ -3686,7 +4087,7 @@ class _BookingCard extends StatelessWidget {
             const SizedBox(height: 14),
             Row(children: [
               _infoChip(
-                  Icons.attach_money_rounded, '₹${amount.toStringAsFixed(0)}'),
+                  Icons.attach_money_rounded, '₹${amount.toStringAsFixed(2)}'),
               const SizedBox(width: 8),
               if (bookingDate.isNotEmpty)
                 _infoChip(
@@ -4087,9 +4488,17 @@ class _TicketsTab extends StatefulWidget {
 }
 
 class _TicketsTabState extends State<_TicketsTab> {
+  static const int _pageSize = 10;
+
   List<Map<String, dynamic>> _tickets = [];
+  final Map<int, List<Map<String, dynamic>>> _pageCache = {};
   bool _loading = true;
+  bool _paging = false;
   bool _guestExpiryPromptShown = false;
+  int _currentPage = 1;
+  int _totalPages = 1;
+  int _totalElements = 0;
+  int _requestToken = 0;
   final ScrollController _filterChipScrollCtrl = ScrollController();
   final ScrollController _ticketActionScrollCtrl = ScrollController();
   static const List<String> _ticketFilters = [
@@ -4131,9 +4540,13 @@ class _TicketsTabState extends State<_TicketsTab> {
       // 1. Check rawData fields first (most reliable)
       final raw = health.rawData;
       if (raw != null) {
-        final candidate = raw['mailbox'] ?? raw['inbox'] ?? raw['email'] ??
-            raw['supportEmail'] ?? raw['inboxEmail'] ??
-            raw['configuredMailbox'] ?? raw['recipientEmail'];
+        final candidate = raw['mailbox'] ??
+            raw['inbox'] ??
+            raw['email'] ??
+            raw['supportEmail'] ??
+            raw['inboxEmail'] ??
+            raw['configuredMailbox'] ??
+            raw['recipientEmail'];
         if (candidate != null && '$candidate'.contains('@')) {
           resolved = '$candidate'.trim();
         }
@@ -4226,25 +4639,91 @@ class _TicketsTabState extends State<_TicketsTab> {
     return out;
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
-    final list = await _ticketService.getTicketsByUser(_uid);
-    if (mounted)
+  Future<void> _load({
+    int page = 1,
+    bool force = false,
+    bool clearCache = false,
+  }) async {
+    final targetPage = page < 1 ? 1 : page;
+    if (clearCache) _pageCache.clear();
+
+    if (!force) {
+      final cached = _pageCache[targetPage];
+      if (cached != null) {
+        if (mounted) {
+          setState(() {
+            _tickets = cached;
+            _currentPage = targetPage;
+            _loading = false;
+            _paging = false;
+          });
+        }
+        unawaited(_prefetchAdjacentPages(targetPage));
+        return;
+      }
+    }
+
+    if (mounted) {
       setState(() {
-        final normalized =
-            list.map((t) => _normalizeTicket(t.toJson())).toList()
-              ..sort((a, b) {
-                final bDate =
-                    DateTime.tryParse((b['createdAt'] ?? '').toString()) ??
-                        DateTime.fromMillisecondsSinceEpoch(0);
-                final aDate =
-                    DateTime.tryParse((a['createdAt'] ?? '').toString()) ??
-                        DateTime.fromMillisecondsSinceEpoch(0);
-                return bDate.compareTo(aDate);
-              });
-        _tickets = normalized;
-        _loading = false;
+        if (_tickets.isEmpty || force || clearCache) {
+          _loading = true;
+          _paging = false;
+        } else {
+          _paging = true;
+        }
       });
+    }
+
+    final requestToken = ++_requestToken;
+    try {
+      final result = await _ticketService.getTicketsByUserPaginated(
+        _uid,
+        page: targetPage - 1,
+        size: _pageSize,
+        sortBy: 'createdAt',
+      );
+      if (requestToken != _requestToken) return;
+
+      final rowsRaw = result['tickets'];
+      final rows =
+          rowsRaw is List ? rowsRaw.whereType<Ticket>().toList() : <Ticket>[];
+      final normalized = _hydrateTicketPage(rows);
+      if (!mounted || requestToken != _requestToken) return;
+
+      final rawTotalElements =
+          _toInt(result['totalElements']) ?? normalized.length;
+      var computedTotalPages = _toInt(result['totalPages']) ??
+          (rawTotalElements <= 0
+              ? (normalized.length == _pageSize ? targetPage + 1 : targetPage)
+              : ((rawTotalElements + _pageSize - 1) ~/ _pageSize));
+      if (computedTotalPages <= 0) computedTotalPages = 1;
+
+      final safeTotalElements = rawTotalElements < normalized.length
+          ? normalized.length
+          : rawTotalElements;
+      final safeCurrentPage =
+          targetPage > computedTotalPages ? computedTotalPages : targetPage;
+
+      _pageCache[targetPage] = normalized;
+
+      setState(() {
+        _tickets = normalized;
+        _currentPage = safeCurrentPage;
+        _totalPages = computedTotalPages;
+        _totalElements = safeTotalElements;
+        _loading = false;
+        _paging = false;
+      });
+      unawaited(_prefetchAdjacentPages(safeCurrentPage));
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _paging = false;
+        });
+      }
+    }
+
     if (mounted &&
         _isGuestTicketAccessExpired(widget.user) &&
         !_guestExpiryPromptShown) {
@@ -4278,6 +4757,136 @@ class _TicketsTabState extends State<_TicketsTab> {
       if (_filter == 'ESCALATED') return _isEscalated(t);
       return s == _filter;
     }).toList();
+  }
+
+  List<Map<String, dynamic>> _hydrateTicketPage(List<Ticket> tickets) {
+    final normalized = tickets.map((t) => _normalizeTicket(t.toJson())).toList()
+      ..sort((a, b) {
+        final bDate = DateTime.tryParse((b['createdAt'] ?? '').toString()) ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        final aDate = DateTime.tryParse((a['createdAt'] ?? '').toString()) ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        return bDate.compareTo(aDate);
+      });
+    return normalized;
+  }
+
+  Future<void> _prefetchAdjacentPages(int currentPage) async {
+    final neighbors = [currentPage - 1, currentPage + 1];
+    for (final page in neighbors) {
+      if (page < 1 || page > _totalPages) continue;
+      if (_pageCache.containsKey(page)) continue;
+      unawaited(_prefetchPage(page));
+    }
+  }
+
+  Future<void> _prefetchPage(int page) async {
+    try {
+      final result = await _ticketService.getTicketsByUserPaginated(
+        _uid,
+        page: page - 1,
+        size: _pageSize,
+        sortBy: 'createdAt',
+      );
+      if (!mounted || _pageCache.containsKey(page)) return;
+      final rowsRaw = result['tickets'];
+      final rows =
+          rowsRaw is List ? rowsRaw.whereType<Ticket>().toList() : <Ticket>[];
+      _pageCache[page] = _hydrateTicketPage(rows);
+    } catch (_) {}
+  }
+
+  Future<void> _refreshCurrent() => _load(
+        page: _currentPage,
+        force: true,
+        clearCache: true,
+      );
+
+  void _goToPage(int page) {
+    if (page < 1 || page > _totalPages || page == _currentPage) return;
+    _load(page: page);
+  }
+
+  List<int> _visiblePages() {
+    if (_totalPages <= 1) return const [1];
+    final pages = <int>{1, _totalPages, _currentPage};
+    for (var p = _currentPage - 1; p <= _currentPage + 1; p++) {
+      if (p >= 1 && p <= _totalPages) pages.add(p);
+    }
+    final out = pages.toList()..sort();
+    return out;
+  }
+
+  Widget _paginationBar() {
+    if (_totalPages <= 1) return const SizedBox.shrink();
+
+    final pages = _visiblePages();
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _C.border),
+      ),
+      child: Row(children: [
+        IconButton(
+          onPressed:
+              _currentPage > 1 ? () => _goToPage(_currentPage - 1) : null,
+          icon: const Icon(Icons.chevron_left_rounded),
+          visualDensity: VisualDensity.compact,
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              for (var i = 0; i < pages.length; i++) ...[
+                if (i > 0 && pages[i] - pages[i - 1] > 1)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child:
+                        Text('...', style: _ts(11, FontWeight.w700, _C.text4)),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: GestureDetector(
+                    onTap: () => _goToPage(pages[i]),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _currentPage == pages[i]
+                            ? _C.blue
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: _currentPage == pages[i] ? _C.blue : _C.border,
+                        ),
+                      ),
+                      child: Text(
+                        '${pages[i]}',
+                        style: _ts(
+                          12,
+                          FontWeight.w700,
+                          _currentPage == pages[i] ? Colors.white : _C.text3,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ]),
+          ),
+        ),
+        IconButton(
+          onPressed: _currentPage < _totalPages
+              ? () => _goToPage(_currentPage + 1)
+              : null,
+          icon: const Icon(Icons.chevron_right_rounded),
+          visualDensity: VisualDensity.compact,
+        ),
+      ]),
+    );
   }
 
   void _scrollFilterIntoView(String filter) {
@@ -4761,8 +5370,7 @@ class _TicketsTabState extends State<_TicketsTab> {
                           left: 20,
                           right: 20,
                           top: 20,
-                          bottom:
-                              MediaQuery.of(ctx).viewInsets.bottom + 20,
+                          bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -4785,7 +5393,8 @@ class _TicketsTabState extends State<_TicketsTab> {
                                   Expanded(
                                     child: Text(
                                       _supportMailbox,
-                                      style: _ts(13, FontWeight.w700, _C.blueMid),
+                                      style:
+                                          _ts(13, FontWeight.w700, _C.blueMid),
                                       overflow: TextOverflow.ellipsis,
                                     ),
                                   ),
@@ -5010,7 +5619,9 @@ class _TicketsTabState extends State<_TicketsTab> {
                 _ticketActionBtn(
                   label: 'Refresh',
                   icon: Icons.refresh_rounded,
-                  onTap: () => _runAction('refresh', _load),
+                  onTap: () => _runAction('refresh', () {
+                    unawaited(_refreshCurrent());
+                  }),
                 ),
                 const SizedBox(width: 8),
                 _ticketActionBtn(
@@ -5038,8 +5649,15 @@ class _TicketsTabState extends State<_TicketsTab> {
               ],
             ),
           ),
+          const SizedBox(height: 8),
+          Text(
+            'Page $_currentPage of $_totalPages • $_totalElements tickets',
+            style: _ts(11, FontWeight.w600, _C.text4),
+          ),
         ]),
       ),
+
+      if (_paging) const LinearProgressIndicator(color: _C.blue, minHeight: 2),
 
       // Guest banner
       if (isGuest && !_isGuestTicketAccessExpired(widget.user))
@@ -5073,7 +5691,7 @@ class _TicketsTabState extends State<_TicketsTab> {
                 padding: const EdgeInsets.all(16),
                 children: List.generate(3, (_) => const _Shimmer(height: 130)))
             : RefreshIndicator(
-                onRefresh: _load,
+                onRefresh: _refreshCurrent,
                 color: _C.blue,
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
@@ -5201,11 +5819,21 @@ class _TicketsTabState extends State<_TicketsTab> {
                           Text(
                               'No ${_filter == 'ALL' ? '' : _filter.toLowerCase()} tickets found.',
                               style: _ts(13, FontWeight.w400, _C.text3)),
+                          if (_totalPages > 1) ...[
+                            const SizedBox(height: 16),
+                            _paginationBar(),
+                          ],
                         ]),
                       ))
-                    else
-                      ..._filtered.map((t) =>
-                          _TicketCard(t: t, userId: _uid, onUpdated: _load)),
+                    else ...[
+                      ..._filtered.map((t) => _TicketCard(
+                          t: t,
+                          userId: _uid,
+                          onUpdated: () {
+                            unawaited(_refreshCurrent());
+                          })),
+                      if (_totalPages > 1) _paginationBar(),
+                    ],
                   ],
                 ),
               ),
@@ -5316,7 +5944,7 @@ class _TicketsTabState extends State<_TicketsTab> {
     );
 
     if (!mounted || createdResult == null) return;
-    await _load();
+    await _load(page: 1, force: true, clearCache: true);
     if (!mounted) return;
     messenger
       ?..hideCurrentSnackBar()
@@ -6036,6 +6664,11 @@ class _TicketDetailScreenState extends State<_TicketDetailScreen> {
     final created = _ticket['createdAt'] ?? '';
     final id = (_ticket['id'] as num?)?.toInt() ?? 0;
     final isClosed = status == 'CLOSED' || status == 'RESOLVED';
+    final mediaQuery = MediaQuery.of(context);
+    final inputBottomPadding = (mediaQuery.viewInsets.bottom > 0
+            ? mediaQuery.viewInsets.bottom
+            : 0.0) +
+        12;
 
     return Scaffold(
       backgroundColor: _C.bg,
@@ -6167,7 +6800,8 @@ class _TicketDetailScreenState extends State<_TicketDetailScreen> {
                             (c['senderId'] as num?)?.toInt() == widget.userId;
                         final isConsul = c['consultantReply'] == true;
                         final msg = _stripHtml((c['message'] ?? '').toString());
-                        final time = _timeAgo(c['createdAt']?.toString());
+                        final time = _formatIstChatTime(
+                            (c['createdAt'] ?? c['timestamp'])?.toString());
                         return Padding(
                           padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                           child: Row(
@@ -6251,15 +6885,14 @@ class _TicketDetailScreenState extends State<_TicketDetailScreen> {
         if (!isClosed)
           Container(
             color: Colors.white,
-            padding: EdgeInsets.fromLTRB(
-                16, 10, 16, MediaQuery.of(context).viewInsets.bottom + 12),
+            padding: EdgeInsets.fromLTRB(16, 10, 16, inputBottomPadding),
             child: Row(children: [
               Expanded(
                 child: TextField(
                   controller: _msgCtrl,
                   style: _ts(14, FontWeight.w400, _C.text1),
                   decoration: InputDecoration(
-                    hintText: 'Type your message…',
+                    hintText: 'Type your message...',
                     hintStyle: _ts(14, FontWeight.w400, _C.text4),
                     border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(14),
@@ -6417,9 +7050,17 @@ class _NotifsTabState extends State<_NotifsTab> {
   Future<void> _load() async {
     setState(() => _loading = true);
     final list = await _notificationService.getNotifications();
+    var mapped = list.map((n) => n.toJson()).toList();
+    final hasUnread = mapped.any((n) => !_notifIsRead(n));
+    if (hasUnread) {
+      await _notificationService.markAllRead();
+      final refreshed = await _notificationService.getNotifications();
+      mapped = refreshed.map((n) => n.toJson()).toList();
+      widget.onRead();
+    }
     if (mounted)
       setState(() {
-        _notifs = list.map((n) => n.toJson()).toList();
+        _notifs = mapped;
         _loading = false;
       });
   }
@@ -7714,7 +8355,9 @@ class _PlansViewState extends State<_PlansView> {
                                           crossAxisAlignment:
                                               CrossAxisAlignment.end,
                                           children: [
-                                            Text('₹${disc.toStringAsFixed(0)}',
+                                            Text(
+                                                _formatCurrencyTwoDecimals(
+                                                    disc),
                                                 style: _ts(28, FontWeight.w900,
                                                     _C.text1)),
                                             const SizedBox(width: 6),
@@ -7723,7 +8366,8 @@ class _PlansViewState extends State<_PlansView> {
                                                 padding: const EdgeInsets.only(
                                                     bottom: 4),
                                                 child: Text(
-                                                    '₹${orig.toStringAsFixed(0)}',
+                                                    _formatCurrencyTwoDecimals(
+                                                        orig),
                                                     style: _ts(
                                                       14,
                                                       FontWeight.w500,

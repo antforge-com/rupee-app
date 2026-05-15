@@ -23,7 +23,8 @@ class OfferService {
   /// GET /api/offers/checkout — Offers applicable for a specific consultant
   Future<List<Map<String, dynamic>>> getCheckoutOffers(int consultantId) async {
     try {
-      final response = await _apiClient.dio.get('/api/offers/checkout', queryParameters: {'consultantId': consultantId});
+      final response = await _apiClient.dio.get('/api/offers/checkout',
+          queryParameters: {'consultantId': consultantId});
       return _extract(response.data);
     } catch (_) {
       return [];
@@ -51,11 +52,17 @@ class OfferService {
   }
 
   /// POST /api/offers — Create new offer (Admin)
-  Future<bool> createOffer(Map<String, dynamic> data) async {
+  ///
+  /// Set [throwOnError] to true when UI needs backend validation details.
+  Future<bool> createOffer(
+    Map<String, dynamic> data, {
+    bool throwOnError = false,
+  }) async {
     try {
       await _apiClient.dio.post('/api/offers', data: data);
       return true;
     } catch (e) {
+      if (throwOnError) rethrow;
       // ignore: avoid_print
       print('createOffer failed: $e');
       return false;
@@ -63,11 +70,18 @@ class OfferService {
   }
 
   /// PUT /api/offers/{id} — Update offer (Admin)
-  Future<bool> updateOffer(int id, Map<String, dynamic> data) async {
+  ///
+  /// Set [throwOnError] to true when UI needs backend validation details.
+  Future<bool> updateOffer(
+    int id,
+    Map<String, dynamic> data, {
+    bool throwOnError = false,
+  }) async {
     try {
       await _apiClient.dio.put('/api/offers/$id', data: data);
       return true;
     } catch (e) {
+      if (throwOnError) rethrow;
       // ignore: avoid_print
       print('updateOffer failed: $e');
       return false;
@@ -87,7 +101,8 @@ class OfferService {
   /// PUT /api/offers/{id}/status?status=APPROVED — Update status (Admin)
   Future<bool> updateStatus(int id, String status) async {
     try {
-      await _apiClient.dio.put('/api/offers/$id/status', queryParameters: {'status': status});
+      await _apiClient.dio
+          .put('/api/offers/$id/status', queryParameters: {'status': status});
       return true;
     } catch (_) {
       return false;
@@ -101,9 +116,12 @@ class OfferService {
   Future<bool> rejectOffer(int id) => updateStatus(id, 'REJECTED');
 
   List<Map<String, dynamic>> _extract(dynamic data) {
-    if (data is List) return data.map((e) => Map<String, dynamic>.from(e)).toList();
+    if (data is List)
+      return data.map((e) => Map<String, dynamic>.from(e)).toList();
     if (data is Map && data['content'] is List) {
-      return (data['content'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
+      return (data['content'] as List)
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
     }
     return [];
   }

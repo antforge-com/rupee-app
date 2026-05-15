@@ -19,8 +19,7 @@ class SubscriptionPlansPanel extends StatefulWidget {
   const SubscriptionPlansPanel({super.key});
 
   @override
-  State<SubscriptionPlansPanel> createState() =>
-      _SubscriptionPlansPanelState();
+  State<SubscriptionPlansPanel> createState() => _SubscriptionPlansPanelState();
 }
 
 class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
@@ -39,7 +38,7 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
 
   String _formError = '';
   bool _formSubmitting = false;
-  
+
   late ComprehensiveApiService _apiService;
 
   @override
@@ -167,9 +166,9 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
   String _formatIndianCurrency(int amount) {
     if (amount == 0) return 'Free';
     return '₹${amount.toStringAsFixed(0).replaceAllMapped(
-      RegExp(r'(\d)(?=(\d{2})+(?!\d))'),
-      (match) => '${match.group(1)},',
-    )}';
+          RegExp(r'(\d)(?=(\d{2})+(?!\d))'),
+          (match) => '${match.group(1)},',
+        )}';
   }
 
   @override
@@ -322,16 +321,14 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
                       mainAxisSpacing: 20,
                     ),
                     itemCount: _plans.length,
-                    itemBuilder: (_, idx) =>
-                        _buildPlanCard(_plans[idx]),
+                    itemBuilder: (_, idx) => _buildPlanCard(_plans[idx]),
                   ),
               ],
             ),
           ),
 
           // Modal
-          if (_showModal)
-            _buildModal(),
+          if (_showModal) _buildModal(),
         ],
       ),
     );
@@ -367,7 +364,8 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    if (plan['tag'] != null && plan['tag'].toString().isNotEmpty)
+                    if (plan['tag'] != null &&
+                        plan['tag'].toString().isNotEmpty)
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 8,
@@ -451,7 +449,8 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
           const SizedBox(height: 16),
 
           // Features
-          if (plan['features'] != null && plan['features'].toString().isNotEmpty)
+          if (plan['features'] != null &&
+              plan['features'].toString().isNotEmpty)
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -489,8 +488,7 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
                                       feature,
                                       style: GoogleFonts.inter(
                                         fontSize: 13,
-                                        color:
-                                            AppColors.textSecondary,
+                                        color: AppColors.textSecondary,
                                       ),
                                     ),
                                   ),
@@ -532,7 +530,8 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
                 if (success && mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text('Plan "${plan['name']}" deleted successfully'),
+                      content:
+                          Text('Plan "${plan['name']}" deleted successfully'),
                       backgroundColor: Colors.green,
                     ),
                   );
@@ -576,16 +575,12 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
                 children: [
                   // Header
                   Padding(
-                    padding:
-                        const EdgeInsets.fromLTRB(24, 20, 12, 0),
+                    padding: const EdgeInsets.fromLTRB(24, 20, 12, 0),
                     child: Row(
-                      mainAxisAlignment:
-                          MainAxisAlignment.spaceBetween,
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          _editingPlan != null
-                              ? 'Edit Plan'
-                              : 'Add New Plan',
+                          _editingPlan != null ? 'Edit Plan' : 'Add New Plan',
                           style: GoogleFonts.inter(
                             fontSize: 18,
                             fontWeight: FontWeight.w800,
@@ -606,8 +601,7 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.all(24),
                       child: Column(
-                        crossAxisAlignment:
-                            CrossAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           if (_formError.isNotEmpty)
                             Container(
@@ -620,15 +614,13 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
                                 border: Border.all(
                                   color: const Color(0xFFFCA5A5),
                                 ),
-                                borderRadius:
-                                    BorderRadius.circular(8),
+                                borderRadius: BorderRadius.circular(8),
                               ),
                               child: Text(
                                 _formError,
                                 style: GoogleFonts.inter(
                                   fontSize: 13,
-                                  color:
-                                      const Color(0xFFB91C1C),
+                                  color: const Color(0xFFB91C1C),
                                 ),
                               ),
                             ),
@@ -647,20 +639,16 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
                               Expanded(
                                 child: _buildFormField(
                                   label: 'Original Price (₹) *',
-                                  controller:
-                                      _origPriceCtrl,
-                                  keyboardType:
-                                      TextInputType.number,
+                                  controller: _origPriceCtrl,
+                                  keyboardType: TextInputType.number,
                                 ),
                               ),
                               const SizedBox(width: 16),
                               Expanded(
                                 child: _buildFormField(
                                   label: 'Discount Price (₹) *',
-                                  controller:
-                                      _discPriceCtrl,
-                                  keyboardType:
-                                      TextInputType.number,
+                                  controller: _discPriceCtrl,
+                                  keyboardType: TextInputType.number,
                                 ),
                               ),
                             ],
@@ -679,8 +667,7 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
                           _buildFormField(
                             label: 'Features',
                             controller: _featuresCtrl,
-                            hint:
-                                'Separate features with a plus sign (+)',
+                            hint: 'Separate features with a plus sign (+)',
                             maxLines: 4,
                           ),
                         ],
@@ -694,8 +681,7 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
                   Padding(
                     padding: const EdgeInsets.all(16),
                     child: Row(
-                      mainAxisAlignment:
-                          MainAxisAlignment.end,
+                      mainAxisAlignment: MainAxisAlignment.end,
                       children: [
                         OutlinedButton(
                           onPressed: _closeModal,
@@ -703,48 +689,35 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
                             'Cancel',
                             style: GoogleFonts.inter(
                               fontSize: 13,
-                              fontWeight:
-                                  FontWeight.w700,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                         ),
                         const SizedBox(width: 12),
                         ElevatedButton(
-                          onPressed: _formSubmitting
-                              ? null
-                              : _handleSubmit,
-                          style:
-                              ElevatedButton.styleFrom(
-                            backgroundColor:
-                                AppColors.primary,
-                            foregroundColor:
-                                Colors.white,
+                          onPressed: _formSubmitting ? null : _handleSubmit,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
                           ),
                           child: _formSubmitting
                               ? const SizedBox(
                                   width: 14,
                                   height: 14,
-                                  child:
-                                      CircularProgressIndicator(
-                                    strokeWidth:
-                                        2,
-                                    valueColor:
-                                        AlwaysStoppedAnimation<
-                                            Color>(
-                                          Colors.white,
-                                        ),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white,
+                                    ),
                                   ),
                                 )
                               : Text(
-                                  _editingPlan !=
-                                          null
+                                  _editingPlan != null
                                       ? 'Save Changes'
                                       : 'Create Plan',
-                                  style: GoogleFonts
-                                      .inter(
+                                  style: GoogleFonts.inter(
                                     fontSize: 13,
-                                    fontWeight:
-                                        FontWeight.w700,
+                                    fontWeight: FontWeight.w700,
                                   ),
                                 ),
                         ),
@@ -764,8 +737,7 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
     required String label,
     required TextEditingController controller,
     String? hint,
-    TextInputType keyboardType =
-        TextInputType.text,
+    TextInputType keyboardType = TextInputType.text,
     int maxLines = 1,
   }) {
     return Column(
@@ -784,27 +756,25 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
           controller: controller,
           keyboardType: keyboardType,
           maxLines: maxLines,
+          style: const TextStyle(color: AppColors.textPrimary),
+          cursorColor: AppColors.primary,
           decoration: InputDecoration(
             hintText: hint,
             filled: true,
             fillColor: const Color(0xFFF8FAFC),
             border: OutlineInputBorder(
-              borderRadius:
-                  BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(8),
               borderSide: const BorderSide(
                 color: Color(0xFFCBD5E1),
               ),
             ),
-            enabledBorder:
-                OutlineInputBorder(
-              borderRadius:
-                  BorderRadius.circular(8),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
               borderSide: const BorderSide(
                 color: Color(0xFFCBD5E1),
               ),
             ),
-            contentPadding:
-                const EdgeInsets.symmetric(
+            contentPadding: const EdgeInsets.symmetric(
               horizontal: 12,
               vertical: 10,
             ),
@@ -814,4 +784,3 @@ class _SubscriptionPlansPanelState extends State<SubscriptionPlansPanel> {
     );
   }
 }
-

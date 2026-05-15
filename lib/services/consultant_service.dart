@@ -201,10 +201,64 @@ class ConsultantService {
 
   /// PUT /api/timeslots/{id} — Slot update karein (e.g. block/restore ke liye status change)
   Future<bool> updateTimeSlot(int slotId, Map<String, dynamic> data) async {
+    final normalized = Map<String, dynamic>.from(data);
+    if (normalized['status'] != null) {
+      normalized['status'] =
+          normalized['status'].toString().trim().toUpperCase();
+    }
+
     try {
-      await _apiClient.dio.put('/api/timeslots/$slotId', data: data);
+      // Fast path: if backend accepts partial updates, this succeeds directly.
+      await _apiClient.dio.put('/api/timeslots/$slotId', data: normalized);
       return true;
     } catch (e) {
+      // Fallback: Swagger TimeSlotRequest requires full payload fields.
+    }
+
+    try {
+      final slotRes = await _apiClient.dio.get('/api/timeslots/$slotId');
+      final slot = slotRes.data is Map
+          ? Map<String, dynamic>.from(slotRes.data as Map)
+          : <String, dynamic>{};
+      if (slot.isEmpty) return false;
+
+      final consultantId = (slot['consultantId'] as num?)?.toInt() ??
+          (slot['consultant'] is Map
+              ? (slot['consultant']['id'] as num?)?.toInt()
+              : null);
+      final masterTimeSlotId = (slot['masterTimeSlotId'] as num?)?.toInt() ??
+          (slot['masterTimeSlot'] is Map
+              ? (slot['masterTimeSlot']['id'] as num?)?.toInt()
+              : null);
+      final slotDate = (slot['slotDate'] ?? slot['date'])?.toString();
+      final durationMinutes = (slot['durationMinutes'] as num?)?.toInt() ??
+          (slot['duration'] as num?)?.toInt() ??
+          60;
+
+      if ((consultantId ?? 0) <= 0 ||
+          (masterTimeSlotId ?? 0) <= 0 ||
+          (slotDate == null || slotDate.trim().isEmpty)) {
+        return false;
+      }
+
+      final fullPayload = <String, dynamic>{
+        'consultantId': consultantId,
+        'slotDate': slotDate,
+        'masterTimeSlotId': masterTimeSlotId,
+        'durationMinutes': durationMinutes,
+        'status': normalized['status'] ??
+            slot['status']?.toString().trim().toUpperCase() ??
+            'AVAILABLE',
+      };
+
+      // Allow caller overrides without dropping required fields.
+      for (final entry in normalized.entries) {
+        if (entry.value != null) fullPayload[entry.key] = entry.value;
+      }
+
+      await _apiClient.dio.put('/api/timeslots/$slotId', data: fullPayload);
+      return true;
+    } catch (_) {
       return false;
     }
   }

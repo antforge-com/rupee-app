@@ -16,6 +16,7 @@
 import 'dart:async';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:js' as js;
+import 'package:js/js.dart';
 
 import 'razorpay_models.dart';
 
@@ -66,6 +67,88 @@ class RazorpayService {
       'name': 'Meet The Masters',
       'description': description,
       'order_id': razorpayOrderId,
+      'theme': {'color': '#2563EB'},
+      'prefill': prefillMap,
+      'handler': js.allowInterop((js.JsObject response) {
+        if (!completer.isCompleted) {
+          completer.complete(RazorpayResult(
+            paymentId: response['razorpay_payment_id']?.toString() ?? '',
+            orderId: response['razorpay_order_id']?.toString() ?? '',
+            signature: response['razorpay_signature']?.toString() ?? '',
+          ));
+        }
+      }),
+      'modal': {
+        'ondismiss': js.allowInterop(() {
+          if (!completer.isCompleted) {
+            completer.completeError('Payment cancelled by user.');
+          }
+        }),
+      },
+    });
+
+    try {
+      final razorpayConstructor = js.context['Razorpay'] as js.JsFunction;
+      final rzp = js.JsObject(razorpayConstructor, [options]);
+
+      rzp.callMethod('on', [
+        'payment.failed',
+        js.allowInterop((js.JsObject resp) {
+          if (!completer.isCompleted) {
+            String msg = 'Payment failed. Please try again.';
+            try {
+              final err = resp['error'];
+              if (err != null) {
+                msg = err['description']?.toString() ?? msg;
+              }
+            } catch (_) {}
+            completer.completeError(msg);
+          }
+        }),
+      ]);
+
+      rzp.callMethod('open');
+    } catch (e) {
+      if (!completer.isCompleted) {
+        completer.completeError(
+          'Razorpay failed to open. '
+          'Make sure your web/index.html <head> contains:\n'
+          '<script src="https://checkout.razorpay.com/v1/checkout.js"></script>',
+        );
+      }
+    }
+
+    return completer.future;
+  }
+
+  /// Opens Razorpay checkout without a pre-created order ID.
+  /// Used for direct subscription payments during registration.
+  Future<RazorpayResult> openDirectCheckout({
+    required double amount,
+    required String description,
+    String? prefillName,
+    String? prefillEmail,
+    String? prefillContact,
+  }) {
+    final completer = Completer<RazorpayResult>();
+
+    final prefillMap = <String, dynamic>{};
+    if (prefillName != null && prefillName.isNotEmpty) {
+      prefillMap['name'] = prefillName;
+    }
+    if (prefillEmail != null && prefillEmail.isNotEmpty) {
+      prefillMap['email'] = prefillEmail;
+    }
+    if (prefillContact != null && prefillContact.isNotEmpty) {
+      prefillMap['contact'] = prefillContact;
+    }
+
+    final options = js.JsObject.jsify({
+      'key': razorpayKeyId,
+      'amount': (amount * 100).round(),
+      'currency': 'INR',
+      'name': 'Meet The Masters',
+      'description': description,
       'theme': {'color': '#2563EB'},
       'prefill': prefillMap,
       'handler': js.allowInterop((js.JsObject response) {

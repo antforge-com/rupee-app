@@ -15,10 +15,10 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'app_theme.dart';
+import 'app_runtime_flags.dart';
 import 'meet_the_masters_brand.dart';
 import 'package:finadvise/services/services.dart';
-import 'services/onboarding_service.dart';
-import 'services/subscription_service.dart';
+import 'services/razorpay_service.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -31,6 +31,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final AuthService _auth = AuthService();
   final OnboardingService _onboarding = OnboardingService();
   final SubscriptionService _subSvc = SubscriptionService();
+  final RazorpayService _razorpay = RazorpayService();
 
   // Form controllers
   final _nameCtrl = TextEditingController();
@@ -65,6 +66,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
   List<Map<String, dynamic>> _plans = [];
   bool _plansLoading = true;
   Map<String, dynamic>? _selectedPlan;
+  int? _paidPlanId;
+  double _paidPlanAmount = 0;
+  String? _paidPlanPaymentId;
 
   @override
   void initState() {
@@ -84,11 +88,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
     for (final c in _otpCtrl) c.dispose();
     for (final f in _otpFocus) f.dispose();
     _resendCountdown?.cancel();
+    _razorpay.dispose();
     super.dispose();
   }
 
-  bool _isFree(Map<String, dynamic> plan) =>
-      (plan['discountPrice'] ?? 0) == 0;
+  bool _isFree(Map<String, dynamic> plan) => (plan['discountPrice'] ?? 0) == 0;
 
   String _planDisplayName(Map<String, dynamic> plan) {
     if (_isFree(plan)) return 'Guest';
@@ -104,11 +108,82 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return amount.toStringAsFixed(2);
   }
 
+  double _planAmount(Map<String, dynamic> plan) =>
+      double.tryParse(
+          '${plan['discountPrice'] ?? plan['originalPrice'] ?? 0}') ??
+      0;
+
+  bool _isPaidPlan(Map<String, dynamic>? plan) =>
+      plan != null && !_isFree(plan) && _planAmount(plan) > 0;
+
+  void _resetPlanPayment() {
+    _paidPlanId = null;
+    _paidPlanAmount = 0;
+    _paidPlanPaymentId = null;
+  }
+
+  bool _hasPaidForPlan(Map<String, dynamic> plan) {
+    final planId = (plan['id'] as num?)?.toInt();
+    final amount = _planAmount(plan);
+    return planId != null &&
+        _paidPlanId == planId &&
+        _paidPlanAmount == amount &&
+        (_paidPlanPaymentId ?? '').isNotEmpty;
+  }
+
+  Future<bool> _ensureSubscriptionPayment() async {
+    if (kBypassPaymentsForNow) {
+      if (mounted) {
+        setState(() {
+          _apiError = '';
+          _resetPlanPayment();
+        });
+      }
+      return true;
+    }
+
+    final plan = _selectedPlan;
+    if (!_isPaidPlan(plan)) return true;
+    if (plan == null) return false;
+    if (_hasPaidForPlan(plan)) return true;
+
+    final amount = _planAmount(plan);
+    final phone = _mobileCtrl.text.replaceAll(RegExp(r'\D'), '');
+    try {
+      final result = await _razorpay.openDirectCheckout(
+        amount: amount,
+        description: 'Subscription - ${_planDisplayName(plan)}',
+        prefillName: _nameCtrl.text.trim(),
+        prefillEmail: _emailCtrl.text.trim().toLowerCase(),
+        prefillContact: phone.isNotEmpty ? phone : null,
+      );
+
+      if (!mounted) return false;
+      setState(() {
+        _paidPlanId = (plan['id'] as num?)?.toInt();
+        _paidPlanAmount = amount;
+        _paidPlanPaymentId = result.paymentId;
+        _apiError = '';
+      });
+      return true;
+    } catch (e) {
+      if (!mounted) return false;
+      final msg = e.toString().replaceFirst('Exception: ', '').trim();
+      setState(() {
+        _apiError = msg.isNotEmpty
+            ? msg
+            : 'Payment was not completed. Please try again.';
+      });
+      return false;
+    }
+  }
+
   void _normalizeMobilePrefill() {
     final raw = _mobileCtrl.text.trim();
     if (raw.isEmpty) return;
     final digits = raw.replaceAll(RegExp(r'\D'), '');
-    if (digits == '0') {
+    // Clear if starts with 0-5 (invalid Indian mobile)
+    if (digits.isNotEmpty && !RegExp(r'^[6-9]').hasMatch(digits)) {
       _mobileCtrl.clear();
       return;
     }
@@ -129,6 +204,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           (p) => !_isFree(p),
           orElse: () => plans.isNotEmpty ? plans[0] : {},
         );
+        _resetPlanPayment();
       });
     } catch (_) {
     } finally {
@@ -140,10 +216,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
     setState(() => _resendTimer = 60);
     _resendCountdown?.cancel();
     _resendCountdown = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) { t.cancel(); return; }
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
       setState(() {
-        if (_resendTimer <= 1) { _resendTimer = 0; t.cancel(); }
-        else _resendTimer--;
+        if (_resendTimer <= 1) {
+          _resendTimer = 0;
+          t.cancel();
+        } else
+          _resendTimer--;
       });
     });
   }
@@ -165,10 +247,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Future<void> _handleSendEmailOtp() async {
     final email = _emailCtrl.text.trim().toLowerCase();
     if (email.isEmpty || !RegExp(r'^[^@]+@[^@]+\.[^@]+$').hasMatch(email)) {
-      setState(() => _errors = {..._errors, 'email': 'Enter a valid email address first'});
+      setState(() =>
+          _errors = {..._errors, 'email': 'Enter a valid email address first'});
       return;
     }
-    setState(() { _sendingOtp = true; _sendOtpError = ''; _errors = {..._errors, 'email': ''}; });
+    setState(() {
+      _sendingOtp = true;
+      _sendOtpError = '';
+      _errors = {..._errors, 'email': ''};
+    });
     try {
       final mobile = _mobileCtrl.text.replaceAll(RegExp(r'\D'), '');
       final result = await _auth.sendRegistrationOtp(
@@ -184,18 +271,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
         _otpBoxVisible = true;
       });
       _startResendTimer();
-      Future.delayed(const Duration(milliseconds: 80),
-          () => _otpFocus[0].requestFocus());
+      Future.delayed(
+          const Duration(milliseconds: 80), () => _otpFocus[0].requestFocus());
     } catch (e) {
       final msg = e.toString().replaceFirst('Exception: ', '').toLowerCase();
-      if (msg.contains('already') || msg.contains('registered') ||
-          msg.contains('exist') || msg.contains('duplicate')) {
+      if (msg.contains('already') ||
+          msg.contains('registered') ||
+          msg.contains('exist') ||
+          msg.contains('duplicate')) {
         setState(() => _errors = {
-          ..._errors,
-          'email': 'This email is already registered. Please log in instead.'
-        });
+              ..._errors,
+              'email':
+                  'This email is already registered. Please log in instead.'
+            });
       } else {
-        setState(() => _sendOtpError = e.toString().replaceFirst('Exception: ', ''));
+        setState(
+            () => _sendOtpError = e.toString().replaceFirst('Exception: ', ''));
       }
     } finally {
       if (mounted) setState(() => _sendingOtp = false);
@@ -206,7 +297,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final digit = value.replaceAll(RegExp(r'\D'), '');
     final next = [..._otp];
     next[index] = digit.isNotEmpty ? digit[digit.length - 1] : '';
-    setState(() { _otp = next; _otpError = ''; });
+    setState(() {
+      _otp = next;
+      _otpError = '';
+    });
     if (digit.isNotEmpty && index < 5) {
       _otpFocus[index + 1].requestFocus();
     }
@@ -218,7 +312,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       setState(() => _otpError = 'Enter the complete 6-digit OTP.');
       return;
     }
-    setState(() { _verifyingOtp = true; _otpError = ''; });
+    setState(() {
+      _verifyingOtp = true;
+      _otpError = '';
+    });
     try {
       final result = await _auth.checkOtp(
         email: _emailCtrl.text.trim().toLowerCase(),
@@ -254,20 +351,29 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final email = _emailCtrl.text.trim().toLowerCase();
     final location = _locationCtrl.text.trim();
 
-    if (name.isEmpty) errs['name'] = 'Full name is required';
-    else if (RegExp(r'^\d').hasMatch(name)) errs['name'] = 'Full name cannot start with a number';
+    if (name.isEmpty)
+      errs['name'] = 'Full name is required';
+    else if (RegExp(r'^\d').hasMatch(name))
+      errs['name'] = 'Full name cannot start with a number';
     else if (name.length < 2) errs['name'] = 'Enter your full name';
 
-    if (mobile.isEmpty) errs['mobile'] = 'Mobile number is required';
-    else if (!RegExp(r'^[6-9]\d{9}$').hasMatch(mobile)) errs['mobile'] = 'Enter a valid 10-digit mobile number';
+    if (mobile.isEmpty)
+      errs['mobile'] = 'Mobile number is required';
+    else if (!RegExp(r'^[6-9]\d{9}$').hasMatch(mobile))
+      errs['mobile'] = 'Enter a valid 10-digit mobile number';
 
-    if (email.isEmpty) errs['email'] = 'Email is required';
-    else if (!RegExp(r'^[^@]+@[^@]+\.[^@]+$').hasMatch(email)) errs['email'] = 'Enter a valid email address';
+    if (email.isEmpty)
+      errs['email'] = 'Email is required';
+    else if (!RegExp(r'^[^@]+@[^@]+\.[^@]+$').hasMatch(email))
+      errs['email'] = 'Enter a valid email address';
 
-    if (location.isNotEmpty && RegExp(r'^\d').hasMatch(location)) errs['location'] = 'Location cannot start with a number';
-    if (location.isNotEmpty && location.length < 2) errs['location'] = 'Enter a valid location';
+    if (location.isNotEmpty && RegExp(r'^\d').hasMatch(location))
+      errs['location'] = 'Location cannot start with a number';
+    if (location.isNotEmpty && location.length < 2)
+      errs['location'] = 'Enter a valid location';
 
-    if (_selectedPlan == null) errs['plan'] = 'Please select a subscription plan';
+    if (_selectedPlan == null)
+      errs['plan'] = 'Please select a subscription plan';
 
     setState(() => _errors = errs);
     return errs.isEmpty;
@@ -283,14 +389,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
     if (!_validate()) return;
 
-    setState(() { _submitting = true; _apiError = ''; });
+    setState(() {
+      _submitting = true;
+      _apiError = '';
+    });
 
     try {
+      if (!await _ensureSubscriptionPayment()) return;
+
       final mobile = _mobileCtrl.text.replaceAll(RegExp(r'\D'), '');
       final email = _emailCtrl.text.trim().toLowerCase();
-      final planId = _selectedPlan != null && !_isFree(_selectedPlan!)
-          ? _selectedPlan!['id'] as int?
-          : null;
+      final paidPlanSelected = _isPaidPlan(_selectedPlan);
+      final usePaidPlan = !kBypassPaymentsForNow && paidPlanSelected;
+      final planId =
+          usePaidPlan ? (_selectedPlan!['id'] as num?)?.toInt() : null;
 
       final result = await _onboarding.register(
         name: _nameCtrl.text.trim().replaceAll(RegExp(r'\s+'), ' '),
@@ -300,19 +412,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
         location: _locationCtrl.text.trim().isNotEmpty
             ? _locationCtrl.text.trim()
             : null,
-        subscribed: _selectedPlan != null && !_isFree(_selectedPlan!),
+        subscribed: usePaidPlan,
         subscriptionPlanId: planId,
       );
 
-      if (result == null) throw Exception('Registration failed. Please try again.');
+      if (result == null) {
+        throw Exception('Registration failed. Please try again.');
+      }
 
       setState(() => _success = true);
       await Future.delayed(const Duration(milliseconds: 2500));
       if (mounted) Navigator.pushReplacementNamed(context, '/login');
     } catch (e) {
       final raw = e.toString().toLowerCase();
-      if (raw.contains('otp') || raw.contains('expired') ||
-          raw.contains('invalid') || raw.contains('incorrect')) {
+      if (raw.contains('otp') ||
+          raw.contains('expired') ||
+          raw.contains('invalid') ||
+          raw.contains('incorrect')) {
         setState(() {
           _emailVerified = false;
           _otpBoxVisible = true;
@@ -326,7 +442,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
         Future.delayed(const Duration(milliseconds: 80),
             () => _otpFocus[0].requestFocus());
       } else {
-        setState(() => _apiError = e.toString().replaceFirst('Exception: ', ''));
+        setState(
+            () => _apiError = e.toString().replaceFirst('Exception: ', ''));
       }
     } finally {
       if (mounted) setState(() => _submitting = false);
@@ -455,7 +572,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
           const SizedBox(height: 6),
           TextField(
             controller: _nameCtrl,
-            onChanged: (_) => setState(() => _errors = {..._errors, 'name': ''}),
+            onChanged: (_) =>
+                setState(() => _errors = {..._errors, 'name': ''}),
             textCapitalization: TextCapitalization.words,
             decoration: _inputDeco(
               hint: 'Enter your full name',
@@ -471,15 +589,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                 decoration: BoxDecoration(
                   color: const Color(0xFFF8FAFC),
                   border: Border(
                     top: const BorderSide(color: Color(0xFFE2E8F0), width: 1.5),
-                    bottom: const BorderSide(color: Color(0xFFE2E8F0), width: 1.5),
-                    left: const BorderSide(color: Color(0xFFE2E8F0), width: 1.5),
+                    bottom:
+                        const BorderSide(color: Color(0xFFE2E8F0), width: 1.5),
+                    left:
+                        const BorderSide(color: Color(0xFFE2E8F0), width: 1.5),
                   ),
-                  borderRadius: const BorderRadius.horizontal(left: Radius.circular(10)),
+                  borderRadius:
+                      const BorderRadius.horizontal(left: Radius.circular(10)),
                 ),
                 child: Text('+91',
                     style: GoogleFonts.inter(
@@ -496,14 +618,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     LengthLimitingTextInputFormatter(10),
                   ],
                   onChanged: (value) {
-                    if (value == '0') {
+                    final digits = value.replaceAll(RegExp(r'\D'), '');
+                    // First digit must be 6-9 (Indian mobile numbers)
+                    if (digits.isNotEmpty &&
+                        !RegExp(r'^[6-9]').hasMatch(digits)) {
                       _mobileCtrl.clear();
                       return;
                     }
                     setState(() => _errors = {..._errors, 'mobile': ''});
                   },
                   decoration: _inputDeco(
-                    hint: '10-digit mobile number',
+                    hint: 'Start with 6-9 (10 digits)',
                     hasError: (_errors['mobile'] ?? '').isNotEmpty,
                     borderRadius: const BorderRadius.horizontal(
                         right: Radius.circular(10)),
@@ -512,15 +637,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
               ),
             ],
           ),
-          if (mobile.isNotEmpty && mobile.length < 10 && (_errors['mobile'] ?? '').isEmpty)
+          if (mobile.isNotEmpty &&
+              mobile.length < 10 &&
+              (_errors['mobile'] ?? '').isEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Row(
                 children: [
-                  const Icon(Icons.warning_amber_rounded, size: 12, color: Color(0xFFD97706)),
+                  const Icon(Icons.warning_amber_rounded,
+                      size: 12, color: Color(0xFFD97706)),
                   const SizedBox(width: 4),
-                  Text('Enter ${10 - mobile.length} more digit${10 - mobile.length != 1 ? 's' : ''}',
-                      style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFFD97706), fontWeight: FontWeight.w600)),
+                  Text(
+                      'Enter ${10 - mobile.length} more digit${10 - mobile.length != 1 ? 's' : ''}',
+                      style: GoogleFonts.inter(
+                          fontSize: 11,
+                          color: const Color(0xFFD97706),
+                          fontWeight: FontWeight.w600)),
                 ],
               ),
             ),
@@ -529,14 +661,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
               padding: const EdgeInsets.only(top: 4),
               child: Row(
                 children: [
-                  const Icon(Icons.check_circle, size: 12, color: Color(0xFF16A34A)),
+                  const Icon(Icons.check_circle,
+                      size: 12, color: Color(0xFF16A34A)),
                   const SizedBox(width: 4),
                   Text('Valid mobile number',
-                      style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF16A34A), fontWeight: FontWeight.w600)),
+                      style: GoogleFonts.inter(
+                          fontSize: 11,
+                          color: const Color(0xFF16A34A),
+                          fontWeight: FontWeight.w600)),
                 ],
               ),
             ),
-          if ((_errors['mobile'] ?? '').isNotEmpty) _fieldError(_errors['mobile']!),
+          if ((_errors['mobile'] ?? '').isNotEmpty)
+            _fieldError(_errors['mobile']!),
           const SizedBox(height: 16),
 
           // Email + OTP
@@ -596,8 +733,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                     color: Colors.white, strokeWidth: 2))
                             : Text(_otpBoxVisible ? 'Resend' : 'Send OTP',
                                 style: GoogleFonts.inter(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w700)),
+                                    fontSize: 13, fontWeight: FontWeight.w700)),
                       ),
                     );
 
@@ -643,13 +779,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
               );
             },
           ),
-          if ((_errors['email'] ?? '').isNotEmpty) _fieldError(_errors['email']!),
+          if ((_errors['email'] ?? '').isNotEmpty)
+            _fieldError(_errors['email']!),
           if (_emailVerified)
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text(
                 'The OTP will be checked when you create the account.',
-                style: GoogleFonts.inter(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w600),
+                style: GoogleFonts.inter(
+                    fontSize: 11,
+                    color: AppColors.textSecondary,
+                    fontWeight: FontWeight.w600),
               ),
             ),
 
@@ -666,12 +806,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
           TextField(
             controller: _locationCtrl,
             textCapitalization: TextCapitalization.words,
-            onChanged: (_) => setState(() => _errors = {..._errors, 'location': ''}),
+            onChanged: (_) =>
+                setState(() => _errors = {..._errors, 'location': ''}),
             decoration: _inputDeco(hint: 'City, State').copyWith(
-              prefixIcon: const Icon(Icons.location_on_outlined, size: 18, color: Color(0xFF94A3B8)),
+              prefixIcon: const Icon(Icons.location_on_outlined,
+                  size: 18, color: Color(0xFF94A3B8)),
             ),
           ),
-          if ((_errors['location'] ?? '').isNotEmpty) _fieldError(_errors['location']!),
+          if ((_errors['location'] ?? '').isNotEmpty)
+            _fieldError(_errors['location']!),
         ],
       ),
     );
@@ -696,7 +839,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   children: [
                     Row(
                       children: [
-                        const Icon(Icons.mail_outline, size: 16, color: Color(0xFF2563EB)),
+                        const Icon(Icons.mail_outline,
+                            size: 16, color: Color(0xFF2563EB)),
                         const SizedBox(width: 6),
                         Text('Verify Email',
                             style: GoogleFonts.inter(
@@ -713,7 +857,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
               ),
               GestureDetector(
                 onTap: () => setState(() => _otpBoxVisible = false),
-                child: const Icon(Icons.close, size: 18, color: Color(0xFF64748B)),
+                child:
+                    const Icon(Icons.close, size: 18, color: Color(0xFF64748B)),
               ),
             ],
           ),
@@ -735,8 +880,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           textAlign: TextAlign.center,
                           keyboardType: TextInputType.number,
                           maxLength: 1,
-                          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                          style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.w800),
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly
+                          ],
+                          style: GoogleFonts.inter(
+                              fontSize: 20, fontWeight: FontWeight.w800),
                           onChanged: (val) => _handleOtpDigitChange(i, val),
                           onSubmitted: (_) {
                             if (i < 5) _otpFocus[i + 1].requestFocus();
@@ -746,15 +894,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             contentPadding: EdgeInsets.zero,
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 1.5),
+                              borderSide: const BorderSide(
+                                  color: Color(0xFFE2E8F0), width: 1.5),
                             ),
                             enabledBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 1.5),
+                              borderSide: const BorderSide(
+                                  color: Color(0xFFE2E8F0), width: 1.5),
                             ),
                             focusedBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(8),
-                              borderSide: BorderSide(color: AppColors.primaryLight, width: 1.5),
+                              borderSide: BorderSide(
+                                  color: AppColors.primaryLight, width: 1.5),
                             ),
                           ),
                         ),
@@ -786,7 +937,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 elevation: 0,
               ),
               child: Text(_verifyingOtp ? 'Saving OTP...' : 'Use OTP',
-                  style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w700)),
+                  style: GoogleFonts.inter(
+                      fontSize: 14, fontWeight: FontWeight.w700)),
             ),
           ),
           const SizedBox(height: 8),
@@ -794,20 +946,24 @@ class _RegisterScreenState extends State<RegisterScreen> {
           Center(
             child: _resendTimer > 0
                 ? Text('Resend in ${_resendTimer}s',
-                    style: GoogleFonts.inter(fontSize: 12, color: AppColors.textSecondary))
+                    style: GoogleFonts.inter(
+                        fontSize: 12, color: AppColors.textSecondary))
                 : TextButton(
-                    onPressed: _resending ? null : () async {
-                      setState(() => _resending = true);
-                      await _handleSendEmailOtp();
-                      setState(() => _resending = false);
-                    },
+                    onPressed: _resending
+                        ? null
+                        : () async {
+                            setState(() => _resending = true);
+                            await _handleSendEmailOtp();
+                            setState(() => _resending = false);
+                          },
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         const Icon(Icons.refresh, size: 12),
                         const SizedBox(width: 4),
                         Text('Resend OTP',
-                            style: GoogleFonts.inter(fontSize: 12, color: AppColors.primaryLight)),
+                            style: GoogleFonts.inter(
+                                fontSize: 12, color: AppColors.primaryLight)),
                       ],
                     ),
                   ),
@@ -829,10 +985,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
         children: [
           Row(
             children: [
-              const Icon(Icons.shield_outlined, size: 20, color: Color(0xFF2563EB)),
+              const Icon(Icons.shield_outlined,
+                  size: 20, color: Color(0xFF2563EB)),
               const SizedBox(width: 8),
               Text('Subscription Plan',
-                  style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w800)),
+                  style: GoogleFonts.inter(
+                      fontSize: 15, fontWeight: FontWeight.w800)),
             ],
           ),
           const SizedBox(height: 16),
@@ -935,11 +1093,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget _buildPlanCard(Map<String, dynamic> plan) {
     final isSelected = _selectedPlan?['id'] == plan['id'];
     final isFree = _isFree(plan);
-    final activeColor = isFree ? const Color(0xFF16A34A) : AppColors.primaryLight;
+    final activeColor =
+        isFree ? const Color(0xFF16A34A) : AppColors.primaryLight;
     final activeBg = isFree ? const Color(0xFFF0FDF4) : const Color(0xFFEFF6FF);
 
     return GestureDetector(
-      onTap: () => setState(() => _selectedPlan = plan),
+      onTap: () => setState(() {
+        if (_selectedPlan?['id'] != plan['id']) {
+          _resetPlanPayment();
+        }
+        _selectedPlan = plan;
+      }),
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(18),
@@ -951,7 +1115,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ),
           borderRadius: BorderRadius.circular(14),
           boxShadow: isSelected
-              ? [BoxShadow(color: activeColor.withOpacity(0.15), blurRadius: 20)]
+              ? [
+                  BoxShadow(
+                      color: activeColor.withOpacity(0.15), blurRadius: 20)
+                ]
               : [const BoxShadow(color: Color(0x0A000000), blurRadius: 4)],
         ),
         child: Row(
@@ -966,17 +1133,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           style: GoogleFonts.inter(
                               fontSize: 18,
                               fontWeight: FontWeight.w800,
-                              color: isSelected ? activeColor : const Color(0xFF0F172A))),
+                              color: isSelected
+                                  ? activeColor
+                                  : const Color(0xFF0F172A))),
                       if (!isFree) ...[
                         const SizedBox(width: 8),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
                           decoration: BoxDecoration(
                             color: const Color(0xFFDCFCE7),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: const Text('PREMIUM',
-                              style: TextStyle(fontSize: 9, color: Color(0xFF16A34A), fontWeight: FontWeight.w700)),
+                              style: TextStyle(
+                                  fontSize: 9,
+                                  color: Color(0xFF16A34A),
+                                  fontWeight: FontWeight.w700)),
                         ),
                       ],
                     ],
@@ -985,7 +1158,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Text(plan['tag'],
-                          style: GoogleFonts.inter(fontSize: 12, color: AppColors.textSecondary)),
+                          style: GoogleFonts.inter(
+                              fontSize: 12, color: AppColors.textSecondary)),
                     ),
                 ],
               ),
@@ -994,7 +1168,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  isFree ? 'Free' : 'Rs ${_formatPlanAmount(plan['discountPrice'])}',
+                  isFree
+                      ? 'Free'
+                      : 'Rs ${_formatPlanAmount(plan['discountPrice'])}',
                   style: GoogleFonts.inter(
                       fontSize: 20,
                       fontWeight: FontWeight.w900,
@@ -1041,7 +1217,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
           Expanded(
             child: Text(
               'Your login credentials will be sent to your email after registration.',
-              style: GoogleFonts.inter(fontSize: 13, color: const Color(0xFF166534)),
+              style: GoogleFonts.inter(
+                  fontSize: 13, color: const Color(0xFF166534)),
             ),
           ),
         ],
@@ -1057,8 +1234,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
     } else if (!_emailVerified) {
       label = 'Enter OTP to Continue';
     } else if (!isFree && _selectedPlan != null) {
-      label =
-          'Subscribe & Register (Rs ${_formatPlanAmount(_selectedPlan!['discountPrice'])})';
+      label = kBypassPaymentsForNow
+          ? 'Register Now (Payment Disabled)'
+          : 'Subscribe & Register (Rs ${_formatPlanAmount(_selectedPlan!['discountPrice'])})';
     } else {
       label = 'Create Guest Account';
     }
@@ -1108,7 +1286,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   Widget _buildSuccessOverlay() {
-    final isFree = _selectedPlan != null && _isFree(_selectedPlan!);
+    final isFree = kBypassPaymentsForNow ||
+        (_selectedPlan != null && _isFree(_selectedPlan!));
     return Container(
       color: Colors.black54,
       child: Center(
@@ -1156,7 +1335,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
-  Widget _sectionLabel(String text, {bool required = false, bool optional = false}) {
+  Widget _sectionLabel(String text,
+      {bool required = false, bool optional = false}) {
     return Row(
       children: [
         Text(text,
@@ -1166,10 +1346,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 color: const Color(0xFF64748B),
                 letterSpacing: 0.5)),
         if (required)
-          const Text(' *', style: TextStyle(color: Color(0xFFEF4444), fontSize: 11)),
+          const Text(' *',
+              style: TextStyle(color: Color(0xFFEF4444), fontSize: 11)),
         if (optional)
           Text(' (Optional)',
-              style: GoogleFonts.inter(fontSize: 11, color: AppColors.textSecondary)),
+              style: GoogleFonts.inter(
+                  fontSize: 11, color: AppColors.textSecondary)),
       ],
     );
   }
@@ -1211,7 +1393,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
         padding: const EdgeInsets.only(top: 4),
         child: Row(
           children: [
-            const Icon(Icons.warning_amber_rounded, size: 14, color: Color(0xFFEF4444)),
+            const Icon(Icons.warning_amber_rounded,
+                size: 14, color: Color(0xFFEF4444)),
             const SizedBox(width: 4),
             Expanded(
                 child: Text(msg,

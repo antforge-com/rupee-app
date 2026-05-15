@@ -443,32 +443,87 @@ class Booking {
 
     String? extractSlotDate(Map<String, dynamic> j) {
       final direct = j['slotDate'] ??
+          j['slot_date'] ??
           j['date'] ??
           j['bookingDate'] ??
+          j['booking_date'] ??
           j['scheduledDate'] ??
           j['scheduled_date'] ??
+          j['timeSlotDate'] ??
+          j['time_slot_date'] ??
+          j['meetingDate'] ??
+          j['sessionDate'] ??
           j['preferredDate'] ??
           j['preferred_date'];
       if (direct != null) return direct.toString().trim();
+      final scheduledAt =
+          (j['scheduledAt'] ?? j['scheduled_at'] ?? '').toString().trim();
+      if (scheduledAt.isNotEmpty) {
+        final parsed = DateTime.tryParse(scheduledAt);
+        if (parsed != null) {
+          return parsed.toIso8601String().split('T').first;
+        }
+      }
       if (j['timeSlot'] is Map) {
-        return j['timeSlot']['slotDate']?.toString().trim();
+        return j['timeSlot']['slotDate']?.toString().trim() ??
+            j['timeSlot']['slot_date']?.toString().trim() ??
+            j['timeSlot']['date']?.toString().trim();
       }
       return null;
     }
 
     String? extractTimeRange(Map<String, dynamic> j) {
-      if (j['timeRange'] != null) return j['timeRange'];
-      if (j['scheduledTime'] != null) return j['scheduledTime'];
-      if (j['scheduled_time'] != null) return j['scheduled_time'];
-      if (j['preferredTimeRange'] != null) return j['preferredTimeRange'];
-      if (j['preferred_time_range'] != null) return j['preferred_time_range'];
-      if (j['slotTime'] != null) return j['slotTime'];
-      if (j['timeSlot'] is Map) {
-        return j['timeSlot']['timeRange'] ??
-            j['timeSlot']['slotTime'] ??
-            j['timeSlot']['startTime'];
+      String formatTimeValue(dynamic raw) {
+        final fromMap = _timeToMap(raw);
+        if (fromMap != null) {
+          final hour = (fromMap['hour'] as num?)?.toInt() ?? 0;
+          final minute = (fromMap['minute'] as num?)?.toInt() ?? 0;
+          final period = hour >= 12 ? 'PM' : 'AM';
+          final hour12 = hour % 12 == 0 ? 12 : hour % 12;
+          return '$hour12:${minute.toString().padLeft(2, '0')} $period';
+        }
+        return raw?.toString().trim() ?? '';
       }
-      return j['startTime'] ?? j['slotStartTime'];
+
+      String? mergeStartEnd(dynamic start, dynamic end) {
+        final s = formatTimeValue(start);
+        final e = formatTimeValue(end);
+        if (s.isNotEmpty && e.isNotEmpty) return '$s - $e';
+        if (s.isNotEmpty) return s;
+        return e.isNotEmpty ? e : null;
+      }
+
+      final directRange = _cleanNullableText(
+        j['timeRange'] ??
+            j['scheduledTimeRange'] ??
+            j['scheduled_time_range'] ??
+            j['preferredTimeRange'] ??
+            j['preferred_time_range'] ??
+            j['slotTime'] ??
+            j['slot_time'] ??
+            j['meetingTime'] ??
+            j['sessionTime'],
+      );
+      if (directRange != null) return directRange;
+
+      final startEnd = mergeStartEnd(
+        j['scheduledTime'] ?? j['scheduled_time'] ?? j['startTime'],
+        j['endTime'] ?? j['slotEndTime'],
+      );
+      if (startEnd != null) return startEnd;
+
+      if (j['timeSlot'] is Map) {
+        final slot = j['timeSlot'] as Map;
+        final slotRange = _cleanNullableText(
+          slot['timeRange'] ??
+              slot['scheduledTimeRange'] ??
+              slot['slotTime'] ??
+              slot['slot_time'],
+        );
+        if (slotRange != null) return slotRange;
+        return mergeStartEnd(slot['startTime'], slot['endTime']);
+      }
+      return _cleanNullableText(j['startTime'] ?? j['slotStartTime']);
     }
 
     return Booking(
@@ -838,7 +893,11 @@ class TicketComment {
             json['isInternal'] ??
             json['internal'] ??
             false,
-        createdAt: json['createdAt']?.toString(),
+        createdAt: (json['createdAt'] ??
+                json['timestamp'] ??
+                json['createdDate'] ??
+                json['date'])
+            ?.toString(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -850,6 +909,7 @@ class TicketComment {
         'authorRole': authorRole,
         'isConsultantReply': isConsultantReply,
         'createdAt': createdAt,
+        'timestamp': createdAt,
       };
 }
 
@@ -886,7 +946,11 @@ class TicketNote {
               json['consultantName'] ??
               json['author']?['name'],
         ),
-        createdAt: json['createdAt']?.toString(),
+        createdAt: (json['createdAt'] ??
+                json['timestamp'] ??
+                json['createdDate'] ??
+                json['date'])
+            ?.toString(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -895,6 +959,7 @@ class TicketNote {
         if (authorId != null) 'authorId': authorId,
         'authorName': authorName,
         'createdAt': createdAt,
+        'timestamp': createdAt,
         'noteText': content, // for backward compat in UI
       };
 }
@@ -1044,7 +1109,10 @@ bool _notificationIsRead(dynamic raw) {
   return value == 'true' ||
       value == '1' ||
       value == 'yes' ||
-      value == 'read';
+      value == 'read' ||
+      value == 'opened' ||
+      value == 'seen' ||
+      value == 'viewed';
 }
 
 class AppNotification {
@@ -1093,30 +1161,81 @@ class AppNotification {
         id: json['id'] is num
             ? (json['id'] as num).toInt()
             : int.tryParse('${json['id'] ?? 0}') ?? 0,
-        title: (json['title'] ?? '').toString().trim().isNotEmpty
-            ? json['title'].toString()
+        title: (json['title'] ??
+                    json['subject'] ??
+                    json['heading'] ??
+                    json['notificationTitle'] ??
+                    (json['data'] is Map
+                        ? (json['data']['title'] ??
+                            json['data']['subject'] ??
+                            json['data']['heading'])
+                        : null) ??
+                    '')
+                .toString()
+                .trim()
+                .isNotEmpty
+            ? (json['title'] ??
+                    json['subject'] ??
+                    json['heading'] ??
+                    json['notificationTitle'] ??
+                    (json['data'] is Map
+                        ? (json['data']['title'] ??
+                            json['data']['subject'] ??
+                            json['data']['heading'])
+                        : ''))
+                .toString()
             : _notificationTitle(
                 json['type']?.toString() ?? 'system', json['ticketId']),
-        body: (json['body'] ?? json['message'] ?? '').toString(),
+        body: (json['body'] ??
+                json['message'] ??
+                json['content'] ??
+                json['description'] ??
+                json['text'] ??
+                json['notificationMessage'] ??
+                (json['data'] is Map
+                    ? (json['data']['body'] ??
+                        json['data']['message'] ??
+                        json['data']['content'] ??
+                        json['data']['description'] ??
+                        json['data']['text'])
+                    : null) ??
+                '')
+            .toString(),
         type: json['type']?.toString() ?? 'system',
         isRead: _notificationIsRead(
-          json['isRead'] ?? json['read'] ?? json['status'],
+          json['isRead'] ??
+              json['read'] ??
+              json['opened'] ??
+              json['seen'] ??
+              json['viewed'] ??
+              json['status'],
         ),
-        createdAt: json['createdAt'] != null
-            ? DateTime.tryParse(json['createdAt'].toString()) ?? DateTime.now()
+        createdAt: (json['createdAt'] ??
+                    json['updatedAt'] ??
+                    json['timestamp'] ??
+                    json['createdOn']) !=
+                null
+            ? DateTime.tryParse((json['createdAt'] ??
+                        json['updatedAt'] ??
+                        json['timestamp'] ??
+                        json['createdOn'])
+                    .toString()) ??
+                DateTime.now()
             : DateTime.now(),
         data: json['data'] is Map
             ? Map<String, dynamic>.from(json['data'])
-            : {
-                if (json['ticketId'] != null)
-                  'ticketId': json['ticketId'] is num
-                      ? (json['ticketId'] as num).toInt()
-                      : int.tryParse('${json['ticketId']}'),
-                if (json['bookingId'] != null)
-                  'bookingId': json['bookingId'] is num
-                      ? (json['bookingId'] as num).toInt()
-                      : int.tryParse('${json['bookingId']}'),
-              },
+            : json['payload'] is Map
+                ? Map<String, dynamic>.from(json['payload'])
+                : {
+                    if (json['ticketId'] != null)
+                      'ticketId': json['ticketId'] is num
+                          ? (json['ticketId'] as num).toInt()
+                          : int.tryParse('${json['ticketId']}'),
+                    if (json['bookingId'] != null)
+                      'bookingId': json['bookingId'] is num
+                          ? (json['bookingId'] as num).toInt()
+                          : int.tryParse('${json['bookingId']}'),
+                  },
       );
 }
 

@@ -257,10 +257,22 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
   Map<int, String> _consultantNames = {};
 
   bool _loading = true;
-  bool _loadingMore = false;
-  int _page = 0;
-  bool _hasMore = true;
-  static const _pageSize = 20;
+  bool _paging = false; // page transition spinner
+  int _currentPage = 1; // 1-based current page
+  int _totalPages = 1;
+  int _totalElements = 0;
+  static const _pageSize = 10;
+  int _requestToken = 0; // cancel stale responses
+  final Map<int, List<Ticket>> _pageCache = {}; // pre-fetch cache
+
+  // ── Global KPI counts (fetched from server, not from current page) ────────
+  int _globalTotal = 0;
+  int _globalOpen = 0;
+  int _globalOverdue = 0;
+  int _globalEscalated = 0;
+  int _globalResolved = 0;
+  int _globalClosed = 0;
+  bool _statsLoaded = false;
 
   String _search = '';
   String _statusFilter = 'ALL';
@@ -274,6 +286,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
   Timer? _pollTimer;
   late final Map<String, GlobalKey> _headerActionKeys = {
     'refresh': GlobalKey(),
+    'email': GlobalKey(),
     'export': GlobalKey(),
     'new': GlobalKey(),
   };
@@ -307,19 +320,27 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
 
   // â”€â”€â”€ KPI computed (web-exact formulas) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  int get _total => _all.length;
-  int get _openCount => _all
-      .where((t) => ['NEW', 'OPEN', 'IN_PROGRESS', 'PENDING']
-          .contains(t.status.toUpperCase()))
-      .length;
-  int get _overdueCount => _all.where(_isOverdue).length;
+  // ── KPI computed (uses global server totals when available) ─────────────
+
+  int get _total => _statsLoaded ? _globalTotal : _totalElements;
+  int get _openCount => _statsLoaded
+      ? _globalOpen
+      : _all
+          .where((t) => ['NEW', 'OPEN', 'IN_PROGRESS', 'PENDING']
+              .contains(t.status.toUpperCase()))
+          .length;
+  int get _overdueCount =>
+      _statsLoaded ? _globalOverdue : _all.where(_isOverdue).length;
 
   /// Web: status=="ESCALATED" || isEscalated==true
-  int get _escalatedCount => _all.where(_isEscalated).length;
-  int get _resolvedCount =>
-      _all.where((t) => t.status.toUpperCase() == 'RESOLVED').length;
-  int get _closedCount =>
-      _all.where((t) => t.status.toUpperCase() == 'CLOSED').length;
+  int get _escalatedCount =>
+      _statsLoaded ? _globalEscalated : _all.where(_isEscalated).length;
+  int get _resolvedCount => _statsLoaded
+      ? _globalResolved
+      : _all.where((t) => t.status.toUpperCase() == 'RESOLVED').length;
+  int get _closedCount => _statsLoaded
+      ? _globalClosed
+      : _all.where((t) => t.status.toUpperCase() == 'CLOSED').length;
   int get _resolvedToday {
     final now = DateTime.now();
     return _all.where((t) {
@@ -477,13 +498,113 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
   @override
   void initState() {
     super.initState();
-    _scrollCtrl.addListener(_onScroll);
-    _loadData(reset: true);
+    _loadData(page: 1);
+    _fetchGlobalStats();
     _checkEmail();
     _pollTimer = Timer.periodic(
-      const Duration(seconds: 15),
-      (_) => _loadData(reset: true, silent: true),
+      const Duration(seconds: 30),
+      (_) {
+        _loadData(page: _currentPage, silent: true);
+        _fetchGlobalStats();
+      },
     );
+  }
+
+  /// Fetches real total counts from the server for all statuses.
+  /// Tries analytics endpoint first, then falls back to paginated totalElements.
+  Future<void> _fetchGlobalStats() async {
+    try {
+      // 1. Try analytics endpoint for status breakdown
+      try {
+        final analyticsResp =
+            await ApiClient().dio.get('/api/analytics/tickets');
+        final data = analyticsResp.data;
+        if (data is Map) {
+          final total = _toInt(data['totalTickets'] ?? data['total'] ?? 0);
+          final open =
+              _toInt(data['openTickets'] ?? data['open'] ?? data['OPEN'] ?? 0);
+          final resolved = _toInt(data['resolvedTickets'] ??
+              data['resolved'] ??
+              data['RESOLVED'] ??
+              0);
+          final escalated = _toInt(data['escalatedTickets'] ??
+              data['escalated'] ??
+              data['ESCALATED'] ??
+              0);
+          final closed = _toInt(
+              data['closedTickets'] ?? data['closed'] ?? data['CLOSED'] ?? 0);
+          final overdue =
+              _toInt(data['overdueTickets'] ?? data['overdue'] ?? 0);
+          if (mounted && (total ?? 0) > 0) {
+            setState(() {
+              _globalTotal = total ?? _totalElements;
+              _globalOpen = open ?? 0;
+              _globalResolved = resolved ?? 0;
+              _globalEscalated = escalated ?? 0;
+              _globalClosed = closed ?? 0;
+              _globalOverdue = overdue ?? 0;
+              _statsLoaded = true;
+            });
+            return;
+          }
+        }
+      } catch (_) {}
+
+      // 2. Try /api/analytics/dashboard
+      try {
+        final dashResp = await ApiClient().dio.get('/api/analytics/dashboard');
+        final data = dashResp.data;
+        if (data is Map) {
+          final tickets = data['tickets'] ?? data['ticketStats'] ?? {};
+          if (tickets is Map) {
+            final total =
+                _toInt(tickets['total'] ?? tickets['totalTickets'] ?? 0);
+            final open = _toInt(tickets['open'] ?? tickets['openTickets'] ?? 0);
+            final resolved =
+                _toInt(tickets['resolved'] ?? tickets['resolvedTickets'] ?? 0);
+            final escalated = _toInt(
+                tickets['escalated'] ?? tickets['escalatedTickets'] ?? 0);
+            final closed =
+                _toInt(tickets['closed'] ?? tickets['closedTickets'] ?? 0);
+            final overdue =
+                _toInt(tickets['overdue'] ?? tickets['overdueTickets'] ?? 0);
+            if (mounted && (total ?? 0) > 0) {
+              setState(() {
+                _globalTotal = total ?? _totalElements;
+                _globalOpen = open ?? 0;
+                _globalResolved = resolved ?? 0;
+                _globalEscalated = escalated ?? 0;
+                _globalClosed = closed ?? 0;
+                _globalOverdue = overdue ?? 0;
+                _statsLoaded = true;
+              });
+              return;
+            }
+          }
+        }
+      } catch (_) {}
+
+      // 3. Fallback: use totalElements from getAllTicketsPaginated as the master total
+      final resp = await _svc.getAllTicketsPaginated(page: 0, size: 1);
+      final serverTotal = (resp['totalElements'] as num?)?.toInt() ?? 0;
+      if (mounted && serverTotal > 0) {
+        setState(() {
+          _globalTotal = serverTotal;
+          // Status counts: use current page as best-effort estimate
+          _globalOpen = _all
+              .where((t) => ['NEW', 'OPEN', 'IN_PROGRESS', 'PENDING']
+                  .contains(t.status.toUpperCase()))
+              .length;
+          _globalOverdue = _all.where(_isOverdue).length;
+          _globalEscalated = _all.where(_isEscalated).length;
+          _globalResolved =
+              _all.where((t) => t.status.toUpperCase() == 'RESOLVED').length;
+          _globalClosed =
+              _all.where((t) => t.status.toUpperCase() == 'CLOSED').length;
+          _statsLoaded = true;
+        });
+      }
+    } catch (_) {}
   }
 
   @override
@@ -495,15 +616,6 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     _headerActionScrollCtrl.dispose();
     _searchCtrl.dispose();
     super.dispose();
-  }
-
-  void _onScroll() {
-    if (_scrollCtrl.position.pixels >=
-            _scrollCtrl.position.maxScrollExtent - 200 &&
-        _hasMore &&
-        !_loadingMore) {
-      _loadData();
-    }
   }
 
   // â”€â”€â”€ Email-to-Ticket â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -522,8 +634,10 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       }
       final raw = result.rawData;
       if (raw != null) {
-        final mailboxField = raw['mailbox'] ?? raw['email'] ??
-            raw['supportEmail'] ?? raw['inboxEmail'];
+        final mailboxField = raw['mailbox'] ??
+            raw['email'] ??
+            raw['supportEmail'] ??
+            raw['inboxEmail'];
         if (mailboxField != null && '$mailboxField'.contains('@')) {
           _emailMailbox = '$mailboxField'.trim();
         }
@@ -554,24 +668,34 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       // HTTP 200: inspect the body to determine actual state.
       bool? isConnected;
       if (raw != null) {
-        final connField = raw['connected'] ?? raw['isConnected'] ??
-            raw['active'] ?? raw['enabled'];
+        final connField = raw['connected'] ??
+            raw['isConnected'] ??
+            raw['active'] ??
+            raw['enabled'];
         if (connField is bool) isConnected = connField;
         if (isConnected == null) {
           final s = (raw['status'] ?? '').toString().toUpperCase();
-          if (s == 'UP' || s == 'OK' || s == 'ACTIVE' ||
-              s == 'RUNNING' || s == 'HEALTHY') {
+          if (s == 'UP' ||
+              s == 'OK' ||
+              s == 'ACTIVE' ||
+              s == 'RUNNING' ||
+              s == 'HEALTHY') {
             isConnected = true;
-          } else if (s == 'DOWN' || s == 'OFFLINE' ||
-              s == 'INACTIVE' || s == 'ERROR' || s == 'FAILED') {
+          } else if (s == 'DOWN' ||
+              s == 'OFFLINE' ||
+              s == 'INACTIVE' ||
+              s == 'ERROR' ||
+              s == 'FAILED') {
             isConnected = false;
           }
         }
       }
       if (isConnected == null) {
         final msg = result.message.toUpperCase();
-        isConnected = !(msg.contains('DOWN') || msg.contains('OFFLINE') ||
-            msg.contains('FAIL') || msg.contains('UNREACHABLE') ||
+        isConnected = !(msg.contains('DOWN') ||
+            msg.contains('OFFLINE') ||
+            msg.contains('FAIL') ||
+            msg.contains('UNREACHABLE') ||
             msg.contains('DISCONNECTED'));
       }
 
@@ -683,7 +807,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
   }) async {
     // Always use silent=true so existing tickets stay visible while refreshing.
     // (A non-silent reset clears _all and shows a blank loading spinner.)
-    await _loadData(reset: true, silent: true);
+    await _loadData(page: 1, silent: true, clearCache: true);
     if (!mounted) return false;
 
     bool hasNewTickets =
@@ -693,14 +817,13 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     // When poll timed-out the backend may still be processing the inbox.
     // Use more retries with longer gaps so freshly-created tickets appear.
     final retries = slowRetry ? 5 : 3;
-    final delay = slowRetry
-        ? const Duration(seconds: 6)
-        : const Duration(seconds: 3);
+    final delay =
+        slowRetry ? const Duration(seconds: 6) : const Duration(seconds: 3);
 
     for (var attempt = 0; attempt < retries; attempt++) {
       await Future<void>.delayed(delay);
       if (!mounted) return false;
-      await _loadData(reset: true, silent: true);
+      await _loadData(page: 1, silent: true, clearCache: true);
       if (!mounted) return false;
       hasNewTickets =
           _all.any((ticket) => !previousTicketIds.contains(ticket.id));
@@ -709,78 +832,231 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       }
     }
     // One final non-silent refresh to show accurate count even if no new tickets
-    await _loadData(reset: true, silent: true);
+    await _loadData(page: 1, silent: true, clearCache: true);
     if (!mounted) return false;
-    hasNewTickets = _all.any((ticket) => !previousTicketIds.contains(ticket.id));
+    hasNewTickets =
+        _all.any((ticket) => !previousTicketIds.contains(ticket.id));
     return hasNewTickets;
   }
 
   // â”€â”€â”€ Data loading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  Future<void> _loadData({bool reset = false, bool silent = false}) async {
-    if (reset) {
-      if (!silent) {
-        setState(() {
-          _loading = true;
-          _page = 0;
-          _hasMore = true;
-          _all = [];
-        });
-      } else {
-        _page = 0;
-        _hasMore = true;
+  Future<void> _loadData({
+    int page = 1,
+    bool force = false,
+    bool silent = false,
+    bool clearCache = false,
+  }) async {
+    final targetPage = page < 1 ? 1 : page;
+    if (clearCache) _pageCache.clear();
+
+    // Use cache if available and not forced
+    if (!force) {
+      final cached = _pageCache[targetPage];
+      if (cached != null) {
+        if (mounted) {
+          setState(() {
+            _all = cached;
+            _currentPage = targetPage;
+            _loading = false;
+            _paging = false;
+            _applyFilters();
+          });
+        }
+        unawaited(_prefetchAdjacentPages(targetPage));
+        return;
       }
-    } else {
-      if (_loadingMore) return;
-      setState(() => _loadingMore = true);
     }
 
+    if (mounted) {
+      setState(() {
+        if (_all.isEmpty || force || clearCache) {
+          if (!silent) _loading = true;
+        } else {
+          _paging = true;
+        }
+      });
+    }
+
+    final token = ++_requestToken;
     try {
       final results = await Future.wait<dynamic>([
-        _svc.getAllTickets(
-          page: reset ? 0 : _page,
+        _svc.getAllTicketsPaginated(
+          page: targetPage - 1, // 0-based API
           size: _pageSize,
           sortBy: 'createdAt',
           useAnalytics: false,
         ),
-        if (reset)
+        if (targetPage == 1 || _consultants.isEmpty)
           _consultSvc.getAllConsultants()
         else
           Future.value(_consultants),
-        if (reset) _fetchUserLookup() else Future.value(_userNames),
+        if (targetPage == 1 || _userNames.isEmpty)
+          _fetchUserLookup()
+        else
+          Future.value(_userNames),
       ]);
 
-      final tickets = results[0] as List<Ticket>;
-      final hasMore = tickets.length == _pageSize;
-      if (!reset)
-        _page++;
-      else
-        _page = 1;
+      if (token != _requestToken) return;
+
+      final pageResult = results[0] as Map<String, dynamic>;
+      final tickets =
+          (pageResult['tickets'] as List).whereType<Ticket>().toList();
+      final totalElements =
+          _toInt(pageResult['totalElements']) ?? tickets.length;
+      var totalPages = _toInt(pageResult['totalPages']) ?? 1;
+      if (totalPages <= 0) totalPages = 1;
+
+      _pageCache[targetPage] = tickets;
 
       if (mounted) {
         setState(() {
-          if (reset) {
-            _all = tickets;
+          _all = tickets;
+          _currentPage = targetPage;
+          _totalPages = totalPages;
+          _totalElements = totalElements;
+          if (targetPage == 1 || _consultants.isEmpty) {
             _consultants = results[1] as List<ConsultantModel>;
             _userNames = Map<int, String>.from(results[2] as Map<int, String>);
             _rebuildConsultantLookup();
-          } else {
-            _all.addAll(tickets);
           }
-          _hasMore = hasMore;
           _loading = false;
-          _loadingMore = false;
+          _paging = false;
           _applyFilters();
         });
       }
+      unawaited(_prefetchAdjacentPages(targetPage));
     } catch (_) {
       if (mounted && !silent) {
         setState(() {
           _loading = false;
-          _loadingMore = false;
+          _paging = false;
         });
       }
     }
+  }
+
+  Future<void> _prefetchAdjacentPages(int current) async {
+    for (final page in [current - 1, current + 1]) {
+      if (page < 1 || page > _totalPages) continue;
+      if (_pageCache.containsKey(page)) continue;
+      unawaited(_prefetchPage(page));
+    }
+  }
+
+  Future<void> _prefetchPage(int page) async {
+    try {
+      final result = await _svc.getAllTicketsPaginated(
+        page: page - 1,
+        size: _pageSize,
+        sortBy: 'createdAt',
+      );
+      if (!mounted || _pageCache.containsKey(page)) return;
+      final tickets = (result['tickets'] as List).whereType<Ticket>().toList();
+      _pageCache[page] = tickets;
+    } catch (_) {}
+  }
+
+  void _goToPage(int page) {
+    if (page < 1 || page > _totalPages || page == _currentPage) return;
+    _loadData(page: page);
+  }
+
+  List<int> _visiblePageNumbers() {
+    if (_totalPages <= 1) return const [1];
+    final pages = <int>{1, _totalPages, _currentPage};
+    for (var p = _currentPage - 1; p <= _currentPage + 1; p++) {
+      if (p >= 1 && p <= _totalPages) pages.add(p);
+    }
+    return (pages.toList()..sort());
+  }
+
+  Widget _paginationBar() {
+    if (_totalPages <= 1) return const SizedBox.shrink();
+    final pages = _visiblePageNumbers();
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Row(children: [
+        IconButton(
+          onPressed:
+              _currentPage > 1 ? () => _goToPage(_currentPage - 1) : null,
+          icon: const Icon(Icons.chevron_left_rounded),
+          visualDensity: VisualDensity.compact,
+          tooltip: 'Previous page',
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              for (var i = 0; i < pages.length; i++) ...[
+                if (i > 0 && pages[i] - pages[i - 1] > 1)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4),
+                    child: Text('...',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF94A3B8))),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: GestureDetector(
+                    onTap: () => _goToPage(pages[i]),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _currentPage == pages[i]
+                            ? const Color(0xFF0F766E)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: _currentPage == pages[i]
+                              ? const Color(0xFF0F766E)
+                              : const Color(0xFFE2E8F0),
+                        ),
+                      ),
+                      child: Text(
+                        '${pages[i]}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: _currentPage == pages[i]
+                              ? Colors.white
+                              : const Color(0xFF64748B),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ]),
+          ),
+        ),
+        IconButton(
+          onPressed: _currentPage < _totalPages
+              ? () => _goToPage(_currentPage + 1)
+              : null,
+          icon: const Icon(Icons.chevron_right_rounded),
+          visualDensity: VisualDensity.compact,
+          tooltip: 'Next page',
+        ),
+        if (_paging)
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: Color(0xFF0F766E)),
+          ),
+      ]),
+    );
   }
 
   void _applyFilters() => setState(() {
@@ -932,7 +1208,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       ),
     );
     if (mounted) {
-      _loadData(reset: true);
+      _loadData(page: 1, force: true, clearCache: true);
     }
   }
 
@@ -1099,7 +1375,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
                               Navigator.pop(ctx);
                               _toast(context,
                                   'Ticket ${_ticketNumber(t)} created');
-                              _loadData(reset: true);
+                              _loadData(page: 1, force: true, clearCache: true);
                             },
                             child: const Text('Create Ticket',
                                 style: TextStyle(
@@ -1167,7 +1443,8 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
               child: CircularProgressIndicator(color: Color(0xFF0F766E)))
           : RefreshIndicator(
               color: const Color(0xFF0F766E),
-              onRefresh: () => _loadData(reset: true),
+              onRefresh: () =>
+                  _loadData(page: 1, force: true, clearCache: true),
               child: CustomScrollView(
                 controller: _scrollCtrl,
                 slivers: [
@@ -1197,15 +1474,28 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
                               userDisplayName: _displayUserName(ticket),
                               consultantDisplayName:
                                   _displayConsultantName(ticket),
-                              onRefresh: () => _loadData(reset: true),
+                              onRefresh: () => _loadData(
+                                  page: 1, force: true, clearCache: true),
                             );
                           },
                           childCount: _visible.length,
                         ),
                       ),
                     ),
-                  if (_loadingMore)
-                    SliverToBoxAdapter(child: _buildLoadMoreIndicator()),
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                      child: Column(children: [
+                        if (_totalPages > 1) _paginationBar(),
+                        Text(
+                          'Page $_currentPage of $_totalPages  •  $_totalElements tickets',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              fontSize: 11, color: Color(0xFF94A3B8)),
+                        ),
+                      ]),
+                    ),
+                  ),
                   const SliverToBoxAdapter(child: SizedBox(height: 8)),
                 ],
               ),
@@ -1218,7 +1508,7 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     // as 'degraded' (amber) because the backend IS processing emails.
     final isChecking = _emailStatus == 'checking';
     final isDegraded = _emailStatus == 'degraded' || _emailStatus == 'down';
-    final isOk       = _emailStatus == 'ok';
+    final isOk = _emailStatus == 'ok';
 
     final accent = isChecking
         ? const Color(0xFFD97706)
@@ -1264,9 +1554,9 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
                     ? 'Checking mailbox integration health.'
                     : isDegraded
                         ? 'Emails sent to $_emailMailbox are processed. '
-                          'Health check reports a warning — use Poll Inbox to fetch pending emails.'
+                            'Health check reports a warning — use Poll Inbox to fetch pending emails.'
                         : 'Emails sent to $_emailMailbox are automatically converted to tickets. '
-                          'Priority and category are auto-detected from email content.';
+                            'Priority and category are auto-detected from email content.';
                 final info = Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1484,6 +1774,19 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
     _scrollHeaderActionIntoView(actionId);
   }
 
+  void _openEmailToTicketQuickAction() {
+    if (_scrollCtrl.hasClients) {
+      unawaited(
+        _scrollCtrl.animateTo(
+          0,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+        ),
+      );
+    }
+    unawaited(_checkEmail(notify: true));
+  }
+
   void _selectStatusFilter(String status) {
     _statusFilter = status;
     _applyFilters();
@@ -1537,16 +1840,43 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       );
 
   Widget _buildHeaderActions({required bool compact}) {
-    // Compact-mode button style: icon-only with tiny horizontal padding
-    // so all 3 buttons fit within a 400 px mobile viewport.
+    // Compact mode keeps all actions accessible without overflow.
     const compactVPad = EdgeInsets.symmetric(horizontal: 8, vertical: 8);
     const fullVPad = EdgeInsets.symmetric(horizontal: 14, vertical: 10);
+
+    final refreshButton = OutlinedButton.icon(
+      onPressed: () => _runHeaderAction(
+          'refresh', () => _loadData(page: 1, force: true, clearCache: true)),
+      icon: const Icon(Icons.refresh_rounded, size: 14),
+      label: const Text('Refresh', style: TextStyle(fontSize: 12)),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: const Color(0xFF0F766E),
+        side: const BorderSide(color: Color(0xFF99F6E4)),
+        backgroundColor: const Color(0xFFF0FDFA),
+        padding: compact ? compactVPad : fullVPad,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+    );
+
+    final emailButton = OutlinedButton.icon(
+      onPressed: () =>
+          _runHeaderAction('email', () => _openEmailToTicketQuickAction()),
+      icon: const Icon(Icons.mail_outline_rounded, size: 14),
+      label: Text('Email to Ticket', style: const TextStyle(fontSize: 12)),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: const Color(0xFF334155),
+        side: const BorderSide(color: Color(0xFFE2E8F0)),
+        padding: compact ? compactVPad : fullVPad,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+    );
 
     final newTicketButton = FilledButton.icon(
       onPressed: () => _runHeaderAction('new', _openCreate),
       icon: const Icon(Icons.add_rounded, size: 16),
-      label: Text(compact ? 'New' : 'New Ticket',
-          style: const TextStyle(fontSize: 12)),
+      label: Text('New Ticket', style: const TextStyle(fontSize: 12)),
       style: FilledButton.styleFrom(
         backgroundColor: const Color(0xFF0F766E),
         foregroundColor: Colors.white,
@@ -1570,46 +1900,23 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       ),
     );
 
-    final refreshButton = OutlinedButton.icon(
-      onPressed: () =>
-          _runHeaderAction('refresh', () => _loadData(reset: true)),
-      icon: const Icon(Icons.refresh_rounded, size: 14),
-      label: const Text('Refresh', style: TextStyle(fontSize: 12)),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: const Color(0xFF0F766E),
-        side: const BorderSide(color: Color(0xFF99F6E4)),
-        backgroundColor: const Color(0xFFF0FDFA),
-        padding: compact ? compactVPad : fullVPad,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      ),
-    );
-
     if (compact) {
-      // Each button gets equal flex so they always share the available width.
-      return Row(
-        children: [
-          Expanded(
-            child: KeyedSubtree(
-              key: _headerActionKeys['refresh'],
-              child: refreshButton,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: KeyedSubtree(
-              key: _headerActionKeys['export'],
-              child: exportButton,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: KeyedSubtree(
-              key: _headerActionKeys['new'],
-              child: newTicketButton,
-            ),
-          ),
-        ],
+      return SingleChildScrollView(
+        controller: _headerActionScrollCtrl,
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        child: Row(
+          children: [
+            KeyedSubtree(
+                key: _headerActionKeys['refresh'], child: refreshButton),
+            const SizedBox(width: 8),
+            KeyedSubtree(key: _headerActionKeys['email'], child: emailButton),
+            const SizedBox(width: 8),
+            KeyedSubtree(key: _headerActionKeys['export'], child: exportButton),
+            const SizedBox(width: 8),
+            KeyedSubtree(key: _headerActionKeys['new'], child: newTicketButton),
+          ],
+        ),
       );
     }
 
@@ -1618,9 +1925,10 @@ class _AdminTicketsTabState extends State<AdminTicketsTab> {
       runSpacing: 8,
       alignment: WrapAlignment.end,
       children: [
-        KeyedSubtree(key: _headerActionKeys['new'], child: newTicketButton),
-        KeyedSubtree(key: _headerActionKeys['export'], child: exportButton),
         KeyedSubtree(key: _headerActionKeys['refresh'], child: refreshButton),
+        KeyedSubtree(key: _headerActionKeys['email'], child: emailButton),
+        KeyedSubtree(key: _headerActionKeys['export'], child: exportButton),
+        KeyedSubtree(key: _headerActionKeys['new'], child: newTicketButton),
       ],
     );
   }

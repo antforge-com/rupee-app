@@ -92,7 +92,9 @@ class _ConsultantTimeslotManagerState extends State<ConsultantTimeslotManager> w
       context: context,
       builder: (_) => AlertDialog(
         title: Text(isBlock ? 'Block Slot' : 'Unblock Slot'),
-        content: Text(isBlock ? 'Block ${slot.timeRange} on ${slot.slotDate}?' : 'Make ${slot.timeRange} available again?'),
+        content: Text(isBlock
+            ? 'Block ${slot.timeRange} on ${slot.slotDate}?\nOnly this slot will be affected.'
+            : 'Make ${slot.timeRange} on ${slot.slotDate} available again?'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
           ElevatedButton(
@@ -104,20 +106,57 @@ class _ConsultantTimeslotManagerState extends State<ConsultantTimeslotManager> w
       ),
     );
     
-    if (confirm != true) {
-      return;
-    }
-    
-    bool ok;
-    // FIXED: Used updateTimeSlot instead of undefined blockSlot/restoreSlot
-    if (isBlock) {
-      ok = await _service.updateTimeSlot(slot.id, {'status': 'UNAVAILABLE'});
-    } else {
-      ok = await _service.updateTimeSlot(slot.id, {'status': 'AVAILABLE'});
-    }
+    if (confirm != true) return;
+
+    // Optimistically update just this one slot in local state
+    final newStatus = isBlock ? 'UNAVAILABLE' : 'AVAILABLE';
+    setState(() {
+      _slots = _slots.map((s) {
+        if (s.id == slot.id) {
+          return TimeSlot(
+            id: s.id,
+            consultantId: s.consultantId,
+            slotDate: s.slotDate,
+            timeRange: s.timeRange,
+            status: newStatus,
+            masterTimeSlotId: s.masterTimeSlotId,
+            durationMinutes: s.durationMinutes,
+          );
+        }
+        return s;
+      }).toList();
+    });
+
+    // FIXED: Update only THIS slot by id — PUT /api/timeslots/{id}
+    final ok = await _service.updateTimeSlot(slot.id, {'status': newStatus});
     
     if (ok) {
+      // Refresh from server to confirm
       _loadAll();
+    } else {
+      // Revert optimistic update on failure
+      setState(() {
+        _slots = _slots.map((s) {
+          if (s.id == slot.id) {
+            return TimeSlot(
+              id: s.id,
+              consultantId: s.consultantId,
+              slotDate: s.slotDate,
+              timeRange: s.timeRange,
+              status: slot.status, // revert to original
+              masterTimeSlotId: s.masterTimeSlotId,
+              durationMinutes: s.durationMinutes,
+            );
+          }
+          return s;
+        }).toList();
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to update slot. Please try again.'),
+              backgroundColor: AppColors.danger),
+        );
+      }
     }
   }
 

@@ -23,6 +23,47 @@ int? _toInt(dynamic value) {
   return int.tryParse('${value ?? ''}');
 }
 
+Map<String, dynamic> _parseTicketPage(
+  dynamic data, {
+  required int fallbackPage,
+  required int size,
+}) {
+  final list = _extractArray(
+    data,
+    keys: const ['content', 'data', 'items', 'tickets'],
+  );
+  final tickets = list
+      .whereType<Map>()
+      .map((e) => Ticket.fromJson(Map<String, dynamic>.from(e)))
+      .toList();
+
+  if (data is Map) {
+    final totalElements = _toInt(
+          data['totalElements'] ?? data['total'] ?? data['count'],
+        ) ??
+        tickets.length;
+    final computedPages =
+        totalElements <= 0 ? 1 : ((totalElements + size - 1) ~/ size);
+    final totalPages =
+        _toInt(data['totalPages'] ?? data['pages']) ?? computedPages;
+    final currentPage = _toInt(data['number'] ?? data['page']) ?? fallbackPage;
+
+    return {
+      'tickets': tickets,
+      'totalElements': totalElements,
+      'totalPages': totalPages <= 0 ? 1 : totalPages,
+      'currentPage': currentPage,
+    };
+  }
+
+  return {
+    'tickets': tickets,
+    'totalElements': tickets.length,
+    'totalPages': tickets.length == size ? fallbackPage + 2 : fallbackPage + 1,
+    'currentPage': fallbackPage,
+  };
+}
+
 class TicketService {
   final ApiClient _apiClient = ApiClient();
 
@@ -67,6 +108,19 @@ class TicketService {
     String sortBy = 'createdAt',
     bool useAnalytics = false,
   }) async {
+    final result = await getAllTicketsPaginated(
+        page: page, size: size, sortBy: sortBy, useAnalytics: useAnalytics);
+    final rows = result['tickets'];
+    return rows is List ? rows.whereType<Ticket>().toList() : <Ticket>[];
+  }
+
+  /// Paginated admin tickets — returns { tickets, totalElements, totalPages, currentPage }
+  Future<Map<String, dynamic>> getAllTicketsPaginated({
+    int page = 0,
+    int size = 10,
+    String sortBy = 'createdAt',
+    bool useAnalytics = false,
+  }) async {
     final requests = [
       if (useAnalytics)
         (
@@ -75,7 +129,12 @@ class TicketService {
         ),
       (
         path: '/api/tickets',
-        query: <String, dynamic>{'page': page, 'size': size, 'sortBy': sortBy, 'sort': 'createdAt,DESC'},
+        query: <String, dynamic>{
+          'page': page,
+          'size': size,
+          'sortBy': sortBy,
+          'sort': 'createdAt,DESC'
+        },
       ),
     ];
 
@@ -85,18 +144,17 @@ class TicketService {
           request.path,
           queryParameters: request.query,
         );
-        final list = _extractArray(response.data,
-            keys: const ['content', 'data', 'items', 'tickets']);
-        return list
-            .whereType<Map>()
-            .map((e) => Ticket.fromJson(Map<String, dynamic>.from(e)))
-            .toList();
-      } catch (_) {
-        // Try the next compatible endpoint.
-      }
+        return _parseTicketPage(response.data,
+            fallbackPage: page, size: size);
+      } catch (_) {}
     }
 
-    return [];
+    return {
+      'tickets': <Ticket>[],
+      'totalElements': 0,
+      'totalPages': 1,
+      'currentPage': page,
+    };
   }
 
   Future<Ticket?> getTicketById(int ticketId) async {
@@ -130,6 +188,32 @@ class TicketService {
     }
   }
 
+  Future<Map<String, dynamic>> getTicketsByUserPaginated(
+    int userId, {
+    int page = 0,
+    int size = 10,
+    String sortBy = 'createdAt',
+  }) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/api/tickets/user/$userId',
+        queryParameters: {'page': page, 'size': size, 'sortBy': sortBy},
+      );
+      return _parseTicketPage(
+        response.data,
+        fallbackPage: page,
+        size: size,
+      );
+    } catch (_) {
+      return {
+        'tickets': <Ticket>[],
+        'totalElements': 0,
+        'totalPages': 1,
+        'currentPage': page,
+      };
+    }
+  }
+
   Future<List<Ticket>> getTicketsByConsultant(
     int consultantId, {
     int page = 0,
@@ -149,6 +233,32 @@ class TicketService {
           .toList();
     } catch (_) {
       return [];
+    }
+  }
+
+  Future<Map<String, dynamic>> getTicketsByConsultantPaginated(
+    int consultantId, {
+    int page = 0,
+    int size = 10,
+    String sortBy = 'createdAt',
+  }) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/api/tickets/consultant/$consultantId',
+        queryParameters: {'page': page, 'size': size, 'sortBy': sortBy},
+      );
+      return _parseTicketPage(
+        response.data,
+        fallbackPage: page,
+        size: size,
+      );
+    } catch (_) {
+      return {
+        'tickets': <Ticket>[],
+        'totalElements': 0,
+        'totalPages': 1,
+        'currentPage': page,
+      };
     }
   }
 

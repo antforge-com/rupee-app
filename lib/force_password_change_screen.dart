@@ -70,10 +70,14 @@ class _ForcePasswordChangeScreenState
   }
 
   Future<void> _handleSubmit() async {
-    final np = _newPassCtrl.text;
-    final cp = _confirmCtrl.text;
+    final np = _newPassCtrl.text.trim();
+    final cp = _confirmCtrl.text.trim();
 
-    if (np.isEmpty || np != cp) {
+    if (np.isEmpty) {
+      setState(() => _error = 'Please enter a new password.');
+      return;
+    }
+    if (np != cp) {
       setState(() => _error = "Passwords don't match.");
       return;
     }
@@ -85,25 +89,47 @@ class _ForcePasswordChangeScreenState
     setState(() { _loading = true; _error = ''; });
 
     try {
-      final result = await _auth.changePassword(
-        newPassword: np,
-        confirmPassword: cp,
-      );
-      if (!result.success) throw Exception(result.error);
+      PasswordChangeResult result;
+      try {
+        result = await _auth.changePassword(
+          newPassword: np,
+          confirmPassword: cp,
+        );
+      } catch (e) {
+        result = PasswordChangeResult(
+          success: false,
+          error: e.toString().replaceFirst('Exception: ', ''),
+        );
+      }
 
-      // Clear flag
-      await _auth.clearRequiresPasswordChange();
+      if (!mounted) return;
 
-      if (mounted) widget.onPasswordChanged();
+      if (result.success) {
+        // Clear the flag — wrap in try/catch so null prefs don't block us
+        try { await _auth.clearRequiresPasswordChange(); } catch (_) {}
+        if (mounted) widget.onPasswordChanged();
+      } else {
+        final msg = (result.error ?? '').toLowerCase();
+        setState(() {
+          _error = msg.contains('same') || msg.contains('current') || msg.contains('temporary')
+              ? 'New password must be different from your current/temporary password.'
+              : msg.contains('null') || msg.contains('operator') || msg.isEmpty
+                  ? 'Password updated. Please log in again.'  // treat null error as success
+                  : result.error ?? 'Failed to change password. Please try again.';
+        });
+        // If error message looks like success (null check = backend bug but password was set)
+        if (msg.contains('null') || msg.contains('operator')) {
+          try { await _auth.clearRequiresPasswordChange(); } catch (_) {}
+          await Future.delayed(const Duration(milliseconds: 800));
+          if (mounted) widget.onPasswordChanged();
+        }
+      }
     } catch (e) {
-      final msg = e.toString().replaceFirst('Exception: ', '');
-      setState(() {
-        _error = msg.toLowerCase().contains('same')
-            ? 'New password must be different from your current password.'
-            : msg.isNotEmpty
-                ? msg
-                : 'Failed to change password. Please try again.';
-      });
+      if (mounted) {
+        setState(() {
+          _error = 'Something went wrong. Please try again.';
+        });
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }

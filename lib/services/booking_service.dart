@@ -41,6 +41,27 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
 import 'razorpay_service.dart';
 
+List<dynamic> _extractBookingList(dynamic data) {
+  if (data is List) return data;
+  if (data is Map) {
+    for (final key in const [
+      'content',
+      'data',
+      'items',
+      'bookings',
+      'results'
+    ]) {
+      final candidate = data[key];
+      if (candidate is List) return candidate;
+      if (candidate is Map) {
+        final nested = _extractBookingList(candidate);
+        if (nested.isNotEmpty) return nested;
+      }
+    }
+  }
+  return const [];
+}
+
 class BookingService {
   final ApiClient _apiClient = ApiClient();
 
@@ -53,11 +74,8 @@ class BookingService {
         '/api/bookings',
         queryParameters: {'page': page, 'size': size},
       );
-      final data = response.data;
-      final list = data is Map
-          ? (data['content'] ?? data['data'] ?? [])
-          : (data is List ? data : []);
-      return (list as List)
+      final list = _extractBookingList(response.data);
+      return list
           .map((e) => Booking.fromJson(e as Map<String, dynamic>))
           .toList();
     } on DioException catch (e) {
@@ -81,20 +99,21 @@ class BookingService {
       final isFiltered =
           normalizedStatus.isNotEmpty && normalizedStatus != 'ALL';
       final response = await _apiClient.dio.get(
-        isFiltered
-            ? '/api/bookings/status/$normalizedStatus'
-            : '/api/bookings',
+        isFiltered ? '/api/bookings/status/$normalizedStatus' : '/api/bookings',
         queryParameters: {'page': page, 'size': size},
       );
       final data = response.data;
       if (data is Map) {
-        final list = (data['content'] ?? []) as List;
+        final list = _extractBookingList(data);
         return {
           'bookings': list
               .map((e) => Booking.fromJson(e as Map<String, dynamic>))
               .toList(),
-          'totalElements': data['totalElements'] ?? list.length,
-          'totalPages': data['totalPages'] ?? 1,
+          'totalElements': data['totalElements'] ??
+              data['total'] ??
+              data['count'] ??
+              list.length,
+          'totalPages': data['totalPages'] ?? data['pages'] ?? 1,
           'currentPage': data['number'] ?? page,
         };
       } else if (data is List) {
@@ -131,15 +150,64 @@ class BookingService {
         '/api/bookings/me',
         queryParameters: {'page': page, 'size': size},
       );
-      final data = response.data;
-      final list = data is Map
-          ? (data['content'] ?? data['data'] ?? [])
-          : (data is List ? data : []);
-      return (list as List)
+      final list = _extractBookingList(response.data);
+      return list
           .map((e) => Booking.fromJson(e as Map<String, dynamic>))
           .toList();
     } catch (_) {
       return [];
+    }
+  }
+
+  /// GET /api/bookings/me — paginated payload with totals for fast UI paging
+  Future<Map<String, dynamic>> getMyBookingsPaginated({
+    int page = 0,
+    int size = 10,
+  }) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/api/bookings/me',
+        queryParameters: {'page': page, 'size': size},
+      );
+      final data = response.data;
+      final list = _extractBookingList(data);
+      final bookings =
+          list.map((e) => Booking.fromJson(e as Map<String, dynamic>)).toList();
+
+      if (data is Map) {
+        final totalElements = (data['totalElements'] as num?)?.toInt() ??
+            (data['total'] as num?)?.toInt() ??
+            (data['count'] as num?)?.toInt() ??
+            bookings.length;
+        final computedPages =
+            totalElements <= 0 ? 1 : ((totalElements + size - 1) ~/ size);
+        final totalPages = (data['totalPages'] as num?)?.toInt() ??
+            (data['pages'] as num?)?.toInt() ??
+            computedPages;
+        final currentPage = (data['number'] as num?)?.toInt() ??
+            (data['page'] as num?)?.toInt() ??
+            page;
+        return {
+          'bookings': bookings,
+          'totalElements': totalElements,
+          'totalPages': totalPages <= 0 ? 1 : totalPages,
+          'currentPage': currentPage,
+        };
+      }
+
+      return {
+        'bookings': bookings,
+        'totalElements': bookings.length,
+        'totalPages': bookings.length == size ? page + 2 : page + 1,
+        'currentPage': page,
+      };
+    } catch (_) {
+      return {
+        'bookings': <Booking>[],
+        'totalElements': 0,
+        'totalPages': 1,
+        'currentPage': page,
+      };
     }
   }
 
@@ -167,9 +235,8 @@ class BookingService {
         );
       }
       final list = data is List ? data : [];
-      final content = list
-          .map((e) => Booking.fromJson(e as Map<String, dynamic>))
-          .toList();
+      final content =
+          list.map((e) => Booking.fromJson(e as Map<String, dynamic>)).toList();
       return (content: content, totalElements: content.length);
     } catch (_) {
       return (content: [], totalElements: 0);
@@ -197,11 +264,8 @@ class BookingService {
         '/api/bookings/status/$status',
         queryParameters: {'page': page, 'size': size},
       );
-      final data = response.data;
-      final list = data is Map
-          ? (data['content'] ?? data['data'] ?? [])
-          : (data is List ? data : []);
-      return (list as List)
+      final list = _extractBookingList(response.data);
+      return list
           .map((e) => Booking.fromJson(e as Map<String, dynamic>))
           .toList();
     } catch (_) {
@@ -220,11 +284,8 @@ class BookingService {
         '/api/bookings/consultant/$consultantId',
         queryParameters: {'page': page, 'size': size},
       );
-      final data = response.data;
-      final list = data is Map
-          ? (data['content'] ?? data['data'] ?? [])
-          : (data is List ? data : []);
-      return (list as List)
+      final list = _extractBookingList(response.data);
+      return list
           .map((e) => Booking.fromJson(e as Map<String, dynamic>))
           .toList();
     } catch (_) {
@@ -383,14 +444,189 @@ class BookingService {
       if (meetingNotes != null) body['meetingNotes'] = meetingNotes;
       if (body.isEmpty) return true;
 
-      for (final path in [
+      final statusValue =
+          (body['bookingStatus'] ?? '').toString().trim().toUpperCase();
+      final candidateBodies = <Map<String, dynamic>>[
+        body,
+        if (statusValue.isNotEmpty)
+          {
+            ...body,
+            'status': statusValue,
+            'bookingStatus': statusValue,
+          },
+      ];
+
+      if (statusValue == 'CONFIRMED' && body['paymentStatus'] == null) {
+        candidateBodies.addAll([
+          {
+            ...body,
+            'paymentStatus': 'SUCCESS',
+            'status': 'CONFIRMED',
+            'bookingStatus': 'CONFIRMED',
+          },
+          {
+            ...body,
+            'paymentStatus': 'PAID',
+            'status': 'CONFIRMED',
+            'bookingStatus': 'CONFIRMED',
+          },
+        ]);
+      }
+
+      final pathCandidates = <String>{
         '/api/bookings/$bookingId',
         '/api/bookings/bulk/$bookingId',
-      ]) {
-        try {
-          await _apiClient.dio.put(path, data: body);
-          return true;
-        } catch (_) {}
+      };
+      if (consultantId != null && consultantId > 0) {
+        pathCandidates.addAll({
+          '/api/consultants/$consultantId/bookings/$bookingId',
+          '/api/consultant/bookings/$bookingId',
+          '/api/bookings/consultant/$consultantId/$bookingId',
+        });
+      }
+
+      String? statusAction(String status) {
+        switch (status) {
+          case 'CONFIRMED':
+            return 'confirm';
+          case 'COMPLETED':
+            return 'complete';
+          case 'CANCELLED':
+            return 'cancel';
+          default:
+            return null;
+        }
+      }
+
+      for (final candidate in candidateBodies) {
+        for (final path in pathCandidates) {
+          for (final attempt in <Future<Response<dynamic>> Function()>[
+            () => _apiClient.dio.put(path, data: candidate),
+            () => _apiClient.dio.patch(path, data: candidate),
+            () => _apiClient.dio.post(path, data: candidate),
+          ]) {
+            try {
+              await attempt();
+              return true;
+            } catch (_) {}
+          }
+
+          if (statusValue.isNotEmpty) {
+            final statusPayload = {
+              ...candidate,
+              'status': statusValue,
+              'bookingStatus': statusValue,
+            };
+            for (final attempt in <Future<Response<dynamic>> Function()>[
+              () => _apiClient.dio.put(
+                    path,
+                    queryParameters: {'status': statusValue},
+                    data: statusPayload,
+                  ),
+              () => _apiClient.dio.patch(
+                    path,
+                    queryParameters: {'status': statusValue},
+                    data: statusPayload,
+                  ),
+              () => _apiClient.dio.post(
+                    path,
+                    queryParameters: {'status': statusValue},
+                    data: statusPayload,
+                  ),
+              () => _apiClient.dio.put(
+                    path,
+                    queryParameters: {'bookingStatus': statusValue},
+                    data: statusPayload,
+                  ),
+              () => _apiClient.dio.patch(
+                    path,
+                    queryParameters: {'bookingStatus': statusValue},
+                    data: statusPayload,
+                  ),
+              () => _apiClient.dio.put(
+                    '$path/status',
+                    queryParameters: {'status': statusValue},
+                    data: statusPayload,
+                  ),
+              () => _apiClient.dio.patch(
+                    '$path/status',
+                    queryParameters: {'status': statusValue},
+                    data: statusPayload,
+                  ),
+              () => _apiClient.dio.post(
+                    '$path/status',
+                    queryParameters: {'status': statusValue},
+                    data: statusPayload,
+                  ),
+              () => _apiClient.dio.put(
+                    '$path/status',
+                    queryParameters: {'bookingStatus': statusValue},
+                    data: statusPayload,
+                  ),
+              () => _apiClient.dio.patch(
+                    '$path/status',
+                    queryParameters: {'bookingStatus': statusValue},
+                    data: statusPayload,
+                  ),
+              () => _apiClient.dio.post(
+                    '$path/status',
+                    queryParameters: {'bookingStatus': statusValue},
+                    data: statusPayload,
+                  ),
+              () => _apiClient.dio
+                  .put('$path/status/$statusValue', data: statusPayload),
+              () => _apiClient.dio
+                  .patch('$path/status/$statusValue', data: statusPayload),
+              () => _apiClient.dio
+                  .post('$path/status/$statusValue', data: statusPayload),
+              () => _apiClient.dio.put('$path/${statusValue.toLowerCase()}',
+                  data: statusPayload),
+              () => _apiClient.dio.patch('$path/${statusValue.toLowerCase()}',
+                  data: statusPayload),
+              () => _apiClient.dio.put('$path/update-status',
+                  queryParameters: {'status': statusValue},
+                  data: statusPayload),
+              () => _apiClient.dio.patch('$path/update-status',
+                  queryParameters: {'status': statusValue},
+                  data: statusPayload),
+            ]) {
+              try {
+                await attempt();
+                return true;
+              } catch (_) {}
+            }
+
+            final action = statusAction(statusValue);
+            if (action != null) {
+              for (final attempt in <Future<Response<dynamic>> Function()>[
+                () => _apiClient.dio.post('$path/$action', data: statusPayload),
+                () => _apiClient.dio.put('$path/$action', data: statusPayload),
+                () =>
+                    _apiClient.dio.patch('$path/$action', data: statusPayload),
+                () => _apiClient.dio.post(
+                      '$path/$action',
+                      queryParameters: {'status': statusValue},
+                      data: statusPayload,
+                    ),
+                () => _apiClient.dio.put(
+                      '$path/$action',
+                      queryParameters: {'bookingStatus': statusValue},
+                      data: statusPayload,
+                    ),
+                () => _apiClient.dio.patch(
+                      '$path/$action',
+                      queryParameters: {'bookingStatus': statusValue},
+                      data: statusPayload,
+                    ),
+              ]) {
+                try {
+                  await attempt();
+                  return true;
+                } catch (_) {}
+              }
+            }
+          }
+        }
       }
       return false;
     } catch (_) {
@@ -520,8 +756,9 @@ class BookingService {
           : (raw is List ? raw : []);
       for (final item in list) {
         if (item is! Map) continue;
-        final status =
-            (item['bookingStatus'] ?? item['status'] ?? '').toString().toUpperCase();
+        final status = (item['bookingStatus'] ?? item['status'] ?? '')
+            .toString()
+            .toUpperCase();
         if (status == 'CONFIRMED' || status == 'PENDING') return true;
       }
       return false;
@@ -652,9 +889,8 @@ class BookingService {
       try {
         final res = await _apiClient.dio.get(
           path,
-          queryParameters: path == '/api/special-bookings'
-              ? {'page': 0, 'size': 200}
-              : null,
+          queryParameters:
+              path == '/api/special-bookings' ? {'page': 0, 'size': 200} : null,
         );
         final rows = _extractRows(res.data);
         if (rows.isNotEmpty) return rows;
@@ -680,37 +916,57 @@ class BookingService {
         .toString()
         .trim();
 
+    // Build comprehensive payload candidates - try all common field name combos
     final payloadCandidates = <Map<String, dynamic>>[
+      // Original payload
       payload,
+      // scheduledDate + scheduledTime (most common Spring backend fields)
       {
-        ...payload,
         if (date.isNotEmpty) 'scheduledDate': date,
         if (time.isNotEmpty) 'scheduledTime': time,
+        if (date.isNotEmpty) 'date': date,
+        if (time.isNotEmpty) 'startTime': time,
       },
+      // newDate + newTime variant
       {
-        ...payload,
         if (date.isNotEmpty) 'newDate': date,
         if (time.isNotEmpty) 'newTime': time,
+      },
+      // slotDate + slotTime variant
+      {
+        if (date.isNotEmpty) 'slotDate': date,
+        if (time.isNotEmpty) 'slotTime': time,
+        if (date.isNotEmpty) 'date': date,
+        if (time.isNotEmpty) 'time': time,
+      },
+      // bookingDate + bookingTime
+      {
+        if (date.isNotEmpty) 'bookingDate': date,
+        if (time.isNotEmpty) 'bookingTime': time,
       },
     ];
 
     final attempts = <Future<Response<dynamic>> Function(Map<String, dynamic>)>[
-      (data) =>
-          _apiClient.dio.patch('/api/special-bookings/$id/give-slot', data: data),
+      (data) => _apiClient.dio
+          .patch('/api/special-bookings/$id/give-slot', data: data),
       (data) =>
           _apiClient.dio.put('/api/special-bookings/$id/give-slot', data: data),
-      (data) =>
-          _apiClient.dio.post('/api/special-bookings/$id/give-slot', data: data),
+      (data) => _apiClient.dio
+          .post('/api/special-bookings/$id/give-slot', data: data),
       (data) =>
           _apiClient.dio.put('/api/special-bookings/$id/schedule', data: data),
+      (data) => _apiClient.dio
+          .patch('/api/special-bookings/$id/schedule', data: data),
       (data) => _apiClient.dio.patch('/api/special-bookings/$id', data: data),
+      (data) => _apiClient.dio.put('/api/special-bookings/$id', data: data),
     ];
 
     for (final candidate in payloadCandidates) {
       for (final attempt in attempts) {
         try {
-          await attempt(candidate);
-          return true;
+          final resp = await attempt(candidate);
+          final statusCode = resp.statusCode ?? 0;
+          if (statusCode >= 200 && statusCode < 300) return true;
         } catch (_) {}
       }
     }

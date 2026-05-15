@@ -1078,13 +1078,15 @@ class _TicketCategoriesScreenState extends State<TicketCategoriesScreen> {
       backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => Padding(
+      builder: (modalCtx) => StatefulBuilder(
+        builder: (modalCtx, setModalState) => Padding(
         padding: EdgeInsets.only(
             left: 20,
             right: 20,
             top: 20,
-            bottom: MediaQuery.of(context).viewInsets.bottom + 20),
-        child: Column(
+            bottom: MediaQuery.of(modalCtx).viewInsets.bottom + 20),
+        child: SingleChildScrollView(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1110,7 +1112,7 @@ class _TicketCategoriesScreenState extends State<TicketCategoriesScreen> {
                   final result = await _api.createCategory(nameCtrl.text,
                       descCtrl.text.isNotEmpty ? descCtrl.text : null);
                   if (result && mounted) {
-                    Navigator.pop(context);
+                    Navigator.pop(modalCtx);
                     _load();
                   }
                 },
@@ -1121,6 +1123,8 @@ class _TicketCategoriesScreenState extends State<TicketCategoriesScreen> {
             ),
           ],
         ),
+        ),
+      ),
       ),
     );
   }
@@ -1468,12 +1472,13 @@ class _SubscriptionPlansScreenState extends State<SubscriptionPlansScreen> {
       backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => Padding(
+      builder: (modalCtx) => StatefulBuilder(
+        builder: (modalCtx, setModalState) => Padding(
         padding: EdgeInsets.only(
             left: 20,
             right: 20,
             top: 20,
-            bottom: MediaQuery.of(context).viewInsets.bottom + 20),
+            bottom: MediaQuery.of(modalCtx).viewInsets.bottom + 20),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1546,6 +1551,7 @@ class _SubscriptionPlansScreenState extends State<SubscriptionPlansScreen> {
             ],
           ),
         ),
+      ),
       ),
     );
   }
